@@ -14,7 +14,7 @@ The host content root is the application binary directory. `ApplicationJsonConfi
 |---|---|
 | `VectorNNTPD.BackFillerService.json` | Primary application configuration. The name is `{entry assembly name}.json`. |
 | `VectorNNTPD.BackFillerService.{environment}.json` | Optional environment overlay. |
-| `VectorNNTP.RabbitMQ.json` | RabbitMQ connectivity. It is a separate file. Its section name remains `RabbitMQ`. |
+| `VectorNNTPD.RabbitMQ.json` | RabbitMQ connectivity. It is a separate file. Its section name remains `RabbitMQ`. |
 
 Environment variables and command-line arguments are applied after those files. A missing optional file does not fail configuration loading. Invalid JSON in a present file fails when that source is read. Mandatory option validation still runs at startup.
 

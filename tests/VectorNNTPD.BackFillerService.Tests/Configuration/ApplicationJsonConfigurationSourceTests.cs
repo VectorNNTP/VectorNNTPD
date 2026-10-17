@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.EnvironmentVariables;
 using Microsoft.Extensions.Hosting;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
@@ -18,11 +19,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         public void Production_assembly_names_the_configuration_files()
         {
             Assert.Equal("VectorNNTPD.BackFillerService", typeof(ApplicationJsonConfiguration).Assembly.GetName().Name);
-            Assert.Equal("VectorNNTP.RabbitMQ.json", ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            Assert.Equal("VectorNNTPD.RabbitMQ.json", ApplicationJsonConfiguration.SharedRabbitMqFileName);
 
             var root = RepositoryFiles.Root();
             Assert.True(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "VectorNNTPD.BackFillerService.json")));
-            Assert.True(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "VectorNNTP.RabbitMQ.json")));
+            Assert.True(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "VectorNNTPD.RabbitMQ.json")));
+            Assert.False(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "VectorNNTP.RabbitMQ.json")));
             Assert.False(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "appsettings.json")));
             Assert.False(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "RabbitMq.json")));
         }
@@ -190,6 +192,100 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             {
                 directory.Delete(true);
             }
+        }
+
+        /// <summary>
+        /// The shipped RabbitMQ file is copied into the service build output under <see cref="ApplicationJsonConfiguration.SharedRabbitMqFileName"/>, binds, and validates.
+        /// </summary>
+        [Fact]
+        public void Shipped_rabbitmq_file_is_copied_and_loads()
+        {
+            const string obsoleteFileName = "VectorNNTP.RabbitMQ.json";
+            var root = RepositoryFiles.Root();
+            var projectDirectory = RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService");
+            var sourcePath = Path.Join(projectDirectory, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            var project = File.ReadAllText(Path.Join(projectDirectory, "VectorNNTPD.BackFillerService.csproj"));
+            Assert.Contains("<Content Update=\"VectorNNTPD.RabbitMQ.json\">", project, StringComparison.Ordinal);
+            Assert.Contains("<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>", project, StringComparison.Ordinal);
+            Assert.Contains("<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>", project, StringComparison.Ordinal);
+            Assert.DoesNotContain(obsoleteFileName, project, StringComparison.Ordinal);
+
+            var outputDirectory = ServiceOutputDirectory(root);
+            var outputPath = Path.Join(outputDirectory, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            Assert.True(File.Exists(outputPath), outputPath);
+            Assert.False(File.Exists(Path.Join(outputDirectory, obsoleteFileName)));
+            Assert.Equal(File.ReadAllBytes(sourcePath), File.ReadAllBytes(outputPath));
+
+            var directory = Directory.CreateTempSubdirectory("bf-rabbit-json-");
+            try
+            {
+                File.Copy(sourcePath, Path.Join(directory.FullName, ApplicationJsonConfiguration.SharedRabbitMqFileName));
+                File.WriteAllText(
+                    Path.Join(directory.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
+                    "{}");
+                var builder = new ConfigurationBuilder();
+                builder.SetBasePath(directory.FullName);
+                builder.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+                builder.AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: false);
+                ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
+                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production");
+
+                var configuration = builder.Build();
+                Assert.Equal("5672", configuration["RabbitMQ:Port"]);
+                Assert.Equal("198.18.0.3", configuration["RabbitMQ:Hosts:0"]);
+                Assert.Equal(bool.FalseString, configuration["RabbitMQ:EnableSsl"]);
+                Assert.Equal("/", configuration["RabbitMQ:VirtualHost"]);
+
+                var rabbit = new RabbitMqOptions();
+                configuration.GetSection(RabbitMqOptions.SectionName).Bind(rabbit);
+                var validation = new RabbitMqOptionsValidator().Validate(null, rabbit);
+                Assert.True(validation.Succeeded, string.Join("; ", validation.Failures ?? []));
+                Assert.NotNull(rabbit.Hosts);
+                Assert.Equal(["198.18.0.3"], rabbit.Hosts);
+                Assert.Equal(5672, rabbit.Port);
+                Assert.Equal(false, rabbit.EnableSsl);
+                Assert.Equal("/", rabbit.VirtualHost);
+                Assert.Equal(512, rabbit.ChannelPoolSize);
+                Assert.Equal(1024, rabbit.WorkRequestMaxPayloadBytes);
+                Assert.Equal("http://198.18.0.3:15672", rabbit.Management.BaseUrl);
+                Assert.Equal(5, rabbit.Management.RequestTimeoutSeconds);
+            }
+            finally
+            {
+                directory.Delete(true);
+            }
+        }
+
+        /// <summary>
+        /// Resolves the BackFiller build output for the same platform and configuration as this test assembly.
+        /// </summary>
+        /// <param name="repositoryRoot">Repository root that contains <c>src</c>.</param>
+        /// <returns>The service project's <c>bin/x64/&lt;Configuration&gt;/net10.0</c> directory.</returns>
+        private static string ServiceOutputDirectory(string repositoryRoot)
+        {
+            var configuration = "Release";
+            var segments = AppContext.BaseDirectory.Split(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar,
+                StringSplitOptions.RemoveEmptyEntries);
+            for (var index = 0; index < segments.Length - 2; index++)
+            {
+                if (segments[index].Equals("bin", StringComparison.OrdinalIgnoreCase)
+                    && segments[index + 1].Equals("x64", StringComparison.OrdinalIgnoreCase))
+                {
+                    configuration = segments[index + 2];
+                    break;
+                }
+            }
+
+            return RelativePath.Under(
+                repositoryRoot,
+                "src",
+                "VectorNNTPD.BackFillerService",
+                "bin",
+                "x64",
+                configuration,
+                "net10.0");
         }
 
         /// <summary>Returns file-backed configuration sources in registration order.</summary>

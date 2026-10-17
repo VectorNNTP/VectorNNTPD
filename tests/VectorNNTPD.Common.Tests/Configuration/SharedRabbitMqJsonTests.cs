@@ -10,7 +10,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
     /// Locks the shipped <c>src/VectorNNTPD.Common/RabbitMq.json</c> sample, Common's load order for that file, and the absence of a top-level RabbitMQ section in host primary JSON that exists in this repository.
     /// </summary>
     /// <remarks>
-    /// NNTPD and StorageServer are not projects here. BackFiller ships <c>VectorNNTP.RabbitMQ.json</c> and does not copy <c>RabbitMq.json</c> into its output. This test reads repository source files, not application <c>bin</c> directories.
+    /// NNTPD and StorageServer are not projects here. BackFiller ships <c>VectorNNTPD.RabbitMQ.json</c> and does not copy <c>RabbitMq.json</c> into its output. This test reads repository source files, not application <c>bin</c> directories.
     /// </remarks>
     public sealed class SharedRabbitMqJsonTests
     {

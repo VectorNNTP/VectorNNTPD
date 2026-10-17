@@ -12,7 +12,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// <see cref="Assembly.GetEntryAssembly"/>, not the process executable path.
     /// Generic Host defaults (<c>appsettings.json</c> and <c>{application}.settings.json</c>)
     /// are removed and are not a fallback. The RabbitMQ file is
-    /// <c>VectorNNTP.RabbitMQ.json</c> and stays a separate document.
+    /// <c>VectorNNTPD.RabbitMQ.json</c> and stays a separate document.
     /// </remarks>
     internal static class ApplicationJsonConfiguration
     {
@@ -140,7 +140,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
         }
 
         /// <summary>Shared RabbitMQ configuration filename, loaded from the application binary directory.</summary>
-        internal const string SharedRabbitMqFileName = "VectorNNTP.RabbitMQ.json";
+        internal const string SharedRabbitMqFileName = "VectorNNTPD.RabbitMQ.json";
 
         /// <summary>
         /// Inserts <see cref="SharedRabbitMqFileName"/> after the entry-assembly JSON sources

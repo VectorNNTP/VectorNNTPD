@@ -44,7 +44,7 @@ The standalone project has no external build/runtime dependency on a separate `V
 
 ## Linux service
 
-`tools/Publish-Release.ps1 -Platform linux-64` writes `.artifacts/release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTP.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.
+`tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTPD.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.
 
 Install that directory at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
 
@@ -55,7 +55,7 @@ sudo groupadd --system vectornntp || true
 sudo useradd --system --gid vectornntp --home-dir /opt/vectornntp --shell /usr/sbin/nologin vectornntp || true
 sudo install -d -o root -g root -m 0755 /opt/vectornntp /opt/vectornntp/backfiller
 sudo install -o root -g root -m 0755 VectorNNTPD.BackFillerService /opt/vectornntp/backfiller/VectorNNTPD.BackFillerService
-sudo install -o root -g root -m 0644 VectorNNTPD.BackFillerService.json VectorNNTP.RabbitMQ.json README.md /opt/vectornntp/backfiller/
+sudo install -o root -g root -m 0644 VectorNNTPD.BackFillerService.json VectorNNTPD.RabbitMQ.json README.md /opt/vectornntp/backfiller/
 sudo install -d -o vectornntp -g vectornntp -m 0750 /opt/vectornntp/backfiller/logs /opt/vectornntp/backfiller/certs
 sudo install -d -o root -g root -m 0755 /etc/vectornntp
 sudo install -o root -g root -m 0600 backfiller.env.example /etc/vectornntp/backfiller.env

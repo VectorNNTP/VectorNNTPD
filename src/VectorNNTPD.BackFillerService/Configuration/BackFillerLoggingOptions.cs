@@ -55,7 +55,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
 
         /// <summary>Gets or sets the RabbitMQ target.</summary>
         /// <remarks>
-        /// Connectivity stays in <c>VectorNNTP.RabbitMQ.json</c>. This object does not carry broker credentials.
+        /// Connectivity stays in <c>VectorNNTPD.RabbitMQ.json</c>. This object does not carry broker credentials.
         /// </remarks>
         public BackFillerRabbitMqLoggingTargetOptions RabbitMq { get; set; } = new();
 
