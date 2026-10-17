@@ -227,7 +227,7 @@ function Publish-Platform {
         [string] $ExeSuffix
     )
 
-    $releaseDir = Join-Path (Join-Path (Join-Path $RepoRoot '.artifacts') 'release') $Folder
+    $releaseDir = Join-Path (Join-Path $RepoRoot 'release') $Folder
     $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("backfiller-release-" + [System.Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
     $stage = Join-Path $stagingRoot 'publish'
