@@ -94,9 +94,6 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <summary>Valid prefix length of <see cref="_pending"/>.</summary>
         private int _pendingCount;
 
-        /// <summary>Largest single write passed to the transport.</summary>
-        private const int MaxWriteProgressChunkBytes = 32 * 1024;
-
         /// <summary>Initializes a session over an established transport.</summary>
         /// <param name="transport">Connected transport. Not disposed by this session.</param>
         /// <param name="retention">Article owner. Claims are committed only after a complete article write.</param>
@@ -315,17 +312,24 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <param name="payload">Bytes to write. Empty input completes without a transport call.</param>
         /// <param name="cancellationToken">Cancels the transport write.</param>
         /// <returns>A task that completes when every byte has been accepted.</returns>
-        /// <exception cref="IOException">The transport accepted zero or fewer bytes.</exception>
+        /// <exception cref="IOException">
+        /// The transport accepted zero bytes or more bytes than remain in <paramref name="payload"/>.
+        /// </exception>
+        /// <remarks>
+        /// The whole remaining buffer is passed on each call. A transport whose write completes the buffer,
+        /// including <see cref="StreamCacheListenerTransport"/>, therefore performs one write.
+        /// A positive count shorter than the buffer is progress: the next call starts at the first unaccepted byte
+        /// and that transport call carries its own no-progress deadline. Bytes are not copied into a chunk buffer.
+        /// </remarks>
         private async Task WriteFullyAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
         {
             var written = 0;
             while (written < payload.Length)
             {
-                var chunk = Math.Min(payload.Length - written, MaxWriteProgressChunkBytes);
-                var accepted = await _transport.WriteAsync(payload.Slice(written, chunk), cancellationToken).ConfigureAwait(false);
-                if (accepted <= 0)
+                var accepted = await _transport.WriteAsync(payload[written..], cancellationToken).ConfigureAwait(false);
+                if (accepted <= 0 || accepted > payload.Length - written)
                 {
-                    throw new IOException("Transport returned zero accepted bytes.");
+                    throw new IOException("Transport returned an accepted count outside the remaining buffer.");
                 }
 
                 written += accepted;
