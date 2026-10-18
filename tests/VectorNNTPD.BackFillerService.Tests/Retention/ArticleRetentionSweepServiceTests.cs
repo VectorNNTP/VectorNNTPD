@@ -128,8 +128,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             /// <summary>Whether shutdown admission was closed.</summary>
             public bool ShutdownStarted { get; private set; }
 
-            /// <inheritdoc />
-            public TimeSpan SweepInterval => TimeSpan.Zero;
+            /// <summary>
+            /// Positive delay so <see cref="Task.Delay(TimeSpan, CancellationToken)"/> yields the thread-pool thread.
+            /// <see cref="TimeSpan.Zero"/> completes inline and the hosted loop then busy-spins that thread.
+            /// </summary>
+            public TimeSpan SweepInterval => TimeSpan.FromMilliseconds(1);
 
             /// <inheritdoc />
             public long RetainedPayloadBytes => 0;
