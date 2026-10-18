@@ -61,7 +61,10 @@ namespace VectorNNTPD.BackFillerService.Configuration
 
     /// <summary>Validated listener bounds.</summary>
     /// <param name="TlsHandshakeTimeout">TLS handshake timeout.</param>
-    /// <param name="IoProgressTimeout">Per-operation I/O no-progress timeout.</param>
+    /// <param name="IoProgressTimeout">
+    /// No-progress deadline for one listener read or one non-empty listener write.
+    /// A completed call starts a new deadline. A stream write does not reset it mid-call.
+    /// </param>
     /// <param name="MaxQueuedFoundPayloadBytes">Maximum queued Found payload bytes per connection.</param>
     /// <param name="MaxActiveConnections">Maximum concurrently active accepted connections.</param>
     internal sealed record BackFillerListenerRuntimeOptions(

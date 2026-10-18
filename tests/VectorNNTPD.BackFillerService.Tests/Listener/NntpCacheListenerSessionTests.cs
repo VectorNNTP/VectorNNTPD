@@ -806,6 +806,194 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
                 written);
         }
 
+        /// <summary>
+        /// A payload larger than 32 KiB is one transport write, with one status line and one terminator.
+        /// </summary>
+        [Fact]
+        public async Task Article_larger_than_32_kib_is_one_payload_write()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 8_000_000);
+            var body = string.Concat(Enumerable.Repeat("x\r\n", 10_923));
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<wide@b>", body);
+            Assert.True(prepared.ArtData.Length > 32 * 1024);
+
+            var transport = new ScriptedTransport("ARTICLE <wide@b>\r\n"u8.ToArray());
+            await new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None);
+
+            Assert.Equal(4, transport.WriteCallCount);
+            Assert.Equal(prepared.ArtData.Length, transport.WriteLengths[2]);
+            AssertArticleWire(transport.Written, "<wide@b>", prepared.ArtData);
+            Assert.Equal(0, authority.RetainedCount);
+        }
+
+        /// <summary>
+        /// A typical article-sized body is written once, between the 220 line and one terminator.
+        /// </summary>
+        [Fact]
+        public async Task Typical_article_is_one_payload_write_and_one_terminator()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 8_000_000);
+            var body = string.Concat(Enumerable.Repeat("0123456789abcdef\r\n", 43_000));
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<typical@b>", body);
+            Assert.InRange(prepared.ArtData.Length, 740 * 1024, 800 * 1024);
+
+            var transport = new ScriptedTransport("ARTICLE <typical@b>\r\n"u8.ToArray());
+            await new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None);
+
+            Assert.Equal(4, transport.WriteCallCount);
+            Assert.Equal(prepared.ArtData.Length, transport.WriteLengths[2]);
+            AssertArticleWire(transport.Written, "<typical@b>", prepared.ArtData);
+            Assert.Equal(1, Count(transport.Written, Terminator));
+        }
+
+        /// <summary>
+        /// Partial accepts resume at the next byte. The assembled wire image matches one full write.
+        /// </summary>
+        [Fact]
+        public async Task Partial_accepts_resume_without_duplicating_or_dropping_bytes()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 8_000_000);
+            var body = string.Concat(Enumerable.Repeat("partial-line\r\n", 400));
+            RetentionTestArticles.RetainPrepared(authority, "<part@b>", body);
+            var command = "ARTICLE <part@b>\r\n"u8.ToArray();
+
+            var whole = new ScriptedTransport(command);
+            await new NntpCacheListenerSession(whole, authority, time).RunAsync(CancellationToken.None);
+            Assert.Equal(0, authority.RetainedCount);
+
+            RetentionTestArticles.RetainPrepared(authority, "<part@b>", body);
+            var partial = new ScriptedTransport(command) { MaxAcceptPerWrite = 1000 };
+            await new NntpCacheListenerSession(partial, authority, time).RunAsync(CancellationToken.None);
+
+            Assert.True(partial.WriteCallCount > whole.WriteCallCount);
+            Assert.Equal(whole.Written, partial.Written);
+            Assert.Equal(1, Count(partial.Written, Terminator));
+            Assert.Equal(partial.Written.Length, partial.WriteLengths.Sum());
+            Assert.All(partial.WriteLengths, static length => Assert.InRange(length, 1, 1000));
+        }
+
+        /// <summary>
+        /// Two sequential ARTICLE commands each end with one terminator and do not share a write.
+        /// </summary>
+        [Fact]
+        public async Task Two_articles_each_have_one_status_line_and_one_terminator()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 8_000_000);
+            var first = RetentionTestArticles.RetainPrepared(authority, "<one@b>", "one\r\n");
+            var second = RetentionTestArticles.RetainPrepared(authority, "<two@b>", "two\r\n");
+            var transport = new ScriptedTransport("ARTICLE <one@b>\r\nARTICLE <two@b>\r\n"u8.ToArray());
+            await new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None);
+
+            Assert.Equal(7, transport.WriteCallCount);
+            Assert.Equal(2, Count(transport.Written, Terminator));
+            Assert.Contains(first.ArtData, transport.Written);
+            Assert.Contains(second.ArtData, transport.Written);
+            Assert.Equal(0, authority.RetainedCount);
+        }
+
+        /// <summary>A transport that accepts zero bytes fails the write and does not commit the article.</summary>
+        [Fact]
+        public async Task Zero_accepted_bytes_fail_the_write_without_committing()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            RetentionTestArticles.RetainPrepared(authority, "<a@b>");
+            var transport = new ScriptedTransport("ARTICLE <a@b>\r\n"u8.ToArray()) { MaxAcceptPerWrite = 0 };
+            await Assert.ThrowsAsync<IOException>(() => new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None));
+            Assert.Equal(1, authority.RetainedCount);
+        }
+
+        /// <summary>A count past the remaining buffer fails the article write and does not commit.</summary>
+        [Fact]
+        public async Task Accepted_count_past_the_remaining_buffer_fails_without_committing()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            RetentionTestArticles.RetainPrepared(authority, "<a@b>", "body\r\n");
+            var follows = Status("<a@b>");
+            var transport = new ScriptedTransport("ARTICLE <a@b>\r\n"u8.ToArray()) { OverAcceptOnWriteNumber = 3 };
+            await Assert.ThrowsAsync<IOException>(() => new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None));
+            Assert.Equal(1, authority.RetainedCount);
+            Assert.Equal(Greeting.Length + follows.Length, transport.Written.Length);
+        }
+
+        /// <summary>
+        /// A zero count after a positive partial accept fails that write. The session does not retry the same bytes.
+        /// </summary>
+        [Fact]
+        public async Task Zero_accept_after_progress_fails_without_committing_or_retrying()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            RetentionTestArticles.RetainPrepared(authority, "<a@b>", "abcdefghijklmnopqrstuvwxyz\r\n");
+            var follows = Status("<a@b>");
+            const int chunk = 5;
+            var writesBeforeBody = DivideRoundingUp(Greeting.Length, chunk) + DivideRoundingUp(follows.Length, chunk);
+            var transport = new ScriptedTransport("ARTICLE <a@b>\r\n"u8.ToArray())
+            {
+                MaxAcceptPerWrite = chunk,
+                ZeroAcceptOnWriteNumber = writesBeforeBody + 2,
+            };
+
+            await Assert.ThrowsAsync<IOException>(() => new NntpCacheListenerSession(transport, authority, time).RunAsync(CancellationToken.None));
+
+            Assert.Equal(1, authority.RetainedCount);
+            Assert.Equal(0, transport.WriteLengths[^1]);
+            Assert.Equal(transport.Written.Length, transport.WriteLengths.Take(transport.WriteLengths.Count - 1).Sum());
+            Assert.True(transport.Written.Length > Greeting.Length + follows.Length);
+            Assert.False(transport.Written.AsSpan(transport.Written.Length - Terminator.Length).SequenceEqual(Terminator));
+        }
+
+        /// <summary>
+        /// Bytes accepted before a stalled partial write stay a prefix. Cancellation does not commit, and a retry matches a full write.
+        /// </summary>
+        [Fact]
+        public async Task Partial_progress_then_a_stall_keeps_the_prefix_and_a_retry_matches()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>", "abcdefghijklmnopqrstuvwxyz\r\n");
+            var follows = Status("<a@b>");
+            const int chunk = 5;
+            var writesBeforeBody = DivideRoundingUp(Greeting.Length, chunk) + DivideRoundingUp(follows.Length, chunk);
+            var blocked = new ScriptedTransport("ARTICLE <a@b>\r\n"u8.ToArray())
+            {
+                MaxAcceptPerWrite = chunk,
+                BlockOnWriteNumber = writesBeforeBody + 2,
+            };
+            using var cts = new CancellationTokenSource();
+            var running = new NntpCacheListenerSession(blocked, authority, time).RunAsync(cts.Token);
+            await blocked.Entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(blocked.Written.Length > Greeting.Length + follows.Length);
+            Assert.True(blocked.Written.Length < Greeting.Length + follows.Length + prepared.ArtData.Length);
+            await cts.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+            Assert.Equal(1, authority.RetainedCount);
+
+            var delivered = await RunAsync(authority, "ARTICLE <a@b>\r\n", time: time);
+            Assert.True(delivered.AsSpan(0, blocked.Written.Length).SequenceEqual(blocked.Written));
+            Assert.True(delivered.Length > blocked.Written.Length);
+            AssertArticleWire(delivered, "<a@b>", prepared.ArtData);
+            Assert.Equal(0, authority.RetainedCount);
+        }
+
+        /// <summary>Checks greeting, one 220 line, the retained image, and one terminator.</summary>
+        /// <param name="written">Bytes accepted by the transport.</param>
+        /// <param name="messageId">Message-ID expected in the status line.</param>
+        /// <param name="artData">Retained article image expected after the status line.</param>
+        private static void AssertArticleWire(byte[] written, string messageId, ReadOnlyMemory<byte> artData)
+        {
+            var follows = Status(messageId);
+            Assert.True(written.AsSpan(0, Greeting.Length).SequenceEqual(Greeting));
+            Assert.True(written.AsSpan(Greeting.Length, follows.Length).SequenceEqual(follows));
+            Assert.True(written.AsSpan(Greeting.Length + follows.Length, artData.Length).SequenceEqual(artData.Span));
+            Assert.True(written.AsSpan(Greeting.Length + follows.Length + artData.Length).SequenceEqual(Terminator));
+        }
+
         /// <summary>Runs the cache listener session against a scripted transport and returns wire bytes sent to the client.</summary>
         /// <param name="authority">Retention store backing article lookup and delivery claims.</param>
         /// <param name="commands">Inbound client command script (ASCII, CRLF-terminated).</param>
@@ -977,6 +1165,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             segment.Array![segment.Offset + index] = value;
         }
 
+        /// <summary>Divides <paramref name="length"/> by <paramref name="chunk"/>, rounding a remainder up.</summary>
+        /// <param name="length">Byte length of one logical write.</param>
+        /// <param name="chunk">Maximum bytes accepted from one transport write.</param>
+        /// <returns>The number of transport writes required to accept <paramref name="length"/> bytes.</returns>
+        private static int DivideRoundingUp(int length, int chunk) => (length + chunk - 1) / chunk;
+
         /// <summary>Returns the first index of <paramref name="pattern"/> in <paramref name="buffer"/>, or -1 if absent.</summary>
         /// <param name="buffer">Haystack buffer.</param>
         /// <param name="pattern">Subsequence to locate.</param>
@@ -1017,6 +1211,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             /// <summary>Number of <see cref="WriteAsync"/> calls; drives block and fail thresholds.</summary>
             private int _writeCalls;
 
+            /// <summary>Accepted length of each successful or partial write, in call order.</summary>
+            private readonly List<int> _writeLengths = [];
+
             /// <summary>Configures inbound script and optional read chunking for session protocol tests.</summary>
             /// <param name="inbound">Wire bytes the client would receive from the listener transport.</param>
             /// <param name="maxRead">Maximum bytes per read; defaults to the full inbound buffer.</param>
@@ -1029,11 +1226,26 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             /// <summary>Snapshot of all bytes written to the simulated client.</summary>
             internal byte[] Written => _written.ToArray();
 
+            /// <summary>How many times <see cref="WriteAsync"/> was entered.</summary>
+            internal int WriteCallCount => _writeCalls;
+
+            /// <summary>Accepted byte count of each write, including a partial accept before a later failure.</summary>
+            internal IReadOnlyList<int> WriteLengths => _writeLengths;
+
             /// <summary>When the write call count equals this value, the next write throws <see cref="IOException"/>.</summary>
             internal int FailOnWriteNumber { get; init; }
 
             /// <summary>After this many payload bytes are accepted cumulatively, further writes fail or truncate.</summary>
             internal int FailAfterAcceptedBytes { get; init; } = int.MaxValue;
+
+            /// <summary>Maximum bytes accepted from one write. A smaller value makes the session continue at the next byte.</summary>
+            internal int MaxAcceptPerWrite { get; init; } = int.MaxValue;
+
+            /// <summary>On this write invocation, accept nothing and return zero. Zero disables the behavior.</summary>
+            internal int ZeroAcceptOnWriteNumber { get; init; }
+
+            /// <summary>On this write invocation, report one more byte than the buffer contains. Zero disables the behavior.</summary>
+            internal int OverAcceptOnWriteNumber { get; init; }
 
             /// <summary>On this write invocation, signals <see cref="Entered"/> and awaits <see cref="Release"/> before continuing.</summary>
             internal int BlockOnWriteNumber { get; init; }
@@ -1077,13 +1289,26 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
                     throw new IOException("scripted write failure");
                 }
 
-                var count = Math.Min(buffer.Length, FailAfterAcceptedBytes - _accepted);
+                if (_writeCalls == ZeroAcceptOnWriteNumber)
+                {
+                    _writeLengths.Add(0);
+                    return 0;
+                }
+
+                if (_writeCalls == OverAcceptOnWriteNumber)
+                {
+                    return buffer.Length + 1;
+                }
+
+                var count = Math.Min(buffer.Length, MaxAcceptPerWrite);
+                count = Math.Min(count, FailAfterAcceptedBytes - _accepted);
                 for (var i = 0; i < count; i++)
                 {
                     _written.Add(buffer.Span[i]);
                 }
 
                 _accepted += count;
+                _writeLengths.Add(count);
                 return count;
             }
 

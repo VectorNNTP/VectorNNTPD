@@ -290,9 +290,11 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// </remarks>
         public int TlsHandshakeTimeoutSeconds { get; set; } = 30;
 
-        /// <summary>Per-operation I/O no-progress timeout in seconds.</summary>
+        /// <summary>No-progress deadline, in seconds, for one listener read or one non-empty listener write.</summary>
         /// <remarks>
         /// Default 60. Validation accepts 1–600. Copied into the runtime snapshot as a <see cref="TimeSpan"/>.
+        /// A completed call is progress and the next call receives a new deadline. One buffer is not given a
+        /// fresh deadline for every 32 KiB slice.
         /// </remarks>
         public int IoProgressTimeoutSeconds { get; set; } = 60;
 

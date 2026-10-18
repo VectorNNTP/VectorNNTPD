@@ -34,7 +34,7 @@ namespace VectorNNTPD.BackFillerService.Listener
     /// <para>
     /// Admission is a compare-and-swap on <see cref="ActiveConnections"/> against
     /// <see cref="BackFillerListenerRuntimeOptions.MaxActiveConnections"/>. The handshake timeout and
-    /// per-read/write no-progress timeout come from <see cref="BackFillerRuntimeOptions.Listener"/>.
+    /// no-progress deadline for each read or non-empty write comes from <see cref="BackFillerRuntimeOptions.Listener"/>.
     /// <see cref="StopAsync"/> does not observe its cancellation token.
     /// <see cref="StartAsync"/> forwards its token only to listener-bound DNS publication.
     /// </para>
@@ -498,7 +498,7 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// The handshake uses a linked token cancelled after <see cref="BackFillerListenerRuntimeOptions.TlsHandshakeTimeout"/>.
         /// That timeout becomes <see cref="TimeoutException"/> with message <c>tls-handshake</c>. After the handshake,
         /// <see cref="StreamCacheListenerTransport"/> applies <see cref="BackFillerListenerRuntimeOptions.IoProgressTimeout"/>
-        /// and leaves the <see cref="SslStream"/> open so the network stream still owns the socket.
+        /// as one no-progress deadline per read or non-empty write, and leaves the <see cref="SslStream"/> open so the network stream still owns the socket.
         /// <see cref="OperationCanceledException"/> from the service token is ignored.
         /// <see cref="AuthenticationException"/> and <see cref="TimeoutException"/> are logged.
         /// <see cref="IOException"/> is not logged here. Other exceptions are logged as <see cref="CacheListenerLogMessages.ConnectionFailed"/>.
