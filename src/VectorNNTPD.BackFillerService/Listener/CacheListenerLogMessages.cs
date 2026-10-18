@@ -33,11 +33,19 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="SocketCount">Number of sockets successfully bound.</param>
         /// <param name="BindPortTls">Configured TLS listen port.</param>
+        /// <param name="SendBufferBytes">TCP send-buffer limit that each accepted socket will request. Not the OS-reported value.</param>
+        /// <param name="ReceiveBufferBytes">TCP receive-buffer limit that each accepted socket will request. Not the OS-reported value.</param>
+        /// <remarks>Nagle is disabled on each accepted socket. This event is once per successful start, not per connection.</remarks>
         [LoggerMessage(
             EventId = 5402,
             Level = LogLevel.Information,
-            Message = "Cache Listener running sockets={SocketCount} bindPortTls={BindPortTls}")]
-        internal static partial void Running(ILogger logger, int SocketCount, int BindPortTls);
+            Message = "Cache Listener running sockets={SocketCount} bindPortTls={BindPortTls} noDelay=true sendBufferBytes={SendBufferBytes} receiveBufferBytes={ReceiveBufferBytes}")]
+        internal static partial void Running(
+            ILogger logger,
+            int SocketCount,
+            int BindPortTls,
+            int SendBufferBytes,
+            int ReceiveBufferBytes);
 
         /// <summary>Written at the start of disposal, after the state becomes retiring and before the accept token is cancelled.</summary>
         /// <param name="logger">Logger that receives the event.</param>
@@ -165,5 +173,20 @@ namespace VectorNNTPD.BackFillerService.Listener
             Level = LogLevel.Warning,
             Message = "Cache Listener connection drain observed fault error={ErrorType}")]
         internal static partial void ConnectionDrainFailed(ILogger logger, string ErrorType);
+
+        /// <summary>
+        /// Written when accepted-socket option setup fails. The socket is disposed and the admission slot is released.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="Remote">Remote endpoint text, or <c>&lt;unknown&gt;</c>.</param>
+        /// <param name="Error">
+        /// <see cref="System.Net.Sockets.SocketError"/> name, or the exception type name when the failure is not a
+        /// <see cref="System.Net.Sockets.SocketException"/>.
+        /// </param>
+        [LoggerMessage(
+            EventId = 5415,
+            Level = LogLevel.Warning,
+            Message = "Cache Listener accepted socket options failed remote={Remote} error={Error}")]
+        internal static partial void AcceptedSocketOptionsFailed(ILogger logger, string Remote, string Error);
     }
 }

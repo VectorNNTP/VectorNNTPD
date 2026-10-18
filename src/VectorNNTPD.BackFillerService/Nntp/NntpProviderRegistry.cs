@@ -81,7 +81,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
             : this(
                 catalog,
                 transport,
-                NntpSessionOptions.Default,
+                NntpSessionOptions.Default with
+                {
+                    TcpSendBufferBytes = runtime.Nntp.SendBufferBytes,
+                    TcpReceiveBufferBytes = runtime.Nntp.ReceiveBufferBytes,
+                },
                 runtime.Shutdown.GracePeriod,
                 establishment,
                 logger,
@@ -401,6 +405,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </remarks>
         public async Task StartAsync(CancellationToken cancellationToken)
         {
+            NntpLogMessages.UpstreamSocketOptions(
+                _logger,
+                _options.TcpSendBufferBytes,
+                _options.TcpReceiveBufferBytes);
             foreach (var provider in _catalog.Providers)
             {
                 if (provider.MaxSessions <= 0)

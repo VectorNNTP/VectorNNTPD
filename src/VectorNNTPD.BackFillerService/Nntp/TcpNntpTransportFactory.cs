@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using VectorNNTPD.BackFillerService.Networking;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -13,7 +14,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Connects to <paramref name="provider"/> and returns a stream that owns the <see cref="TcpClient"/>.
         /// </summary>
         /// <param name="provider">Endpoint and implicit-TLS flag. Credentials are not read.</param>
-        /// <param name="options">Connect timeout, socket buffer size, and optional certificate callback.</param>
+        /// <param name="options">Connect timeout, TCP buffer limits, reader buffer, and optional certificate callback.</param>
         /// <param name="cancellationToken">Cancels the TCP connect and, when implicit TLS is used, the handshake.</param>
         /// <returns>
         /// A cleartext network stream when <see cref="BackFillerProviderDefinition.UseTls"/> is false.
@@ -21,7 +22,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </returns>
         /// <exception cref="ArgumentNullException"><paramref name="provider"/> or <paramref name="options"/> is null.</exception>
         /// <remarks>
-        /// Send and receive buffer sizes are both set to <see cref="NntpSessionOptions.ReceiveBufferBytes"/>.
+        /// <see cref="TcpSocketOptions.Apply"/> runs on the socket before connect and again on the socket
+        /// connect returned, before <see cref="TcpClient.GetStream"/> and before any TLS or NNTP write.
+        /// Send and receive limits come from <see cref="NntpSessionOptions.TcpSendBufferBytes"/> and
+        /// <see cref="NntpSessionOptions.TcpReceiveBufferBytes"/>. <see cref="NntpSessionOptions.ReceiveBufferBytes"/>
+        /// is the managed reader size and is not copied onto the socket. Nagle is disabled.
         /// The TCP connect uses <see cref="NntpSessionOptions.ConnectTimeout"/> linked with <paramref name="cancellationToken"/>.
         /// Implicit TLS then gets another full <see cref="NntpSessionOptions.ConnectTimeout"/>, linked only with <paramref name="cancellationToken"/>.
         /// Any failure, including <see cref="System.Net.Sockets.SocketException"/>, disposes the client and rethrows.
@@ -36,17 +41,17 @@ namespace VectorNNTPD.BackFillerService.Nntp
             ArgumentNullException.ThrowIfNull(provider);
             ArgumentNullException.ThrowIfNull(options);
 
-            var client = new TcpClient
-            {
-                ReceiveBufferSize = options.ReceiveBufferBytes,
-                SendBufferSize = options.ReceiveBufferBytes,
-            };
+            var client = new TcpClient();
 
             try
             {
+                TcpSocketOptions.Apply(client.Client, options.TcpSendBufferBytes, options.TcpReceiveBufferBytes);
                 using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectCts.CancelAfter(options.ConnectTimeout);
                 await client.ConnectAsync(provider.Host, provider.Port, connectCts.Token).ConfigureAwait(false);
+                // ConnectAsync(string) can replace the socket when the resolved address family differs.
+                // Re-apply on the connected socket before the first TLS or NNTP byte.
+                TcpSocketOptions.Apply(client.Client, options.TcpSendBufferBytes, options.TcpReceiveBufferBytes);
                 Stream stream = client.GetStream();
                 if (!provider.UseTls)
                 {

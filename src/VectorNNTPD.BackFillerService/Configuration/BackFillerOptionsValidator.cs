@@ -1,5 +1,6 @@
 
 using Microsoft.Extensions.Options;
+using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.Configuration;
 
@@ -275,6 +276,9 @@ namespace VectorNNTPD.BackFillerService.Configuration
             {
                 failures.Add("BackFiller:Listener:MaxActiveConnections must be between 1 and 2,147,483,647.");
             }
+
+            ValidateBufferSize("BackFiller:Listener:SendBufferBytes", listener.SendBufferBytes, failures);
+            ValidateBufferSize("BackFiller:Listener:ReceiveBufferBytes", listener.ReceiveBufferBytes, failures);
         }
 
         /// <summary>
@@ -297,6 +301,22 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     "BackFiller:Nntp:MaxConcurrentSessionEstablishments must be between "
                     + $"{BackFillerNntpOptions.MinimumMaxConcurrentSessionEstablishments} and "
                     + $"{BackFillerNntpOptions.MaximumMaxConcurrentSessionEstablishments}.");
+            }
+
+            ValidateBufferSize("BackFiller:Nntp:SendBufferBytes", nntp.SendBufferBytes, failures);
+            ValidateBufferSize("BackFiller:Nntp:ReceiveBufferBytes", nntp.ReceiveBufferBytes, failures);
+        }
+
+        /// <summary>Appends a failure when a TCP buffer limit is outside 16 KiB through 16 MiB.</summary>
+        /// <param name="key">Configuration key included in the failure text.</param>
+        /// <param name="bytes">Requested buffer size.</param>
+        /// <param name="failures">Failure list to append. Not cleared.</param>
+        private static void ValidateBufferSize(string key, int bytes, List<string> failures)
+        {
+            if (bytes is < TcpSocketOptions.MinimumBufferBytes or > TcpSocketOptions.MaximumBufferBytes)
+            {
+                failures.Add(FormattableString.Invariant(
+                    $"{key} must be between {TcpSocketOptions.MinimumBufferBytes:N0} and {TcpSocketOptions.MaximumBufferBytes:N0}."));
             }
         }
 

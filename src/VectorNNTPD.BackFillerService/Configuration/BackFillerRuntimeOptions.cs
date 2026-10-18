@@ -67,18 +67,27 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// </param>
     /// <param name="MaxQueuedFoundPayloadBytes">Maximum queued Found payload bytes per connection.</param>
     /// <param name="MaxActiveConnections">Maximum concurrently active accepted connections.</param>
+    /// <param name="SendBufferBytes">TCP send-buffer limit applied to each accepted socket before TLS.</param>
+    /// <param name="ReceiveBufferBytes">TCP receive-buffer limit applied to each accepted socket before TLS.</param>
     internal sealed record BackFillerListenerRuntimeOptions(
         TimeSpan TlsHandshakeTimeout,
         TimeSpan IoProgressTimeout,
         int MaxQueuedFoundPayloadBytes,
-        int MaxActiveConnections);
+        int MaxActiveConnections,
+        int SendBufferBytes,
+        int ReceiveBufferBytes);
 
     /// <summary>Validated outbound NNTP provider session bounds.</summary>
     /// <param name="MaxConcurrentSessionEstablishments">
     /// Application-wide limit on concurrent provider-session establishment (TCP through Ready).
     /// Does not cap per-provider steady-state <c>MaxSessions</c>.
     /// </param>
-    internal sealed record BackFillerNntpRuntimeOptions(int MaxConcurrentSessionEstablishments);
+    /// <param name="SendBufferBytes">TCP send-buffer limit for each upstream provider socket.</param>
+    /// <param name="ReceiveBufferBytes">TCP receive-buffer limit for each upstream provider socket.</param>
+    internal sealed record BackFillerNntpRuntimeOptions(
+        int MaxConcurrentSessionEstablishments,
+        int SendBufferBytes,
+        int ReceiveBufferBytes);
 
     /// <summary>Validated retention policy.</summary>
     /// <param name="MaximumRetainedPayloadBytes">Maximum retained payload capacity in bytes.</param>

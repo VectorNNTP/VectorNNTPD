@@ -288,5 +288,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
             Level = LogLevel.Debug,
             Message = "{Session}: transport dispose failed error={ErrorType}")]
         internal static partial void WireTransportDisposeFailed(ILogger logger, string Session, string ErrorType);
+
+        /// <summary>
+        /// Written once when the provider registry starts, before any pool connects.
+        /// </summary>
+        /// <param name="logger">Logger that receives the information event.</param>
+        /// <param name="SendBufferBytes">Configured upstream TCP send-buffer limit. Not the OS-reported value.</param>
+        /// <param name="ReceiveBufferBytes">Configured upstream TCP receive-buffer limit. Not the OS-reported value.</param>
+        /// <remarks>
+        /// Nagle is disabled for every upstream socket. This event does not repeat per session or per write.
+        /// </remarks>
+        [LoggerMessage(
+            EventId = 5421,
+            Level = LogLevel.Information,
+            Message = "NNTP upstream sockets noDelay=true sendBufferBytes={SendBufferBytes} receiveBufferBytes={ReceiveBufferBytes}")]
+        internal static partial void UpstreamSocketOptions(ILogger logger, int SendBufferBytes, int ReceiveBufferBytes);
     }
 }

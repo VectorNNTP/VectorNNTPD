@@ -14,6 +14,7 @@ using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.Common.Networking.Listeners;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
+using VectorNNTPD.BackFillerService.Networking;
 
 namespace VectorNNTPD.BackFillerService.Listener
 {
@@ -33,7 +34,9 @@ namespace VectorNNTPD.BackFillerService.Listener
     /// </para>
     /// <para>
     /// Admission is a compare-and-swap on <see cref="ActiveConnections"/> against
-    /// <see cref="BackFillerListenerRuntimeOptions.MaxActiveConnections"/>. The handshake timeout and
+    /// <see cref="BackFillerListenerRuntimeOptions.MaxActiveConnections"/>. Each admitted socket has Nagle
+    /// disabled and receives the configured send and receive buffer limits before TLS. Those options are
+    /// not taken from the listening socket. The handshake timeout and
     /// no-progress deadline for each read or non-empty write comes from <see cref="BackFillerRuntimeOptions.Listener"/>.
     /// <see cref="StopAsync"/> does not observe its cancellation token.
     /// <see cref="StartAsync"/> forwards its token only to listener-bound DNS publication.
@@ -98,6 +101,19 @@ namespace VectorNNTPD.BackFillerService.Listener
 
         /// <summary>Connections that passed <see cref="TryAdmit"/> and have not yet reached <see cref="ReleaseAdmit"/>.</summary>
         private int _activeConnections;
+
+        /// <summary>
+        /// Invoked after admission and before <see cref="TcpSocketOptions.Apply"/> on an accepted socket.
+        /// Null in production. A <see cref="SocketException"/> or <see cref="ObjectDisposedException"/> from this
+        /// delegate is treated as a socket-option failure: the socket is disposed and the admission slot is released.
+        /// </summary>
+        internal Action<Socket>? BeforeAcceptedSocketOptions { get; set; }
+
+        /// <summary>
+        /// Invoked after socket options are applied and before TLS. Null in production.
+        /// Exceptions from this delegate are not caught by the accept loop.
+        /// </summary>
+        internal Action<Socket>? AfterAcceptedSocketConfigured { get; set; }
 
         /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
         /// <param name="runtime">Runtime snapshot. Must not be null.</param>
@@ -283,7 +299,12 @@ namespace VectorNNTPD.BackFillerService.Listener
                     _state = CacheListenerState.Running;
                 }
 
-                CacheListenerLogMessages.Running(_logger, _listenSockets.Count, _runtime.BindPortTls);
+                CacheListenerLogMessages.Running(
+                    _logger,
+                    _listenSockets.Count,
+                    _runtime.BindPortTls,
+                    _runtime.Listener.SendBufferBytes,
+                    _runtime.Listener.ReceiveBufferBytes);
                 _journal.Record(BackFillerStartupStages.ListenerStarted);
                 _acceptTask = AcceptAllAsync(_runCts.Token);
             }
@@ -438,6 +459,8 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// Cancellation, <see cref="ObjectDisposedException"/>, and <see cref="SocketException"/> end the loop
         /// when <paramref name="cancellationToken"/> is cancelled. A <see cref="SocketException"/> while the token
         /// is still active is ignored and the loop continues. Over-capacity sockets are disposed and not processed.
+        /// An admitted socket is configured with <see cref="TcpSocketOptions.Apply"/> before <see cref="ProcessAsync"/>.
+        /// Option failure disposes that socket, releases the admission slot, and continues the loop.
         /// Admitted work is tracked in <see cref="_connections"/> until the task completes.
         /// </remarks>
         private async Task AcceptLoopAsync(Socket listenSocket, CancellationToken cancellationToken)
@@ -476,6 +499,12 @@ namespace VectorNNTPD.BackFillerService.Listener
                 {
                     CacheListenerLogMessages.CapacityRejected(_logger, remote, _runtime.Listener.MaxActiveConnections);
                     accepted.Dispose();
+                    continue;
+                }
+
+                if (!TryConfigureAcceptedSocket(accepted, remote))
+                {
+                    ReleaseAdmit();
                     continue;
                 }
 
@@ -570,6 +599,48 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
         }
 
+        /// <summary>
+        /// Disables Nagle and sets the configured buffer limits on <paramref name="accepted"/> before any TLS or NNTP byte.
+        /// </summary>
+        /// <param name="accepted">Socket returned by <see cref="Socket.AcceptAsync(CancellationToken)"/>.</param>
+        /// <param name="remote">Remote endpoint text for the failure log.</param>
+        /// <returns><see langword="false"/> when the socket was disposed because option setup failed.</returns>
+        /// <remarks>
+        /// <see cref="BeforeAcceptedSocketOptions"/> runs first when a test supplied it.
+        /// <see cref="SocketException"/>, <see cref="ObjectDisposedException"/>, and
+        /// <see cref="ArgumentOutOfRangeException"/> dispose the socket and return <see langword="false"/>.
+        /// The caller releases the admission slot. Other exceptions propagate.
+        /// </remarks>
+        private bool TryConfigureAcceptedSocket(Socket accepted, string remote)
+        {
+            try
+            {
+                BeforeAcceptedSocketOptions?.Invoke(accepted);
+                TcpSocketOptions.Apply(
+                    accepted,
+                    _runtime.Listener.SendBufferBytes,
+                    _runtime.Listener.ReceiveBufferBytes);
+            }
+            catch (Exception ex) when (ex is SocketException or ObjectDisposedException or ArgumentOutOfRangeException)
+            {
+                var error = ex is SocketException socket ? socket.SocketErrorCode.ToString() : ex.GetType().Name;
+                CacheListenerLogMessages.AcceptedSocketOptionsFailed(_logger, remote, error);
+                try
+                {
+                    accepted.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The test hook or the failed option call already disposed it.
+                }
+
+                return false;
+            }
+
+            AfterAcceptedSocketConfigured?.Invoke(accepted);
+            return true;
+        }
+
         /// <summary>Reserves one admission slot without exceeding the configured maximum.</summary>
         /// <returns><see langword="true"/> when this call incremented <see cref="_activeConnections"/>.</returns>
         private bool TryAdmit()
@@ -589,7 +660,10 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
         }
 
-        /// <summary>Releases one admission slot. Paired with a successful <see cref="TryAdmit"/> from <see cref="ProcessAsync"/>.</summary>
+        /// <summary>
+        /// Releases one admission slot. Paired with a successful <see cref="TryAdmit"/>,
+        /// either from <see cref="ProcessAsync"/> or from accepted-socket option failure.
+        /// </summary>
         private void ReleaseAdmit() => Interlocked.Decrement(ref _activeConnections);
 
         /// <summary>Disposes every listen socket and clears the list. Dispose exceptions are ignored.</summary>
