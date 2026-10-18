@@ -8,15 +8,17 @@ Startup registers options with `ValidateOnStart` in `BackFillerServiceCollection
 
 ## Configuration files
 
-The host content root is the application binary directory. `ApplicationJsonConfiguration` removes Generic Host `appsettings.json` and `appsettings.{environment}.json` sources and loads these files instead:
+The host content root is the application binary directory. Common `ApplicationJsonConfiguration` removes Generic Host `appsettings.json`, `appsettings.{environment}.json`, and `*.settings.json` sources and loads these files instead:
 
 | File | Contents |
 |---|---|
 | `VectorNNTPD.BackFillerService.json` | Primary application configuration. The name is `{entry assembly name}.json`. |
 | `VectorNNTPD.BackFillerService.{environment}.json` | Optional environment overlay. |
-| `VectorNNTP.RabbitMQ.json` | RabbitMQ connectivity. It is a separate file. Its section name remains `RabbitMQ`. |
+| `VectorNNTPD.RabbitMQ.json` | RabbitMQ connectivity. It is a separate file. Its section name remains `RabbitMQ`. |
 
-Environment variables and command-line arguments are applied after those files. A missing optional file does not fail configuration loading. Invalid JSON in a present file fails when that source is read. Mandatory option validation still runs at startup.
+The replacement keeps the position of the earliest removed `appsettings` source. When the host registered none, the entry-assembly files are inserted at the start of the source list. Optional and reload-on-change are copied from the matching removed source. When that source was absent, the added file is optional and reloads on change. A second call does not add another copy of the same path. The helper does not change the builder base path and does not create the files.
+
+`VectorNNTPD.RabbitMQ.json` is the only RabbitMQ JSON file BackFiller registers. It is inserted immediately after the entry-assembly JSON sources. Its optional and reload-on-change flags are copied from the last of those sources. A second call with the same filename does nothing. A present `RabbitMq.json` is not read. A missing `VectorNNTPD.RabbitMQ.json` follows the copied optional flag and does not select another filename. Environment variables and command-line arguments remain after the JSON files and override the same keys. A missing optional file does not fail configuration loading. A required primary file that is missing fails with `FileNotFoundException` when the configuration is built. Invalid JSON in a present file fails when that source is read (`InvalidDataException`). Mandatory option validation still runs at startup.
 
 ## BackFiller section
 
@@ -31,7 +33,7 @@ Section name: `BackFiller` (`BackFillerOptions.SectionName`).
 | `BindPortTls` | Yes | `int?`, range 1–65535. BackFiller is TLS-only. There is no `BackFiller:BindPort`. |
 | `AcmeDirectoryUrl` | No | Binder default is the Let's Encrypt staging directory. ACME validation requires an absolute HTTPS URL. A successful `nntpsharedconfig` projection replaces the bound value. |
 | `AcmeRenewalThresholdDays` | No | Binder default 30. ACME validation accepts 1–90. A successful `nntpsharedconfig` projection replaces the bound value before renewal uses it. |
-| `AcmeStateDir` | No | Default `certs/`. Relative paths resolve against the application binary directory and must stay inside it after canonicalization. Rooted paths stay rooted. |
+| `AcmeStateDir` | No | Default `certs/`. `ApplicationLocalPath` in Common resolves a relative path against the application binary directory and rejects it when that canonical path leaves the directory. Rooted paths stay rooted. |
 | `CertificateDirectory` | No | Default `certs`. Old key `DirCerts`. |
 | `BackFillerAccountRefreshIntervalSeconds` | No | Default 60. Range 5–3600. This is the NntpDB account poll. It is not the per-account NNTP `DATE` keepalive. |
 
@@ -123,4 +125,4 @@ After the connection string works, `ProviderAccountConfigurationService` copies 
 - `BindPortTls` missing, `0`, or outside 1–65535 fails. TLS disabled is not a valid BackFiller mode.
 - `nntpd__cloudflareapikey` and `nntpd__CloudFlareZoneId` are not current environment variables.
 - Do not log `BackFillerOptions`, `AcmeCloudflareOptions`, or `RabbitMqOptions` as a whole object.
-- `AcmeStateDir` and `BackFiller:Logging:File:LogDir` use the same rule. A relative value, including one that contains `..`, is rejected when its canonical path leaves the application binary directory. A rooted value is an explicit location and is not forced back under that directory.
+- `AcmeStateDir` and `BackFiller:Logging:File:LogDir` use Common `ApplicationLocalPath`. A relative value, including one that contains `..`, is rejected when its canonical path leaves the application binary directory. A rooted value is an explicit location and is not forced back under that directory. The check normalizes `.` and `..` and does not follow symlinks or junctions.

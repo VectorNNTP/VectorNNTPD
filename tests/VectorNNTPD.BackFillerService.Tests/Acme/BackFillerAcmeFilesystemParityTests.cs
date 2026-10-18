@@ -1,6 +1,8 @@
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Tests.Acme
 {

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
 {

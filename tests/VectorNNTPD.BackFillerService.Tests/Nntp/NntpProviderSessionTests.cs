@@ -5,8 +5,10 @@ using System.Reflection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Nntp;
-using VectorNNTPD.BackFillerService.Articles;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {

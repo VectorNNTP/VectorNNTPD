@@ -82,7 +82,9 @@ namespace VectorNNTPD.Common.Hosting
                     sp.GetRequiredService<AcmeComponentFactory>(),
                     sp.GetRequiredService<IAcmeCertificatePublisher>(),
                     sp.GetRequiredService<IAcmeCertificateReadiness>(),
-                    sp.GetRequiredService<ILogger<AcmeCertificateService>>()));
+                    sp.GetRequiredService<ILogger<AcmeCertificateService>>(),
+                    sp.GetService<TimeProvider>() ?? TimeProvider.System,
+                    sp.GetService<IAcmeCertificateObservation>()));
 
             return services;
         }

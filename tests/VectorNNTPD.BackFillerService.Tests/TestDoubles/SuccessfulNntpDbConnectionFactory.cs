@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using MySqlConnector;
-using VectorNNTPD.BackFillerService.NntpDb;
+using VectorNNTPD.Common.NntpDb;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

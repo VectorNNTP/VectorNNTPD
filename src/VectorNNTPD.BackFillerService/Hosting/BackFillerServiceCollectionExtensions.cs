@@ -3,17 +3,21 @@ using Microsoft.Extensions.Logging.Console;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
 using VectorNNTPD.BackFillerService.Listener;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.NntpDb;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
+using VectorNNTPD.Common.NntpDb;
 using VectorNNTPD.BackFillerService.Retention;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using Microsoft.Extensions.Options;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.Common.Networking.Certificates;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Articles.Parsing;
 
 namespace VectorNNTPD.BackFillerService.Hosting
 {
@@ -124,8 +128,14 @@ namespace VectorNNTPD.BackFillerService.Hosting
                     validateSharedDatabaseFields: false,
                     validateSharedCredentials: false));
             builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
-            builder.Services.AddAcmeCloudflareInfrastructure();
-            builder.Services.AddNntpDbOptions();
+            builder.Services.AddSingleton<IDnsPublicationLease, ListenerBoundDnsPublicationLease>();
+            builder.Services.AddSingleton<VectorNNTPD.Common.Acme.IAcmeCertificateObservation>(static provider =>
+                new AcmeCertificateWatchdog(
+                    provider.GetRequiredService<BackFillerApplicationHealth>(),
+                    provider.GetRequiredService<ILogger<AcmeCertificateWatchdog>>()));
+            VectorNNTPD.Common.Hosting.AcmeCloudflareServiceCollectionExtensions.AddAcmeCloudflareInfrastructure(
+                builder.Services);
+            VectorNNTPD.Common.Hosting.NntpDbServiceCollectionExtensions.AddNntpDbOptions(builder.Services);
 
             builder.Services.AddSingleton(static provider =>
             {
@@ -164,7 +174,7 @@ namespace VectorNNTPD.BackFillerService.Hosting
                     RabbitMqRuntimeOptions.GetDefaultConnectionName(
                         ApplicationJsonConfiguration.EntryAssemblyName,
                         sp.GetRequiredService<IOptions<BackFillerOptions>>().Value.Fqdn)));
-            builder.Services.AddRabbitMqInfrastructure();
+            VectorNNTPD.Common.Hosting.RabbitMqServiceCollectionExtensions.AddRabbitMqInfrastructure(builder.Services);
 
             builder.Services.AddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
             builder.Services.AddSingleton<NntpDbService>();
@@ -235,7 +245,8 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<IBackFillerStartupJournal>(),
                 provider.GetRequiredService<ILogger<CacheListenerService>>(),
-                provider.GetRequiredService<TimeProvider>()));
+                provider.GetRequiredService<TimeProvider>(),
+                provider.GetRequiredService<IListenerDnsPublication>()));
             builder.Services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IApplicationService, CacheListenerService>(static provider =>
                     provider.GetRequiredService<CacheListenerService>()));
@@ -292,7 +303,7 @@ namespace VectorNNTPD.BackFillerService.Hosting
         {
             ArgumentNullException.ThrowIfNull(builder);
 
-            builder.Configuration.AddVectorEnvironmentVariables();
+            VectorEnvironment.AddVectorEnvironmentVariables(builder.Configuration);
 
             builder.Services.AddWindowsService(options =>
             {

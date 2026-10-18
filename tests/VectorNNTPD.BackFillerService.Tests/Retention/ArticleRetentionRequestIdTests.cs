@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Retention
 {

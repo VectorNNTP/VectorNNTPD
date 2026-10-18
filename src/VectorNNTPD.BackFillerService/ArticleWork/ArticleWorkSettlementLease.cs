@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {

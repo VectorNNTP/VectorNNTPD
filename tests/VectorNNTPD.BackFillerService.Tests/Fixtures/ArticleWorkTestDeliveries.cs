@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using System.Text;
 
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.Fixtures
 {

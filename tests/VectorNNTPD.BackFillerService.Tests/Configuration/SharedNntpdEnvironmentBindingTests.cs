@@ -5,8 +5,10 @@ using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Acme;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -92,7 +94,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         {
             var builder = Host.CreateApplicationBuilder([]);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Cloudflare.ICloudflareDnsReconciler>(
+            builder.Services.AddSingleton<VectorNNTPD.Common.Cloudflare.ICloudflareDnsReconciler>(
                 new VectorNNTPD.BackFillerService.Tests.TestDoubles.NoOpCloudflareDnsReconciler());
             builder.ConfigureBackFillerPlatformHosting();
             builder.Configuration.AddInMemoryCollection(BackFillerTestOptions.CreateValidConfigurationPairs());

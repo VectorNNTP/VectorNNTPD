@@ -1,7 +1,7 @@
 namespace VectorNNTPD.BackFillerService.Retention
 {
     /// <summary>
-    /// Single owner of retained CanonicalV1 <see cref="VectorNNTPD.BackFillerService.Articles.ArticleRecord"/> values,
+    /// Single owner of retained CanonicalV1 <see cref="VectorNNTPD.Common.Articles.ArticleRecord"/> values,
     /// identity, TTL, and capacity. Independent of RabbitMQ and NNTP sessions.
     /// <see cref="TryClaimForDelivery"/> is the NNTP delivery claim; the article is removed only when that claim is committed.
     /// </summary>
@@ -46,7 +46,7 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// </returns>
         /// <remarks>
         /// Does not copy ArtData. On AlreadyPresent, the existing retained
-        /// <see cref="VectorNNTPD.BackFillerService.Articles.ArticleRecord"/> remains authoritative (first-wins);
+        /// <see cref="VectorNNTPD.Common.Articles.ArticleRecord"/> remains authoritative (first-wins);
         /// the new RequestId is added as an additional openable capability and does not revoke prior
         /// RequestIds. When the per-article openable RequestId bound is reached, admission is rejected
         /// without modifying existing RequestIds or ArtData.
@@ -57,8 +57,8 @@ namespace VectorNNTPD.BackFillerService.Retention
         ArticleRetentionResult RetainCanonical(
             string messageId,
             Guid requestId,
-            VectorNNTPD.BackFillerService.Articles.ArticleRecord record,
-            VectorNNTPD.BackFillerService.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+            VectorNNTPD.Common.Articles.ArticleRecord record,
+            VectorNNTPD.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
             string? endpointFqdn = null);
 
         /// <summary>

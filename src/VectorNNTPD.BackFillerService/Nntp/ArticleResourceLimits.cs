@@ -6,8 +6,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
     /// </summary>
     internal static class ArticleResourceLimits
     {
-        /// <summary>Maximum destuffed ARTICLE payload in bytes (5 MiB).</summary>
-        internal const int MaxArticleBytes = 5 * 1024 * 1024;
+        /// <summary>Maximum destuffed ARTICLE payload. Same ceiling as Common article processing.</summary>
+        internal const int MaxArticleBytes = VectorNNTPD.Common.Articles.ArticleResourceLimits.MaxArticleBytes;
 
         /// <summary>
         /// Maximum NNTP status-line length in bytes excluding CRLF.

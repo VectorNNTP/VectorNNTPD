@@ -10,8 +10,9 @@ namespace VectorNNTPD.Common.Logging
         /// </summary>
         /// <param name="sourceLogPath">Completed <c>.log</c> file. Not the active file.</param>
         /// <returns>
-        /// <see langword="true"/> when the gzip file replaced the source.
-        /// <see langword="false"/> when the source is still present because compression did not finish.
+        /// <see langword="true"/> when <c>{sourceLogPath}.gz</c> exists after the attempt, including when that
+        /// gzip is complete and the source could not be deleted.
+        /// <see langword="false"/> when compression did not finish and the source was kept.
         /// </returns>
         bool TryCompressAndReplace(string sourceLogPath);
     }

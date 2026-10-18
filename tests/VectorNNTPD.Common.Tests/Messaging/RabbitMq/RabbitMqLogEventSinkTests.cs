@@ -7,6 +7,7 @@ using Serilog.Events;
 using Serilog.Formatting;
 using Serilog.Parsing;
 using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Tests.Logging;
 
 namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
 {
@@ -121,24 +122,29 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             harness.Factory.LastConnection!.PublishException = new InvalidOperationException("publish failed");
             using var sink = CreateSink(harness.Service, new FixedFormatter("payload"));
             var selfLog = new StringWriter();
-            SelfLog.Enable(selfLog);
-            var probe = new List<LogEvent>();
-            var previous = Serilog.Log.Logger;
-            Serilog.Log.Logger = new Serilog.LoggerConfiguration().WriteTo.Sink(new ProbeSink(probe)).CreateLogger();
-            try
+            await SelfLogCapture.RunAsync(() =>
             {
-                var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
-                Assert.Null(error);
-                Assert.Empty(probe);
-                Assert.Contains("publication failed", selfLog.ToString(), StringComparison.Ordinal);
-                Assert.DoesNotContain(SecretPassword, selfLog.ToString(), StringComparison.Ordinal);
-            }
-            finally
-            {
-                Serilog.Log.CloseAndFlush();
-                Serilog.Log.Logger = previous;
-                SelfLog.Disable();
-            }
+                SelfLog.Enable(selfLog);
+                var probe = new List<LogEvent>();
+                var previous = Serilog.Log.Logger;
+                Serilog.Log.Logger = new Serilog.LoggerConfiguration().WriteTo.Sink(new ProbeSink(probe)).CreateLogger();
+                try
+                {
+                    var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
+                    Assert.Null(error);
+                    Assert.Empty(probe);
+                    Assert.Contains("publication failed", selfLog.ToString(), StringComparison.Ordinal);
+                    Assert.DoesNotContain(SecretPassword, selfLog.ToString(), StringComparison.Ordinal);
+                }
+                finally
+                {
+                    Serilog.Log.CloseAndFlush();
+                    Serilog.Log.Logger = previous;
+                    SelfLog.Disable();
+                }
+
+                return Task.CompletedTask;
+            });
         }
 
         /// <summary>
@@ -154,17 +160,22 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             sink = CreateSink(harness.Service, new FixedFormatter("outer"));
             using var _ = sink;
             var selfLog = new StringWriter();
-            SelfLog.Enable(selfLog);
-            try
+            await SelfLogCapture.RunAsync(() =>
             {
-                sink.Emit(Event(DateTimeOffset.UtcNow));
-                Assert.Single(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications);
-                Assert.Contains("re-entrant", selfLog.ToString(), StringComparison.Ordinal);
-            }
-            finally
-            {
-                SelfLog.Disable();
-            }
+                SelfLog.Enable(selfLog);
+                try
+                {
+                    sink.Emit(Event(DateTimeOffset.UtcNow));
+                    Assert.Single(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications);
+                    Assert.Contains("re-entrant", selfLog.ToString(), StringComparison.Ordinal);
+                }
+                finally
+                {
+                    SelfLog.Disable();
+                }
+
+                return Task.CompletedTask;
+            });
         }
 
         /// <summary>
@@ -177,18 +188,23 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             await using var harness = await Harness.StartAsync(start: false);
             using var sink = CreateSink(harness.Service, new FixedFormatter("skipped"));
             var selfLog = new StringWriter();
-            SelfLog.Enable(selfLog);
-            try
+            await SelfLogCapture.RunAsync(() =>
             {
-                var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
-                Assert.Null(error);
-                Assert.Equal(0, harness.Factory.ConnectCount);
-                Assert.Contains("not ready", selfLog.ToString(), StringComparison.Ordinal);
-            }
-            finally
-            {
-                SelfLog.Disable();
-            }
+                SelfLog.Enable(selfLog);
+                try
+                {
+                    var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
+                    Assert.Null(error);
+                    Assert.Equal(0, harness.Factory.ConnectCount);
+                    Assert.Contains("not ready", selfLog.ToString(), StringComparison.Ordinal);
+                }
+                finally
+                {
+                    SelfLog.Disable();
+                }
+
+                return Task.CompletedTask;
+            });
         }
 
         /// <summary>

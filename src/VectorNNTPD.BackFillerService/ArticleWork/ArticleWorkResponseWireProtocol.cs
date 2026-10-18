@@ -1,7 +1,8 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Messaging.Cache;
+using VectorNNTPD.Common.Messaging.Cache;
+using System.Buffers;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -37,7 +38,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Thrown when <paramref name="intent"/> is not a publishable v1 response.
         /// <see cref="ArticleWorkOutcome.ProviderFailure"/>, <see cref="ArticleWorkOutcome.Cancelled"/>,
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, and <see cref="ArticleWorkOutcome.RetentionRejected"/>
-        /// are rejected. Success requires a canonical FQDN, a port in 1–65535, and a 64-character lowercase
+        /// are rejected. Success requires a canonical FQDN from <see cref="VatpEndpointFields.IsCanonicalFqdn"/>,
+        /// a port accepted by <see cref="VatpEndpointFields.IsCanonicalPort"/>, and a 64-character lowercase
         /// hexadecimal article id, and must not include <c>error</c>. Other publishable outcomes require a
         /// non-empty <c>error</c> and must not include success fields.
         /// </exception>
@@ -134,12 +136,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 case ArticleWorkOutcome.Success:
                     RequireIdentity(intent);
-                    if (!ListenerEndpointFields.IsCanonicalFqdn(intent.Fqdn))
+                    if (!VatpEndpointFields.IsCanonicalFqdn(intent.Fqdn))
                     {
                         throw new InvalidOperationException("Success response requires a lowercase dotted DNS fqdn.");
                     }
 
-                    if (intent.ListenerPort is not { } listenerPort || !ListenerEndpointFields.IsCanonicalPort(listenerPort))
+                    if (intent.ListenerPort is not { } listenerPort || !VatpEndpointFields.IsCanonicalPort(listenerPort))
                     {
                         throw new InvalidOperationException("Success response requires a listenerPort in the range 1–65535.");
                     }

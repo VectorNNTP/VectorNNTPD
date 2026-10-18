@@ -4,6 +4,8 @@ using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Hosting;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -88,7 +90,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
 
             var options = new BackFillerOptions();
             configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-            var rabbit = new VectorNNTPD.BackFillerService.Messaging.RabbitMq.RabbitMqOptions();
+            var rabbit = new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqOptions();
             configuration.GetSection("RabbitMQ").Bind(rabbit);
             var acme = new AcmeCloudflareOptions();
             configuration.Bind(acme);
@@ -201,7 +203,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 .Build();
             var options = new BackFillerOptions();
             configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-            var rabbit = new VectorNNTPD.BackFillerService.Messaging.RabbitMq.RabbitMqOptions();
+            var rabbit = new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqOptions();
             configuration.GetSection("RabbitMQ").Bind(rabbit);
             var acme = new AcmeCloudflareOptions();
             configuration.Bind(acme);
@@ -383,15 +385,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
 
             /// <summary>Configuration with only <see cref="VectorEnvironment"/> variables loaded.</summary>
             internal IConfiguration BuildPrefixedConfiguration() =>
-                new ConfigurationBuilder()
-                    .AddVectorEnvironmentVariables()
-                    .Build();
+                VectorEnvironment.AddVectorEnvironmentVariables(new ConfigurationBuilder()).Build();
 
             /// <summary>Configuration matching host order: environment variables then VECTOR overlay.</summary>
             internal IConfiguration BuildHostConfiguration() =>
-                new ConfigurationBuilder()
-                    .AddEnvironmentVariables()
-                    .AddVectorEnvironmentVariables()
+                VectorEnvironment.AddVectorEnvironmentVariables(
+                    new ConfigurationBuilder().AddEnvironmentVariables())
                     .Build();
 
             /// <summary>Restores each environment variable to its captured previous value.</summary>

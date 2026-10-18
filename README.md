@@ -40,11 +40,11 @@ The production project references the `StuDev.AotAnywhere` 1.0.4 MSBuild SDK. On
 
 Native AOT publish keeps trim and AOT analysis enabled. CI then runs the published executable with `VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1` and `VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG` pointing at an isolated JSON file. The process must print `BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja` and exit 0. That checkpoint is configuration binding and host construction. It does not open a listener or contact a database, broker, DNS provider, or certificate authority.
 
-The standalone project has no external build/runtime dependency on a separate `VectorNNTPD.Common` project or assembly.
+BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, ACME certificate management, the Cloudflare DNS API client, authoritative DNS queries used for DNS-01, RabbitMQ connectivity, and article parsing and validation. It keeps its own `ApplicationServiceManager` and does not use Common's `ApplicationLifecycle`. BackFiller still owns certificate watchdog health, the decision to publish listener-bound A/AAAA records only after the cache listener binds, Article Work topology, the RabbitMQ hosted adapter, and the retained article image that dot-stuffs body lines after Common's parser accepts the article.
 
 ## Linux service
 
-`tools/Publish-Release.ps1 -Platform linux-64` writes `.artifacts/release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTP.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.
+`tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTPD.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.
 
 Install that directory at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
 
@@ -55,7 +55,7 @@ sudo groupadd --system vectornntp || true
 sudo useradd --system --gid vectornntp --home-dir /opt/vectornntp --shell /usr/sbin/nologin vectornntp || true
 sudo install -d -o root -g root -m 0755 /opt/vectornntp /opt/vectornntp/backfiller
 sudo install -o root -g root -m 0755 VectorNNTPD.BackFillerService /opt/vectornntp/backfiller/VectorNNTPD.BackFillerService
-sudo install -o root -g root -m 0644 VectorNNTPD.BackFillerService.json VectorNNTP.RabbitMQ.json README.md /opt/vectornntp/backfiller/
+sudo install -o root -g root -m 0644 VectorNNTPD.BackFillerService.json VectorNNTPD.RabbitMQ.json README.md /opt/vectornntp/backfiller/
 sudo install -d -o vectornntp -g vectornntp -m 0750 /opt/vectornntp/backfiller/logs /opt/vectornntp/backfiller/certs
 sudo install -d -o root -g root -m 0755 /etc/vectornntp
 sudo install -o root -g root -m 0600 backfiller.env.example /etc/vectornntp/backfiller.env

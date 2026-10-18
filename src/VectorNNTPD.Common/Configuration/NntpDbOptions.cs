@@ -44,13 +44,13 @@ namespace VectorNNTPD.Common.Configuration
         public string ConnectionString { get; set; } = string.Empty;
 
         /// <summary>
-        /// Gets or sets the wall-clock budget for NNTPD startup connect and <c>SELECT 1</c>.
+        /// Gets or sets the wall-clock budget for startup connect and <c>SELECT 1</c>.
         /// </summary>
         /// <remarks>
+        /// <see cref="VectorNNTPD.Common.NntpDb.NntpDbService"/> uses this budget when the host starts it.
         /// Connectivity failures may retry until this budget elapses. A malformed
         /// connection string, authentication failures, and a failed <c>SELECT 1</c>
-        /// result fail immediately. BackFiller binds the property but does not run
-        /// that startup probe.
+        /// result fail immediately.
         /// </remarks>
         public TimeSpan StartupTimeout { get; set; } = DefaultStartupTimeout;
     }

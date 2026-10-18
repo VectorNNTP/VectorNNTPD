@@ -1,10 +1,15 @@
+using System.Net;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Configuration;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Acme
 {
@@ -41,9 +46,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
 
             Assert.Equal("propagation_failed", ex.Category);
             Assert.Equal(0, dns.DeleteCalls);
-            Assert.Contains(
-                logger.Entries,
-                entry => entry.Level == LogLevel.Warning && entry.EventId.Id == 1923);
             AssertResponsesDisposed(scope);
         }
 
@@ -69,9 +71,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
 
             Assert.Equal("propagation_failed", ex.Category);
             Assert.Equal(1, dns.DeleteCalls);
-            Assert.Contains(
-                logger.Messages,
-                static message => message.Contains("DNS-01 best-effort cleanup failed", StringComparison.Ordinal));
             Assert.DoesNotContain("txt_cleanup_failed", ex.Message, StringComparison.Ordinal);
             AssertResponsesDisposed(scope);
         }

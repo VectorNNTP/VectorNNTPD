@@ -1,12 +1,15 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Articles.Processing;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
-using VectorNNTPD.BackFillerService.NntpDb;
+using VectorNNTPD.Common.NntpDb;
 using VectorNNTPD.BackFillerService.Retention;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
+using System.Text;
+using VectorNNTPD.Common.Configuration;
+using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
+using System.Globalization;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -147,7 +150,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <see cref="ArticleRetrievalKind.ArticleNotFound"/> and <see cref="ArticleRetrievalKind.InvalidArticle"/> stay terminal.
         /// <see cref="ArticleRetrievalKind.AuthenticationFailure"/> and every other non-retrieved kind become
         /// <see cref="ArticleWorkOutcome.ProviderFailure"/>. Parse failure, Message-ID mismatch, and an article that
-        /// <see cref="NntpDeliveryFraming"/> cannot send as a multiline block become
+        /// <see cref="ArticleWorkDeliveryFraming"/> cannot send as a multiline block become
         /// <see cref="ArticleWorkOutcome.InvalidArticle"/> before retention is called. A retrieved body that cannot be transferred or is not an
         /// owned contiguous buffer becomes <see cref="ArticleWorkOutcome.RetentionRejected"/>.
         /// Success routing fields are null unless retention made the article available.
@@ -281,7 +284,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         "MessageIdMismatch");
                 }
 
-                if (!NntpDeliveryFraming.IsFrameable(record.ArtData.Span))
+                if (!ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
                 {
                     LogArticleProcessed(
                         item,

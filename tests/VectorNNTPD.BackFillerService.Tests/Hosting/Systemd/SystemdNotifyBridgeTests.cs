@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting.Systemd;
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
 {

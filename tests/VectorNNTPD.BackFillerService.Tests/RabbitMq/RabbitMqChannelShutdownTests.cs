@@ -1,45 +1,42 @@
 using System.Reflection;
 using RabbitMQ.Client;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
 {
     /// <summary>
-    /// RabbitMQ channel shutdown: logged close timeout with guaranteed dispose; other close errors propagate after dispose.
+    /// Common manual-ack channel disposal still disposes the client channel when close fails.
+    /// A timeout is logged and swallowed. Any other close failure propagates after dispose.
     /// </summary>
 
     public sealed class RabbitMqChannelShutdownTests
     {
         /// <summary>
-        /// Close timeout is self-logged and DisposeAsync still runs.
+        /// A close timeout is swallowed and the channel is still disposed.
         /// </summary>
-
         [Fact]
-        public async Task Close_timeout_is_logged_and_the_channel_is_still_disposed()
+        public async Task Close_timeout_is_swallowed_and_the_channel_is_still_disposed()
         {
             var channel = ChannelDouble.Create(new TimeoutException("close timed out"));
+            var wrapper = new RabbitMqClientManualAckChannel(channel.Channel, generation: 1);
 
-            var diagnostic = await TestSelfLog.CaptureAsync(() =>
-                RabbitMqChannelShutdown.CloseIfOpenThenDisposeAsync(channel.Channel).AsTask());
+            await wrapper.DisposeAsync();
 
             Assert.True(channel.Disposed);
-            Assert.Contains("close timed out", diagnostic, StringComparison.Ordinal);
-            Assert.Contains("disposal will continue", diagnostic, StringComparison.Ordinal);
         }
 
         /// <summary>
-        /// Close failure propagates after dispose completes.
+        /// An unexpected close failure disposes the channel and then propagates.
         /// </summary>
-
         [Fact]
-        public async Task Unexpected_close_failure_still_disposes_then_propagates()
+        public async Task Unexpected_close_failure_disposes_the_channel_and_propagates()
         {
             var channel = ChannelDouble.Create(new NotSupportedException("close rejected"));
+            var wrapper = new RabbitMqClientManualAckChannel(channel.Channel, generation: 1);
 
-            var ex = await Assert.ThrowsAsync<NotSupportedException>(() =>
-                RabbitMqChannelShutdown.CloseIfOpenThenDisposeAsync(channel.Channel).AsTask());
+            var rejected = await Assert.ThrowsAsync<NotSupportedException>(() => wrapper.DisposeAsync().AsTask());
 
-            Assert.Equal("close rejected", ex.Message);
+            Assert.Equal("close rejected", rejected.Message);
             Assert.True(channel.Disposed);
         }
 

@@ -1,6 +1,6 @@
-using VectorNNTPD.BackFillerService.Articles.Processing;
-using VectorNNTPD.BackFillerService.Articles.Validation;
+using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Retention;
+using VectorNNTPD.Common.Articles.Validation;
 
 namespace VectorNNTPD.BackFillerService.Listener
 {
@@ -217,7 +217,7 @@ namespace VectorNNTPD.BackFillerService.Listener
 
             using var claim = claimed.Claim!;
             var payload = claim.ArticleBytes;
-            if (NntpDeliveryFraming.TryStuffHeaderLines(claim.ArticleBytes.Span, out var stuffed))
+            if (ArticleWorkDeliveryFraming.TryStuffHeaderLines(claim.ArticleBytes.Span, out var stuffed))
             {
                 payload = stuffed;
             }

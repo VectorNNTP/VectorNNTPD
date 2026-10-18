@@ -257,7 +257,8 @@ jobs:
           cp deploy/systemd/backfiller.env.example "$dir/backfiller.env.example"
           cp README.md "$dir/README.md"
           test -f "$dir/VectorNNTPD.BackFillerService.json"
-          test -f "$dir/VectorNNTP.RabbitMQ.json"
+          test -f "$dir/VectorNNTPD.RabbitMQ.json"
+          test ! -e "$dir/VectorNNTP.RabbitMQ.json"
           test ! -e "$dir/appsettings.json"
           test ! -e "$dir/RabbitMq.json"
 
@@ -273,7 +274,8 @@ jobs:
           test -f "$dir/backfiller.env.example"
           test -f "$dir/README.md"
           test -f "$dir/VectorNNTPD.BackFillerService.json"
-          test -f "$dir/VectorNNTP.RabbitMQ.json"
+          test -f "$dir/VectorNNTPD.RabbitMQ.json"
+          test ! -e "$dir/VectorNNTP.RabbitMQ.json"
           test ! -e "$dir/appsettings.json"
           test ! -e "$dir/RabbitMq.json"
           file "$exe"
@@ -383,11 +385,11 @@ jobs:
           $dir = './.artifacts/win-x64'
           $exe = Join-Path $dir 'VectorNNTPD.BackFillerService.exe'
           if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
-          foreach ($required in @('VectorNNTPD.BackFillerService.json', 'VectorNNTP.RabbitMQ.json')) {
+          foreach ($required in @('VectorNNTPD.BackFillerService.json', 'VectorNNTPD.RabbitMQ.json')) {
             $path = Join-Path $dir $required
             if (-not (Test-Path -LiteralPath $path)) { throw "Missing $path" }
           }
-          foreach ($forbidden in @('VectorNNTPD.BackFillerService.dll', 'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so', 'vectornntp-backfiller.service', 'backfiller.env.example', 'appsettings.json', 'RabbitMq.json')) {
+          foreach ($forbidden in @('VectorNNTPD.BackFillerService.dll', 'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so', 'vectornntp-backfiller.service', 'backfiller.env.example', 'appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json')) {
             $path = Join-Path $dir $forbidden
             if (Test-Path -LiteralPath $path) { throw "Native AOT output contains $forbidden." }
           }

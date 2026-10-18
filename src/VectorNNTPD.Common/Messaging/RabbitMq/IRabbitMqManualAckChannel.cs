@@ -14,7 +14,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary>Gets the connection generation this channel was opened against.</summary>
         long Generation { get; }
 
-        /// <summary>Gets a value indicating whether the channel currently reports itself open.</summary>
+        /// <summary>
+        /// Gets a value indicating whether the channel can still accept broker operations.
+        /// <see langword="false"/> after disposal has marked the channel closed, including while the client close is still running.
+        /// </summary>
         bool IsOpen { get; }
 
         /// <summary>
@@ -50,7 +53,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             CancellationToken cancellationToken);
 
         /// <summary>
-        /// Starts a manual-ack consumer on <paramref name="queue"/> with the given prefetch.
+        /// Starts the single manual-ack consumer on <paramref name="queue"/> with the given prefetch.
+        /// A second call throws <see cref="InvalidOperationException"/>.
+        /// A failed or cancelled start detaches the handler before the error propagates.
         /// </summary>
         /// <param name="queue">Queue previously declared for consume.</param>
         /// <param name="prefetchCount">Per-channel prefetch.</param>

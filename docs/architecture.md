@@ -32,7 +32,7 @@ The consumer membership loop waits 15 seconds after a pass that started every de
 |---|---|---|
 | Success | Basic.Ack | Yes |
 | ArticleNotFound | Basic.Ack | Yes |
-| InvalidArticle | Basic.Ack | Yes. Includes an article `NntpDeliveryFraming` cannot send. That rejection happens before retention, so the article is not stored. |
+| InvalidArticle | Basic.Ack | Yes. Includes an article `ArticleWorkDeliveryFraming` cannot send. That rejection happens before retention, so the article is not stored. |
 | InvalidRequest | Basic.Ack | Yes when both `CorrelationId` and `ReplyTo` are present. Otherwise ACK without publication |
 | ProviderFailure | Basic.Nack, requeue true | No |
 | Cancelled | Basic.Nack, requeue true | No |
@@ -53,7 +53,7 @@ Publisher confirms (`BasicAcksAsync` / `BasicNacksAsync` on an async-confirm pub
 
 `NntpStartTlsTests` assert the client does not send `COMPRESS`. The listener below does not implement `IHAVE`, `TAKETHIS`, `MODE STREAM`, `LIST`, `CAPABILITIES`, `GROUP`, `HEAD`, `BODY`, `STAT`, posting, or authentication.
 
-`NntpArticleParser` parses transport-normalized article bytes after acquisition has removed the multiline terminator and undone dot-stuffing once. `NntpArticleCanonicalMaterializer` writes the retained article buffer in that same pass, and `ArticleBodyWireStuffer` dot-stuffs body lines into that buffer. Headers are not stuffed, and the NNTP terminator is not stored. `ArticleId` remains BLAKE3 of the Message-ID value. `ArticleTypeClassifier` sets control and cancel bits from `Control: cancel`, and a PGP-message bit from ASCII armor. That classification does not implement cancel propagation or PGPVERIFY.
+`VectorNNTPD.Common.Articles.Parsing.NntpArticleParser` parses transport-normalized article bytes after acquisition has removed the multiline terminator and undone dot-stuffing once. Message-ID checks, yEnc validation, Date resolution, Path classification, and `ArticleTypeClassifier` are that same Common implementation. `VectorNNTPD.Common.Articles.ArticleRecordFactory` is the only canonical materializer. It rewrites Date and Path, then `ArticleBodyWireStuffer` dot-stuffs body lines into the same output buffer. Headers are not stuffed, and the NNTP terminator is not stored. `ArticleRecord.ArtData` is that stuffed image, and `ArtHash` is XXH3-64 of those exact bytes. `ArticleId` remains BLAKE3 of the Message-ID value. BackFiller retention stores that record and does not materialize a second image. `VectorNNTPD.BackFillerService.ArticleWork.ArticleWorkDeliveryFraming` copies the retained body unchanged and adds a stuffing dot only to header lines that begin with `.`, and only in the socket image. The listener then writes one `.\r\n`. `ArticleTypeClassifier` sets control and cancel bits from `Control: cancel`, and a PGP-message bit from ASCII armor. That classification does not implement cancel propagation or PGPVERIFY.
 
 Per-provider steady-state session count comes from MySQL `maxconnections` (`BackFillerProviderDefinition.MaxSessions`). `BackFillerNntpOptions.MaxConcurrentSessionEstablishments` bounds how many sessions may be connecting at once. The pool throws if it would exceed `MaxSessions`.
 
@@ -89,7 +89,7 @@ The listener command path is byte-oriented, as is the upstream NNTP client. They
 
 ## Source-generated structured logging
 
-Application logs use `LoggerMessageAttribute` on partial methods, usually in a `*LogMessages.cs` companion. Serilog is the host logging stack. Message templates keep structured property names. Do not preformat those properties into the message string.
+Application logs use `LoggerMessageAttribute` on partial methods, usually in a `*LogMessages.cs` companion. Serilog is the host logging stack. The rolling gzip file sink, compressor, active-file writer, and periodic flush wrapper live in `VectorNNTPD.Common.Logging`. BackFiller selects targets, levels, retention, syslog, and RabbitMQ publishing. Message templates keep structured property names. Do not preformat those properties into the message string.
 
 Do not log Cloudflare API keys, ACME passwords, RabbitMQ passwords, `AUTHINFO` secrets, or article payloads. NNTP wire debug logs redact `AUTHINFO USER` and `AUTHINFO PASS`. Guard expensive trace or debug arguments with `IsEnabled` when building them has a cost.
 

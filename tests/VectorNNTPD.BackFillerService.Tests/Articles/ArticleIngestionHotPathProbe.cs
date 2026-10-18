@@ -1,7 +1,8 @@
 using System.Diagnostics;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
 using VectorNNTPD.BackFillerService.Nntp;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {

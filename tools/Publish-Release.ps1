@@ -6,8 +6,8 @@
 .DESCRIPTION
     Resolves this standalone repository from the script file, not the caller's
     working directory. Publishes src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj for win-x64,
-    linux-x64, or both. Output is a flat directory: .artifacts/release/win-64 or
-    .artifacts/release/linux-64. The linux-64 directory also contains
+    linux-x64, or both. Output is a flat directory: release/win-64 or
+    release/linux-64. The linux-64 directory also contains
     deploy/systemd/vectornntp-backfiller.service, deploy/systemd/backfiller.env.example,
     and README.md.
     A failed publish leaves that platform directory unchanged and exits 1.
@@ -30,7 +30,7 @@ $Project = Join-Path $RepoRoot 'src\VectorNNTPD.BackFillerService\VectorNNTPD.Ba
 $ExeName = 'VectorNNTPD.BackFillerService'
 $RequiredPublishFiles = @(
     'VectorNNTPD.BackFillerService.json',
-    'VectorNNTP.RabbitMQ.json'
+    'VectorNNTPD.RabbitMQ.json'
 )
 $SystemdServiceFileName = 'vectornntp-backfiller.service'
 $SystemdServiceSource = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') $SystemdServiceFileName
@@ -183,7 +183,7 @@ function Test-PublishedRelease {
         }
     }
 
-    foreach ($obsoleteName in @('appsettings.json', 'RabbitMq.json')) {
+    foreach ($obsoleteName in @('appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json')) {
         $obsoletePath = Join-Path $ReleaseDir $obsoleteName
         if (Test-Path -LiteralPath $obsoletePath) {
             Fail "Obsolete configuration file must not be packaged: $obsoletePath"
@@ -227,7 +227,7 @@ function Publish-Platform {
         [string] $ExeSuffix
     )
 
-    $releaseDir = Join-Path (Join-Path (Join-Path $RepoRoot '.artifacts') 'release') $Folder
+    $releaseDir = Join-Path (Join-Path $RepoRoot 'release') $Folder
     $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("backfiller-release-" + [System.Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
     $stage = Join-Path $stagingRoot 'publish'

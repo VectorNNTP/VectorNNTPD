@@ -79,7 +79,7 @@ Flags override environment variables. An omitted flag inherits the environment v
 | NNTP read/write timeout seconds (default 60) | `--nntp-timeout` | `BACKFILLER_NNTP_TIMEOUT_SECONDS` |
 | Multiline wire-byte cap, including the terminator (default 67108864) | `--max-article-bytes` | `BACKFILLER_MAX_ARTICLE_BYTES` |
 
-`VectorNNTP.RabbitMQ.json` in this repository sets `EnableSsl` to false and `Port` to 5672. Turn on `--rabbitmq-tls` only when the broker you are using actually requires TLS. An `amqps` URL already selects TLS.
+`VectorNNTPD.RabbitMQ.json` in this repository sets `EnableSsl` to false and `Port` to 5672. Turn on `--rabbitmq-tls` only when the broker you are using actually requires TLS. An `amqps` URL already selects TLS.
 
 Use the listener FQDN as `--nntp-host` when you want certificate verification and the FQDN check. `BindPortTls` is that listener's port. Connecting by IP or `localhost` skips the FQDN equality check and still requires `listenerPort` to equal `--nntp-port`. Pass `--tls-server-name` when SNI must be the certificate name.
 

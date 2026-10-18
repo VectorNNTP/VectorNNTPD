@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.Retention;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Articles.Parsing;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Fixtures
 {

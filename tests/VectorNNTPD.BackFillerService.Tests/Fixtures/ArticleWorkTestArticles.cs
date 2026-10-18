@@ -1,4 +1,6 @@
-using VectorNNTPD.BackFillerService.Articles.YEnc;
+
+using System.Text;
+using VectorNNTPD.Common.Articles.YEnc;
 
 namespace VectorNNTPD.BackFillerService.Tests.Fixtures
 {

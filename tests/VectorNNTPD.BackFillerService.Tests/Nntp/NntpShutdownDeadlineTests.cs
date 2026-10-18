@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Abstractions;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Nntp;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {

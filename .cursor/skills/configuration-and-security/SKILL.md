@@ -3,7 +3,7 @@ name: configuration-and-security
 description: >-
   Safely implements VectorNNTP configuration binding, validation, secrets handling,
   bind-address NIC checks, and Cloudflare environment variables. Use when changing
-  BackFillerOptions, validators, VectorNNTPD.BackFillerService.json, VectorNNTP.RabbitMQ.json, env vars, secrets, or configuration docs/tests.
+  BackFillerOptions, validators, VectorNNTPD.BackFillerService.json, VectorNNTPD.RabbitMQ.json, env vars, secrets, or configuration docs/tests.
 ---
 
 # Configuration and security

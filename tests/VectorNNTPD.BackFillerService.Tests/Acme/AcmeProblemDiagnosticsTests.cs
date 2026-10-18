@@ -1,4 +1,5 @@
 using VectorNNTPD.BackFillerService.Acme;
+using VectorNNTPD.Common.Acme;
 
 namespace VectorNNTPD.BackFillerService.Tests.Acme
 {

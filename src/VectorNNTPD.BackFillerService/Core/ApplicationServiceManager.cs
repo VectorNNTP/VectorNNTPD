@@ -1,4 +1,5 @@
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Core
 {
@@ -25,7 +26,7 @@ namespace VectorNNTPD.BackFillerService.Core
     /// handlers are not caught there.
     /// </para>
     /// </remarks>
-    internal sealed class ApplicationServiceManager : IDisposable
+    internal sealed class ApplicationServiceManager
     {
         /// <summary>
         /// Services in registration order. An argument that is already an
@@ -502,16 +503,6 @@ namespace VectorNNTPD.BackFillerService.Core
                     // Expected.
                 }
             }
-        }
-
-        /// <summary>
-        /// Releases manager-owned coordination resources.
-        /// </summary>
-        public void Dispose()
-        {
-            _gate.Dispose();
-            var cts = Interlocked.Exchange(ref _executionCts, null);
-            cts?.Dispose();
         }
     }
 

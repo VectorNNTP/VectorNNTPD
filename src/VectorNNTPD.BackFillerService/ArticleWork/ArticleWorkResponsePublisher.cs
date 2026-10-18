@@ -1,6 +1,6 @@
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {

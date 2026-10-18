@@ -161,6 +161,91 @@ namespace VectorNNTPD.Common.Tests.Configuration
         }
 
         /// <summary>
+        /// Asserts that relative <c>..</c> segments which leave the base are rejected, while <c>.</c> and <c>..</c> that remain inside are accepted.
+        /// A sibling whose name starts with the base name is not treated as a child.
+        /// </summary>
+        [Fact]
+        public void Relative_traversal_is_rejected_and_interior_dot_segments_are_kept()
+        {
+            var parent = Directory.CreateTempSubdirectory("app-contain-").FullName;
+            var app = Path.Join(parent, "app");
+            Directory.CreateDirectory(app);
+            try
+            {
+                var sibling = Path.GetFileName(app) + "-extra";
+                var escaped = Assert.Throws<ArgumentException>(() =>
+                    ApplicationLocalPath.ResolveApplicationLocalPath(
+                        ".." + Path.DirectorySeparatorChar + sibling,
+                        app));
+                Assert.Equal("path", escaped.ParamName);
+                Assert.Throws<ArgumentException>(() =>
+                    ApplicationLocalPath.ResolveApplicationLocalPath("certs/../../" + sibling, app));
+                Assert.Throws<ArgumentException>(() =>
+                    AcmeCloudflareOptionsValidator.ResolveAcmeStateDir("certs/../../" + sibling, app));
+
+                var inside = ApplicationLocalPath.ResolveApplicationLocalPath(
+                    "nested" + Path.DirectorySeparatorChar + ".." + Path.DirectorySeparatorChar + "certs",
+                    app);
+                Assert.Equal(ApplicationLocalPath.ResolveApplicationLocalPath("certs", app), inside);
+                Assert.Equal(
+                    ApplicationLocalPath.ResolveApplicationLocalPath(".", app),
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(app)));
+            }
+            finally
+            {
+                TryDelete(parent);
+            }
+        }
+
+        /// <summary>
+        /// Asserts that a rooted path may leave the base, a drive root keeps its separator, and a relative <c>..</c> from that root stays on the root.
+        /// </summary>
+        [Fact]
+        public void Rooted_paths_stay_rooted_and_a_path_root_keeps_its_separator()
+        {
+            var app = Directory.CreateTempSubdirectory("app-rooted-").FullName;
+            var outside = Directory.CreateTempSubdirectory("app-outside-").FullName;
+            try
+            {
+                Assert.Equal(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(outside)),
+                    ApplicationLocalPath.ResolveApplicationLocalPath(outside, app));
+
+                if (OperatingSystem.IsWindows())
+                {
+                    var driveRoot = Path.GetPathRoot(app)!;
+                    Assert.Equal(driveRoot, ApplicationLocalPath.ResolveApplicationLocalPath(driveRoot, app));
+                    Assert.Equal(driveRoot, ApplicationLocalPath.ResolveApplicationLocalPath("..", driveRoot));
+                    var unc = @"\\server\share\certs";
+                    Assert.Equal(
+                        Path.GetFullPath(unc),
+                        ApplicationLocalPath.ResolveApplicationLocalPath(unc, app));
+                }
+            }
+            finally
+            {
+                TryDelete(app);
+                TryDelete(outside);
+            }
+        }
+
+        /// <summary>Asserts that an embedded null is rejected by path resolution.</summary>
+        [Fact]
+        public void Invalid_path_syntax_is_rejected()
+        {
+            var app = Directory.CreateTempSubdirectory("app-invalid-").FullName;
+            try
+            {
+                Assert.Throws<ArgumentException>(() =>
+                    ApplicationLocalPath.ResolveApplicationLocalPath("certs\0", app));
+            }
+            finally
+            {
+                TryDelete(app);
+            }
+        }
+
+        /// <summary>
         /// Asserts that a null path throws <see cref="ArgumentNullException"/> and a whitespace path throws <see cref="ArgumentException"/>.
         /// </summary>
         [Fact]
@@ -170,6 +255,8 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 ApplicationLocalPath.ResolveApplicationLocalPath(null!, AppContext.BaseDirectory));
             Assert.Throws<ArgumentException>(static () =>
                 ApplicationLocalPath.ResolveApplicationLocalPath("   ", AppContext.BaseDirectory));
+            Assert.Throws<ArgumentException>(static () =>
+                ApplicationLocalPath.ResolveApplicationLocalPath(string.Empty, AppContext.BaseDirectory));
         }
 
         /// <summary>
@@ -182,9 +269,10 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 Path.Combine("src", "VectorNNTPD.Common", "Configuration", "ApplicationLocalPath.cs")));
             var acmeWrapper = File.ReadAllText(FindRepoFile(
                 Path.Combine("src", "VectorNNTPD.Common", "Configuration", "AcmeCloudflareOptionsValidator.cs")));
-            Assert.Contains("Path.GetFullPath(trimmed, Path.GetFullPath(root))", helper, StringComparison.Ordinal);
+            Assert.Contains("Path.GetFullPath(trimmed, fullRoot)", helper, StringComparison.Ordinal);
+            Assert.Contains("A relative path must resolve inside the application base directory.", helper, StringComparison.Ordinal);
             Assert.Contains("ApplicationLocalPath.ResolveApplicationLocalPath", acmeWrapper, StringComparison.Ordinal);
-            Assert.DoesNotContain("Path.GetFullPath(trimmed, Path.GetFullPath(root))", acmeWrapper, StringComparison.Ordinal);
+            Assert.DoesNotContain("Path.GetFullPath(trimmed, fullRoot)", acmeWrapper, StringComparison.Ordinal);
         }
 
         /// <summary>

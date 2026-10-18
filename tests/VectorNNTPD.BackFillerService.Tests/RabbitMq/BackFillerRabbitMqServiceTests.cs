@@ -2,8 +2,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
 {
@@ -503,12 +504,10 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
-        /// Recovery connect exception faults execution and surfaces on DisposeAsync.
+        /// A recovery connect exception is logged and retried. The watcher stays running until disposal.
         /// </summary>
-
         [Fact]
-
-        public async Task Unexpected_recovery_failure_faults_the_watcher_and_disposal()
+        public async Task Unexpected_recovery_failure_is_retried_and_disposal_completes()
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
             var logger = new CollectingLogger<RabbitMqService>();
@@ -518,20 +517,21 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             factory.ConnectException = new InvalidOperationException("broker exploded");
 
             first.SimulateLost();
+            await ArticleWorkTestDeliveries.WaitUntilAsync(
+                () => logger.Entries.Any(static entry =>
+                    entry.EventId.Id == 2810
+                    && entry.Message.Contains("broker exploded", StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(2));
 
-            var fault = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => service.Execution!.WaitAsync(TimeSpan.FromSeconds(2)));
-            Assert.Equal("broker exploded", fault.Message);
-            Assert.True(service.Execution!.IsFaulted);
+            Assert.False(service.Execution!.IsFaulted);
+            await service.DisposeAsync();
 
-            var disposed = await Assert.ThrowsAsync<InvalidOperationException>(() => service.DisposeAsync().AsTask());
-            Assert.Equal("broker exploded", disposed.Message);
-            Assert.Equal(1, factory.ConnectCount);
-            Assert.Equal(2, factory.AttemptCount);
+            Assert.True(service.Execution.IsCompletedSuccessfully);
+            Assert.True(factory.AttemptCount >= 2);
             Assert.Equal(1, service.ConnectionCount);
             Assert.Equal(1, first.DisposeCount);
-            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 2816);
-            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 9100);
+            Assert.Contains(logger.Entries, static entry => entry.EventId.Id == 2816);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 2809);
         }
 
         /// <summary>
@@ -643,16 +643,18 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
-        /// Assembly retains cache/article-work types and excludes legacy backfiller.storage resources.
+        /// Assembly retains Article Work, excludes cache-fleet topology, and excludes legacy backfiller.storage resources.
         /// </summary>
-
         [Fact]
-
-        public void Integrated_standalone_assembly_keeps_common_cache_contracts_without_legacy_backfiller_storage()
+        public void Integrated_standalone_assembly_keeps_article_work_without_cache_fleet_or_legacy_storage()
         {
-            var assembly = typeof(RabbitMqService).Assembly;
+            Assert.Equal("VectorNNTPD.Common", typeof(RabbitMqService).Assembly.GetName().Name);
+            var assembly = typeof(VectorNNTPD.BackFillerService.Hosting.BackFillerServiceCollectionExtensions).Assembly;
             Assert.NotNull(assembly.GetType("VectorNNTPD.BackFillerService.ArticleWork.ArticleWorkConsumerService"));
-            Assert.NotNull(assembly.GetType("VectorNNTPD.BackFillerService.Messaging.Cache.CacheFleetTopology"));
+            Assert.Null(assembly.GetType("VectorNNTPD.BackFillerService.Messaging.Cache.CacheFleetTopology"));
+            Assert.DoesNotContain(
+                assembly.GetTypes(),
+                static type => type.Namespace == "VectorNNTPD.BackFillerService.Messaging.Cache");
             Assert.DoesNotContain(
                 assembly.GetManifestResourceNames(),
                 static name => name.Contains("backfiller.storage", StringComparison.OrdinalIgnoreCase));
@@ -670,7 +672,8 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 .Select(static field => field.GetRawConstantValue() as string)
                 .Where(static value => !string.IsNullOrEmpty(value))
                 .ToArray();
-            Assert.Contains(topologyNames, static value => value == "cache.requests");
+            Assert.DoesNotContain(topologyNames, static value => value == "cache.requests");
+            Assert.DoesNotContain(topologyNames, static value => value == "cache.broadcast");
             Assert.DoesNotContain(topologyNames, static value => value == "backfiller.storage");
         }
 
@@ -728,16 +731,17 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             throw new DirectoryNotFoundException("Could not locate src/VectorNNTPD.BackFillerService/RabbitMq.");
         }
 
-        /// <summary>Asserts install-canceled diagnostics are logged and topology install success is absent.</summary>
+        /// <summary>
+        /// Asserts shutdown during recovery is logged as a failed reconnect and no generation is published.
+        /// </summary>
         /// <param name="logger">Collecting logger from the service under test.</param>
-
         private static void AssertInstallCanceled(CollectingLogger<RabbitMqService> logger)
         {
             Assert.Contains(
                 logger.Entries,
-                static entry => entry.EventId.Id == 9100
-                    && entry.Message.Contains("RabbitMQ connection install", StringComparison.Ordinal));
-            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 2810);
+                static entry => entry.EventId.Id == 2810
+                    && entry.Message.Contains("RabbitMQ service is stopping", StringComparison.Ordinal));
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 2809);
         }
 
         /// <summary>

@@ -144,6 +144,11 @@ namespace VectorNNTPD.Common.Configuration
         /// Application binary directory. Production callers must pass
         /// <see cref="AppContext.BaseDirectory"/>.
         /// </param>
+        /// <returns>The fully qualified state directory.</returns>
+        /// <exception cref="ArgumentException">
+        /// Thrown when <paramref name="acmeStateDir"/> is null or whitespace, or when a relative path
+        /// canonicalizes outside <paramref name="applicationBaseDirectory"/>.
+        /// </exception>
         internal static string ResolveAcmeStateDir(string acmeStateDir, string? applicationBaseDirectory) =>
             ApplicationLocalPath.ResolveApplicationLocalPath(acmeStateDir, applicationBaseDirectory);
 

@@ -7,21 +7,21 @@ using VectorNNTPD.Common.Configuration;
 namespace VectorNNTPD.Common.Tests.Configuration
 {
     /// <summary>
-    /// Locks the shipped <c>src/VectorNNTPD.Common/RabbitMq.json</c> sample, Common's load order for that file, and the absence of a top-level RabbitMQ section in host primary JSON that exists in this repository.
+    /// Locks the shipped <c>src/VectorNNTPD.Common/VectorNNTPD.RabbitMQ.json</c> sample, Common's load order for that file, and the absence of a top-level RabbitMQ section in host primary JSON that exists in this repository.
     /// </summary>
     /// <remarks>
-    /// NNTPD and StorageServer are not projects here. BackFiller ships <c>VectorNNTP.RabbitMQ.json</c> and does not copy <c>RabbitMq.json</c> into its output. This test reads repository source files, not application <c>bin</c> directories.
+    /// NNTPD and StorageServer are not projects here. BackFiller ships its own <c>VectorNNTPD.RabbitMQ.json</c>. The loader does not read <c>RabbitMq.json</c>. This test reads repository source files, not application <c>bin</c> directories.
     /// </remarks>
     public sealed class SharedRabbitMqJsonTests
     {
         /// <summary>
-        /// Asserts that <c>src/VectorNNTPD.Common/RabbitMq.json</c> binds the shared contract through <see cref="ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile"/>, and that every executable host project in this repository has a primary JSON file with no top-level <see cref="RabbitMqOptions.SectionName"/> property.
+        /// Asserts that <c>src/VectorNNTPD.Common/VectorNNTPD.RabbitMQ.json</c> binds the shared contract through <see cref="ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile"/>, and that every executable host project in this repository has a primary JSON file with no top-level <see cref="RabbitMqOptions.SectionName"/> property.
         /// </summary>
         [Fact]
         public void Shipped_sample_binds_and_present_host_primary_json_omits_the_section()
         {
             var repoRoot = FindRepoRoot();
-            var sharedPath = Path.Combine(repoRoot, "src", "VectorNNTPD.Common", "RabbitMq.json");
+            var sharedPath = Path.Combine(repoRoot, "src", "VectorNNTPD.Common", "VectorNNTPD.RabbitMQ.json");
             Assert.True(File.Exists(sharedPath), sharedPath);
 
             var primaryFiles = FindHostPrimaryJsonFiles(repoRoot);
@@ -38,7 +38,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
             var root = Directory.CreateTempSubdirectory("vnntp-shared-rabbit-");
             try
             {
-                File.Copy(sharedPath, Path.Combine(root.FullName, "RabbitMq.json"));
+                File.Copy(sharedPath, Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"));
                 File.WriteAllText(
                     Path.Combine(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
                     "{}");
@@ -54,9 +54,10 @@ namespace VectorNNTPD.Common.Tests.Configuration
                     builder.Environment.EnvironmentName);
                 ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
                     builder.Configuration,
-                    builder.Environment.EnvironmentName);
+                    builder.Environment.EnvironmentName,
+                    "VectorNNTPD.RabbitMQ.json");
 
-                var rabbitIndex = IndexOf(builder.Configuration, "RabbitMq.json");
+                var rabbitIndex = IndexOf(builder.Configuration, "VectorNNTPD.RabbitMQ.json");
                 var rabbit = (FileConfigurationSource)builder.Configuration.Sources[rabbitIndex];
                 Assert.True(rabbit.Optional);
                 Assert.True(rabbit.ReloadOnChange);
@@ -95,7 +96,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         }
 
         /// <summary>
-        /// Asserts that <c>RabbitMQ__Port</c> and a <c>--RabbitMQ:VirtualHost</c> argument override <c>RabbitMq.json</c> while a host from that file remains, then restores the previous environment variable.
+        /// Asserts that <c>RabbitMQ__Port</c> and a <c>--RabbitMQ:VirtualHost</c> argument override <c>VectorNNTPD.RabbitMQ.json</c> while a host from that file remains, then restores the previous environment variable.
         /// </summary>
         [Fact]
         public void Environment_variable_and_command_line_override_RabbitMq_json()
@@ -106,7 +107,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
             try
             {
                 File.WriteAllText(
-                    Path.Combine(root.FullName, "RabbitMq.json"),
+                    Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"),
                     """{"RabbitMQ":{"Port":5672,"Hosts":["198.18.0.3"]}}""");
                 File.WriteAllText(
                     Path.Combine(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
@@ -124,9 +125,10 @@ namespace VectorNNTPD.Common.Tests.Configuration
                     builder.Environment.EnvironmentName);
                 ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
                     builder.Configuration,
-                    builder.Environment.EnvironmentName);
+                    builder.Environment.EnvironmentName,
+                    "VectorNNTPD.RabbitMQ.json");
 
-                var rabbitIndex = IndexOf(builder.Configuration, "RabbitMq.json");
+                var rabbitIndex = IndexOf(builder.Configuration, "VectorNNTPD.RabbitMQ.json");
                 Assert.True(rabbitIndex < IndexOfCommandLineAfter(builder.Configuration, rabbitIndex));
                 Assert.Equal(overriddenPort, builder.Configuration["RabbitMQ:Port"]);
                 Assert.Equal("/from-args", builder.Configuration["RabbitMQ:VirtualHost"]);
@@ -146,7 +148,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         }
 
         /// <summary>
-        /// Asserts the shared broker host, port, pool size, payload limit, management URL and timeout, virtual host, and disabled SSL expected from the shipped <c>RabbitMq.json</c>.
+        /// Asserts the shared broker host, port, pool size, payload limit, management URL and timeout, virtual host, and disabled SSL expected from the shipped <c>VectorNNTPD.RabbitMQ.json</c>.
         /// </summary>
         /// <param name="options">Options bound from the shared RabbitMQ section.</param>
         private static void AssertSharedValues(RabbitMqOptions options)

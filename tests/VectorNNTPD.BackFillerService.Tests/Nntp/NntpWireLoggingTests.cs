@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.BackFillerService.Nntp;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {

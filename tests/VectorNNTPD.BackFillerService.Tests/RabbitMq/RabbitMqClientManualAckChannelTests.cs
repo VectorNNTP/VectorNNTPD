@@ -1,13 +1,13 @@
 using System.Reflection;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
 {
     /// <summary>
-    /// Manual-ack RabbitMQ channel lifecycle gate: consume registration versus disposal and cancellation.
+    /// Manual-ack channel consume, cancellation, and disposal against Common's channel wrapper.
     /// </summary>
 
     public sealed class RabbitMqClientManualAckChannelTests
@@ -17,12 +17,10 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         private static readonly TimeSpan SafetyBound = TimeSpan.FromSeconds(2);
 
         /// <summary>
-        /// When consume wins lifecycle gate, consumer registers before close and in-flight delivery completes.
+        /// A completed consume receives one delivery, then disposal closes the channel and ignores a later delivery.
         /// </summary>
-
         [Fact]
-
-        public async Task Setup_that_wins_the_gate_publishes_the_consumer_before_disposal_closes()
+        public async Task Completed_consume_receives_one_delivery_and_disposal_closes_once()
         {
             var (channel, broker) = Create();
             var deliveries = 0;
@@ -31,19 +29,12 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             await broker.Entered.Task.WaitAsync(SafetyBound);
             Assert.Equal(["registered"], broker.Snapshot());
             Assert.Equal(0, broker.CloseCalls);
-
-            var dispose = channel.DisposeAsync();
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => channel.LifecycleWaiters >= 1, SafetyBound);
-            Assert.Equal(0, broker.CloseCalls);
-            Assert.False(dispose.IsCompleted);
-
             await DeliverAsync(broker.Captured!);
             Assert.Equal(1, Volatile.Read(ref deliveries));
-            Assert.Equal(0, broker.CloseCalls);
 
             broker.Release.TrySetResult();
             Assert.Equal("ctag-1", await consume.WaitAsync(SafetyBound));
-            await dispose;
+            await channel.DisposeAsync();
 
             Assert.Equal(["registered", "consume-returning", "close", "disposed"], broker.Snapshot());
             Assert.Empty(broker.Registered);
@@ -59,40 +50,33 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
-        /// Dispose winning gate closes before BasicConsume registers; later consume throws ObjectDisposedException.
+        /// After disposal has begun, consume throws <see cref="ObjectDisposedException"/> before broker registration.
         /// </summary>
-
         [Fact]
-
-        public async Task Disposal_that_wins_the_gate_rejects_consume_before_registration()
+        public async Task Disposal_rejects_consume_before_registration()
         {
             var (channel, broker) = Create();
             broker.HoldClose = true;
             var dispose = channel.DisposeAsync();
             await broker.CloseEntered.Task.WaitAsync(SafetyBound);
 
-            var consume = channel.BasicConsumeAsync("work", 10, static _ => Task.CompletedTask, CancellationToken.None);
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => channel.LifecycleWaiters >= 1, SafetyBound);
+            var rejected = await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+                channel.BasicConsumeAsync("work", 10, static _ => Task.CompletedTask, CancellationToken.None));
 
+            Assert.Equal(typeof(RabbitMqClientManualAckChannel).FullName, rejected.ObjectName);
             Assert.Equal(0, broker.ConsumeCalls);
-            Assert.False(consume.IsCompleted);
             Assert.False(channel.IsOpen);
 
             broker.CloseRelease.TrySetResult();
             await dispose;
-            var rejected = await Assert.ThrowsAsync<ObjectDisposedException>(() => consume);
-            Assert.Equal(typeof(RabbitMqClientManualAckChannel).FullName, rejected.ObjectName);
-            Assert.Equal(0, broker.ConsumeCalls);
             Assert.Equal(["close", "disposed"], broker.Snapshot());
         }
 
         /// <summary>
-        /// Failed BasicConsumeAsync leaves no registered consumer and allows retry.
+        /// A failed broker consume detaches the handler, leaves no registered consumer, and allows a later consume.
         /// </summary>
-
         [Fact]
-
-        public async Task A_failed_registration_detaches_the_handler_and_does_not_publish_a_consumer()
+        public async Task A_failed_registration_detaches_the_handler_and_allows_retry()
         {
             var (channel, broker) = Create();
             broker.ConsumeFailure = new InvalidOperationException("consume rejected");
@@ -122,12 +106,10 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
-        /// Canceled consume detaches handler without registering consumer.
+        /// Canceling consume before the broker registers a consumer detaches the handler and leaves the broker list empty.
         /// </summary>
-
         [Fact]
-
-        public async Task Cancellation_during_registration_detaches_the_handler_and_leaves_no_consumer()
+        public async Task Cancellation_during_registration_detaches_the_handler()
         {
             var (channel, broker) = Create();
             broker.CancelDuringConsume = true;
@@ -158,12 +140,10 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
-        /// Second BasicConsumeAsync is rejected while one consumer is active.
+        /// A second consume waits for the first registration, then throws without registering another consumer.
         /// </summary>
-
         [Fact]
-
-        public async Task A_second_consume_waits_and_then_rejects_without_registering_another_consumer()
+        public async Task A_second_consume_is_rejected_after_the_first_registration()
         {
             var (channel, broker) = Create();
             var first = channel.BasicConsumeAsync("work", 10, static _ => Task.CompletedTask, CancellationToken.None);
@@ -171,9 +151,8 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
 
             var second = channel.BasicConsumeAsync("work", 10, static _ => Task.CompletedTask, CancellationToken.None);
             await ArticleWorkTestDeliveries.WaitUntilAsync(() => channel.LifecycleWaiters >= 1, SafetyBound);
-
             Assert.Equal(1, broker.ConsumeCalls);
-            Assert.False(second.IsCompleted);
+            Assert.Single(broker.Registered);
 
             broker.Release.TrySetResult();
             Assert.Equal("ctag-1", await first.WaitAsync(SafetyBound));
@@ -211,6 +190,101 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             Assert.Equal(1, broker.DisposeCalls);
             Assert.False(channel.IsOpen);
             Assert.Equal(["close", "disposed"], broker.Snapshot());
+        }
+
+        /// <summary>
+        /// Disposal waits until an in-flight registration finishes, then closes the client channel once.
+        /// The handler from that registration is detached and does not receive a later delivery.
+        /// </summary>
+        [Fact]
+        public async Task Disposal_waits_for_in_flight_registration_and_detaches_the_handler()
+        {
+            var (channel, broker) = Create();
+            var deliveries = 0;
+            var consume = channel.BasicConsumeAsync("work", 10, CountDelivery, CancellationToken.None);
+            await broker.Entered.Task.WaitAsync(SafetyBound);
+
+            var dispose = channel.DisposeAsync();
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => channel.LifecycleWaiters >= 1, SafetyBound);
+            Assert.Equal(0, broker.CloseCalls);
+
+            broker.Release.TrySetResult();
+            Assert.Equal("ctag-1", await consume.WaitAsync(SafetyBound));
+            await dispose;
+
+            Assert.Equal(1, broker.CloseCalls);
+            Assert.Equal(1, broker.DisposeCalls);
+            Assert.False(channel.IsOpen);
+            await DeliverAsync(broker.Captured!);
+            Assert.Equal(0, Volatile.Read(ref deliveries));
+
+            Task CountDelivery(RabbitMqManualAckDelivery _)
+            {
+                Interlocked.Increment(ref deliveries);
+                return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// The exclusive dispose hook marks the channel before the client channel is closed.
+        /// </summary>
+        [Fact]
+        public async Task Dispose_invokes_the_exclusive_hook_before_close()
+        {
+            var (channel, broker) = Create();
+            var order = new List<string>();
+            channel.UseExclusiveDispose(async body =>
+            {
+                order.Add("hook-enter");
+                await body().ConfigureAwait(false);
+                order.Add("hook-exit");
+            });
+
+            await channel.DisposeAsync();
+
+            Assert.Equal(["hook-enter", "hook-exit"], order);
+            Assert.Equal(["close", "disposed"], broker.Snapshot());
+            Assert.False(channel.IsOpen);
+        }
+
+        /// <summary>
+        /// A hook that throws after marking the channel still closes the client channel once, then propagates.
+        /// </summary>
+        [Fact]
+        public async Task Dispose_closes_the_client_channel_when_the_exclusive_hook_throws_after_the_mark()
+        {
+            var (channel, broker) = Create();
+            channel.UseExclusiveDispose(async body =>
+            {
+                await body().ConfigureAwait(false);
+                throw new InvalidOperationException("hook failed");
+            });
+
+            var rejected = await Assert.ThrowsAsync<InvalidOperationException>(() => channel.DisposeAsync().AsTask());
+
+            Assert.Equal("hook failed", rejected.Message);
+            Assert.Equal(["close", "disposed"], broker.Snapshot());
+            Assert.False(channel.IsOpen);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => channel.DisposeAsync().AsTask());
+            Assert.Equal(1, broker.CloseCalls);
+            Assert.Equal(1, broker.DisposeCalls);
+        }
+
+        /// <summary>
+        /// A hook that throws before the mark still closes the client channel once, then propagates.
+        /// </summary>
+        [Fact]
+        public async Task Dispose_closes_the_client_channel_when_the_exclusive_hook_throws_before_the_mark()
+        {
+            var (channel, broker) = Create();
+            channel.UseExclusiveDispose(static _ => throw new InvalidOperationException("hook failed"));
+
+            var rejected = await Assert.ThrowsAsync<InvalidOperationException>(() => channel.DisposeAsync().AsTask());
+
+            Assert.Equal("hook failed", rejected.Message);
+            Assert.Equal(["close", "disposed"], broker.Snapshot());
+            Assert.False(channel.IsOpen);
         }
 
         /// <summary>
@@ -343,7 +417,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             internal static ConsumeChannelDouble Create()
             {
                 var channel = DispatchProxy.Create<IChannel, ConsumeChannelDouble>();
-                var proxy = (ConsumeChannelDouble)(object)channel;
+                var proxy = (ConsumeChannelDouble)channel;
                 proxy.Channel = channel;
                 return proxy;
             }

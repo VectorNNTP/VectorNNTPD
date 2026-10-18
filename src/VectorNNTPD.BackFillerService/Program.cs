@@ -3,6 +3,7 @@ using Serilog.Debugging;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Configuration;
 
 /// <summary>Process entry point. Builds the Generic Host from the entry-assembly directory and runs it.</summary>
 internal class Program
@@ -47,7 +48,8 @@ internal class Program
                 builder.Environment.EnvironmentName);
             ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
                 builder.Configuration,
-                builder.Environment.EnvironmentName);
+                builder.Environment.EnvironmentName,
+                BackFillerJsonFiles.SharedRabbitMqFileName);
             var startupSmoke = BackFillerStartupSmoke.IsRequested(
                 Environment.GetEnvironmentVariable(BackFillerStartupSmoke.EnvironmentVariable));
             if (startupSmoke)

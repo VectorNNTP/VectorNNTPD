@@ -3,11 +3,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Nntp;
-using VectorNNTPD.BackFillerService.NntpDb;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Nntp;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.NntpDb;
 
 namespace VectorNNTPD.BackFillerService.Tests.Accounts
 {

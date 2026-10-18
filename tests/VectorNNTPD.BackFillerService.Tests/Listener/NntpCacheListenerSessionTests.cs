@@ -1,11 +1,14 @@
+using System.IO.Hashing;
 using System.Runtime.InteropServices;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
 using VectorNNTPD.BackFillerService.Listener;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Retention;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
+using VectorNNTPD.Common.Articles.Parsing;
 
 namespace VectorNNTPD.BackFillerService.Tests.Listener
 {
@@ -313,6 +316,33 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             Assert.Contains("after\r\n"u8, contiguous);
             Assert.DoesNotContain("..only\r\n"u8, contiguous);
             Assert.True(created.Record.ArtData.Span.SequenceEqual(retained));
+            Assert.Equal(0, authority.RetainedCount);
+        }
+
+        /// <summary>
+        /// An empty body stays empty in ArtData. The listener writes that buffer once and appends one terminator.
+        /// </summary>
+        [Fact]
+        public async Task Empty_body_is_sent_once_with_one_terminator()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<empty@b>", string.Empty);
+            var separator = prepared.ArtData.AsSpan().IndexOf("\r\n\r\n"u8);
+            Assert.Equal(prepared.ArtData.Length, separator + 4);
+            Assert.Equal(0, prepared.Record.ArtLines);
+            Assert.Equal(prepared.ArtData.Length, prepared.Record.ArtSize);
+            Assert.Equal(XxHash3.HashToUInt64(prepared.ArtData), prepared.Record.ArtHash);
+            Assert.Equal(ArticleId.FromMessageId("<empty@b>"u8), prepared.Record.ArtId);
+            Assert.False(prepared.ArtData.AsSpan().EndsWith("\r\n.\r\n"u8));
+
+            var written = await RunAsync(authority, "ARTICLE <empty@b>\r\n");
+            var follows = Status("<empty@b>");
+            var article = written.AsSpan(Greeting.Length + follows.Length, prepared.ArtData.Length);
+            Assert.True(article.SequenceEqual(prepared.ArtData));
+            Assert.True(written.AsSpan(Greeting.Length + follows.Length + prepared.ArtData.Length).SequenceEqual(Terminator));
+            Assert.Equal(written.Length, Greeting.Length + follows.Length + prepared.ArtData.Length + Terminator.Length);
+            Assert.Equal(1, Count(written, Terminator));
             Assert.Equal(0, authority.RetainedCount);
         }
 

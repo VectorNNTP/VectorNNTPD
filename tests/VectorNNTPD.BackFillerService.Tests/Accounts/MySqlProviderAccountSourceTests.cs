@@ -2,8 +2,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.NntpDb;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.NntpDb;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Tests.Accounts
 {

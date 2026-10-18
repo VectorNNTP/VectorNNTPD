@@ -2,7 +2,8 @@ using Serilog.Events;
 using Serilog.Formatting;
 using Serilog.Formatting.Display;
 using Serilog.Parsing;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
 {

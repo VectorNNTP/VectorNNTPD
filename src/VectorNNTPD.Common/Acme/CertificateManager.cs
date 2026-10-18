@@ -28,8 +28,17 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Journal that records the request, persist, promote, and failure events.</summary>
         private readonly AcmeTransactionJournal _journal;
 
-        /// <summary>PKCS#12 password. Not logged.</summary>
-        private readonly string _pfxPassword;
+        /// <summary>Password that matches <see cref="_current"/> when that material was published. Not logged.</summary>
+        private string _pfxPassword;
+
+        /// <summary>Material and the password that encrypts it, published together after a successful load or save.</summary>
+        private PublishedCredential? _published;
+
+        /// <summary>
+        /// Invoked after a new generation is current and <see cref="PublishCredential"/> has stored the matching password.
+        /// Null in production. Tests use it to fail the journal step after the certificate is already durable.
+        /// </summary>
+        internal Action? AfterPersistForTests { get; set; }
 
         /// <summary>How long before not-after a usable certificate is treated as due for renewal.</summary>
         private readonly TimeSpan _renewalThreshold;
@@ -122,7 +131,7 @@ namespace VectorNNTPD.Common.Acme
 
                 return CertificateValidator.ValidatePfx(
                     loaded.PfxBytes,
-                    _pfxPassword,
+                    _store.CurrentPfxPassword,
                     _domains,
                     _renewalThreshold,
                     now);
@@ -151,7 +160,7 @@ namespace VectorNNTPD.Common.Acme
                 var status = EvaluateExisting();
                 if (status is { Usable: true, Material: not null, DueForRenewal: false })
                 {
-                    _current = status.Material;
+                    PublishCredential(status.Material, _store.CurrentPfxPassword);
                     AcmeLogMessages.ReusingExistingCertificate(_logger, status.Material.NotAfter);
                     return status.Material;
                 }
@@ -165,7 +174,7 @@ namespace VectorNNTPD.Common.Acme
                     AcmeLogMessages.NoUsableCertificate(_logger, status.Reason);
                 }
 
-                return await IssueAndPersistAsync(cancellationToken).ConfigureAwait(false);
+                return await IssueAndPersistAsync(cancellationToken, _pfxPassword).ConfigureAwait(false);
             }
             finally
             {
@@ -175,34 +184,49 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>
         /// Renews when absent, invalid, or past the renewal threshold.
-        /// Returns <see langword="true"/> when a new certificate was persisted.
-        /// When a previously usable certificate exists and issuance fails, that material is kept and the result is <see langword="false"/>.
+        /// Returns <see langword="true"/> when a new certificate was persisted, including when a later journal write fails.
+        /// When a previously usable certificate exists and issuance fails before the new generation is current, that material is kept and the result is <see langword="false"/>.
         /// </summary>
         /// <param name="cancellationToken">Cancels the gate wait, the issuance lock wait, and issuance. Cancellation is not swallowed.</param>
+        /// <param name="now">UTC time for the due check. <see langword="null"/> uses <see cref="DateTimeOffset.UtcNow"/>.</param>
+        /// <param name="pfxPassword">
+        /// Password for this attempt's new PFX. <see langword="null"/> or whitespace keeps <see cref="CurrentPfxPassword"/>.
+        /// The existing certificate is still loaded with the password that last saved it.
+        /// </param>
         /// <returns><see langword="true"/> when a new certificate was persisted.</returns>
-        internal async Task<bool> RenewIfDueAsync(CancellationToken cancellationToken)
+        internal async Task<bool> RenewIfDueAsync(
+            CancellationToken cancellationToken,
+            DateTimeOffset? now = null,
+            string? pfxPassword = null)
         {
+            var issuePassword = string.IsNullOrWhiteSpace(pfxPassword) ? _pfxPassword : pfxPassword;
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 await using var issuanceLock = await AcmeIssuanceLock
                     .AcquireAsync(_stateDir, _fqdn, cancellationToken)
                     .ConfigureAwait(false);
-                var status = EvaluateExisting();
+                var status = EvaluateExisting(now);
                 if (status is { Usable: true, Material: not null, DueForRenewal: false })
                 {
-                    _current = status.Material;
+                    PublishCredential(status.Material, _store.CurrentPfxPassword);
                     return false;
                 }
 
                 var prior = status.Usable ? status.Material : null;
+                var publishedBefore = Volatile.Read(ref _published);
                 try
                 {
-                    _ = await IssueAndPersistAsync(cancellationToken).ConfigureAwait(false);
+                    _ = await IssueAndPersistAsync(cancellationToken, issuePassword).ConfigureAwait(false);
                     return true;
                 }
                 catch (Exception ex) when (prior is not null && ex is not OperationCanceledException)
                 {
+                    if (!ReferenceEquals(Volatile.Read(ref _published), publishedBefore))
+                    {
+                        return true;
+                    }
+
                     _current = prior;
                     AcmeLogMessages.RenewalFailedPreservingExisting(_logger, AcmeFailureSanitizer.Sanitize(ex));
                     return false;
@@ -214,12 +238,22 @@ namespace VectorNNTPD.Common.Acme
             }
         }
 
+        /// <summary>Gets the password that matches <see cref="CurrentMaterial"/>. Not logged.</summary>
+        internal string CurrentPfxPassword => _pfxPassword;
+
         /// <summary>
         /// Loads an <see cref="X509Certificate2"/> with private key from the current live PFX.
         /// Caller owns disposal. The certificate remains usable after the file path is closed.
+        /// Uses the material and password published together by the last successful load or save.
         /// </summary>
         internal X509Certificate2 CreateTlsCertificate()
         {
+            var published = Volatile.Read(ref _published);
+            if (published is not null)
+            {
+                return PfxCrypto.LoadCertificate(published.Material.PfxBytes, published.Password);
+            }
+
             var material = _current ?? EvaluateExisting().Material
                 ?? throw new AcmeCertificateException("no_certificate", "live material missing");
             return PfxCrypto.LoadCertificate(material.PfxBytes, _pfxPassword);
@@ -230,10 +264,16 @@ namespace VectorNNTPD.Common.Acme
         /// Failures other than cancellation call <see cref="AcmeTransactionJournal.CompleteFailure"/> and are rethrown.
         /// </summary>
         /// <param name="cancellationToken">Passed to <see cref="ICertificateIssuer.IssueAsync"/>. Journal writes use their own token.</param>
+        /// <param name="pfxPassword">Password for the issued PFX, its validation, the store, and the journal. Not logged.</param>
         /// <returns>The validated material now stored as current.</returns>
         /// <exception cref="AcmeCertificateException">Thrown with category <c>invalid_certificate</c> when the issued PFX fails validation.</exception>
-        private async Task<CertificateMaterial> IssueAndPersistAsync(CancellationToken cancellationToken)
+        private async Task<CertificateMaterial> IssueAndPersistAsync(CancellationToken cancellationToken, string pfxPassword)
         {
+            if (_issuer is AcmeIssuer acmeIssuer)
+            {
+                acmeIssuer.UsePasswordForNextIssue(pfxPassword);
+            }
+
             var transactionId = _journal.BeginTransaction(
                 _domains,
                 _acmeDirectoryUrl,
@@ -244,7 +284,7 @@ namespace VectorNNTPD.Common.Acme
                 var material = await _issuer.IssueAsync(_domains, cancellationToken).ConfigureAwait(false);
                 var status = CertificateValidator.ValidatePfx(
                     material.PfxBytes,
-                    _pfxPassword,
+                    pfxPassword,
                     _domains,
                     _renewalThreshold);
                 if (!status.Usable || status.Material is null)
@@ -253,16 +293,17 @@ namespace VectorNNTPD.Common.Acme
                 }
 
                 _journal.RecordCertificateIssued(status.Material);
-                var persisted = _store.Save(status.Material);
+                var persisted = _store.Save(status.Material, pfxPassword);
+                PublishCredential(status.Material, pfxPassword);
+                AfterPersistForTests?.Invoke();
                 _journal.RecordCertificatePersisted(persisted.GenerationId, status.Material);
                 _journal.RecordCertificatePromoted(persisted.GenerationId);
                 _journal.CompleteSuccess(
                     transactionId,
                     status.Material,
                     persisted.GenerationId,
-                    _pfxPassword,
+                    pfxPassword,
                     DateTimeOffset.UtcNow);
-                _current = status.Material;
                 _generation++;
                 AcmeLogMessages.ServerCertificateReady(_logger, _generation, status.Material.NotAfter);
                 return status.Material;
@@ -278,5 +319,20 @@ namespace VectorNNTPD.Common.Acme
                 throw;
             }
         }
+
+        /// <summary>Publishes <paramref name="material"/> and <paramref name="password"/> together for <see cref="CreateTlsCertificate"/>.</summary>
+        /// <param name="material">PFX that <paramref name="password"/> can decrypt.</param>
+        /// <param name="password">Password for <paramref name="material"/>. Not logged.</param>
+        private void PublishCredential(CertificateMaterial material, string password)
+        {
+            _current = material;
+            _pfxPassword = password;
+            Volatile.Write(ref _published, new PublishedCredential(material, password));
+        }
+
+        /// <summary>One PFX and the password that encrypts it.</summary>
+        /// <param name="Material">Validated certificate material.</param>
+        /// <param name="Password">PKCS#12 password for <paramref name="Material"/>. Not logged.</param>
+        private sealed record PublishedCredential(CertificateMaterial Material, string Password);
     }
 }

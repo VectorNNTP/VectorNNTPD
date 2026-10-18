@@ -1,7 +1,7 @@
 [Unit]
 Description=VectorNNTP BackFiller
 # Install the flat linux-x64 release directory at this path. It contains
-# VectorNNTPD.BackFillerService, VectorNNTPD.BackFillerService.json, VectorNNTP.RabbitMQ.json,
+# VectorNNTPD.BackFillerService, VectorNNTPD.BackFillerService.json, VectorNNTPD.RabbitMQ.json,
 # README.md, vectornntp-backfiller.service, and backfiller.env.example.
 # Copy the unit to /etc/systemd/system/. Create user and group vectornntp,
 # create logs/ and certs/ owned by that account, and install
@@ -20,7 +20,7 @@ User=vectornntp
 Group=vectornntp
 
 # The executable directory is the configuration root. The process loads
-# VectorNNTPD.BackFillerService.json and VectorNNTP.RabbitMQ.json from that directory,
+# VectorNNTPD.BackFillerService.json and VectorNNTPD.RabbitMQ.json from that directory,
 # not appsettings.json, RabbitMq.json, or the process working directory.
 # Relative logs (logs/) and ACME state (certs/) also resolve there.
 WorkingDirectory=/opt/vectornntp/backfiller

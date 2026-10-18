@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using System.Net;
 
 namespace VectorNNTPD.BackFillerService.Tests.Fixtures
 {

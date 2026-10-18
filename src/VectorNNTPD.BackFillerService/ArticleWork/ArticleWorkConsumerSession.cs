@@ -1,7 +1,7 @@
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -307,6 +307,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 channel = await handle.Connection
                     .CreateManualAckChannelAsync(handle.Generation, cancellationToken)
                     .ConfigureAwait(false);
+                if (channel is RabbitMqClientManualAckChannel manualAck)
+                {
+                    manualAck.UseExclusiveDispose(body => ArticleWorkSettlementLease.RunExclusiveAsync(manualAck, body));
+                }
+
                 var tag = await channel
                     .BasicConsumeAsync(_queue, _prefetch, OnDeliveryAsync, cancellationToken)
                     .ConfigureAwait(false);

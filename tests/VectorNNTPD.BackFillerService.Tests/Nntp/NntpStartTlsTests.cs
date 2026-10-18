@@ -5,6 +5,10 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Nntp;
+using System.Net.Sockets;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Net;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {

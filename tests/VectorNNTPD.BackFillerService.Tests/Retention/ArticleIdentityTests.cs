@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.Retention;
-using VectorNNTPD.BackFillerService.Articles;
+using VectorNNTPD.Common.Articles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Retention
 {

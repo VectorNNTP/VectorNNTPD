@@ -6,8 +6,10 @@ using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting
 {

@@ -1,8 +1,11 @@
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
+using System.IO.Hashing;
+using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Retention;
+using System.Text;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {
@@ -74,6 +77,66 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
             Assert.Equal(1, authority.RetainedCount);
             Assert.Equal(beforeBytes, authority.RetainedPayloadBytes);
             Assert.True(created.Record.ArtData.Span.SequenceEqual(retained));
+        }
+
+        /// <summary>
+        /// BackFiller retention uses Common's factory. The retained body is stuffed once, the header dot is not stuffed, and ArtHash covers those exact bytes.
+        /// </summary>
+        [Fact]
+        public void Common_factory_is_the_retained_stuffed_representation()
+        {
+            var parser = new NntpArticleParser("backfiller.test");
+            var created = ArticleRecordFactory.TryCreate(parser, LogicalArticle, ArticlePathMode.Traverse);
+            Assert.True(created.IsAccepted, created.ParseFailure.ToString());
+            Assert.Equal(XxHash3.HashToUInt64(created.Record.ArtData.Span), created.Record.ArtHash);
+            Assert.Equal(ArticleId.FromMessageId(Encoding.ASCII.GetBytes(MessageId)), created.Record.ArtId);
+
+            var separator = created.Record.ArtData.Span.IndexOf("\r\n\r\n"u8);
+            Assert.True(separator > 0);
+            var header = created.Record.ArtData.Span[..(separator + 4)];
+            Assert.Contains(".X-Dot: kept\r\n"u8, header);
+            Assert.DoesNotContain("..X-Dot:"u8, header);
+            Assert.Equal(
+                "..only\r\n...two\r\n....three\r\nplain\nmid.dot\r\n\r\n..last\r\n"u8,
+                created.Record.ArtData.Span[(separator + 4)..]);
+        }
+
+        /// <summary>
+        /// A CRLF article from Common is frameable. Delivery stuffs the dot-leading header once and copies the already-stuffed body, including a single-dot line and a run of dots.
+        /// </summary>
+        [Fact]
+        public void Delivery_does_not_stuff_a_common_body_a_second_time()
+        {
+            var logical = Encoding.ASCII.GetBytes(
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n" +
+                "Message-ID: <dot-frame@example.test>\r\n" +
+                "Newsgroups: alt.test\r\n" +
+                "From: user@example.test\r\n" +
+                "Subject: dots\r\n" +
+                "Path: peer.example\r\n" +
+                ".X-Dot: kept\r\n" +
+                "\r\n" +
+                "\r\n" +
+                ".\r\n" +
+                "..\r\n" +
+                "...\r\n" +
+                "plain\r\n");
+            var created = ArticleRecordFactory.TryCreate(
+                new NntpArticleParser("backfiller.test"),
+                logical,
+                ArticlePathMode.Normalize);
+            Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
+            var retained = created.Record.ArtData.Span;
+            Assert.True(ArticleWorkDeliveryFraming.IsFrameable(retained));
+            Assert.True(ArticleWorkDeliveryFraming.TryStuffHeaderLines(retained, out var socket));
+            Assert.NotNull(socket);
+            Assert.Equal(retained.ToArray(), created.Record.ArtData.ToArray());
+
+            var separator = socket.AsSpan().IndexOf("\r\n\r\n"u8);
+            Assert.True(separator > 0);
+            Assert.Contains("..X-Dot: kept\r\n"u8, socket);
+            Assert.Equal("\r\n..\r\n...\r\n....\r\nplain\r\n"u8, socket.AsSpan(separator + 4));
+            Assert.False(socket.AsSpan().EndsWith("\r\n.\r\n"u8));
         }
 
         /// <summary>

@@ -6,7 +6,10 @@ using Serilog.Formatting;
 using Serilog.Formatting.Display;
 using Serilog.Formatting.Json;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Logging;
+using VectorNNTPD.Common.Configuration;
+using System.Globalization;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Logging
 {
@@ -247,7 +250,7 @@ namespace VectorNNTPD.BackFillerService.Logging
         /// </param>
         /// <returns>
         /// Serilog's JSON formatter when <paramref name="includeSourceContext"/> is true.
-        /// Otherwise a formatter that writes the same JSON from a copy of the event that has no
+        /// Otherwise, a formatter that writes the same JSON from a copy of the event that has no
         /// <c>SourceContext</c> property.
         /// </returns>
         private static ITextFormatter CreateJsonFormatter(bool includeSourceContext) =>
@@ -570,7 +573,7 @@ namespace VectorNNTPD.BackFillerService.Logging
                 var properties = logEvent.Properties
                     .Where(static pair => pair.Key != Constants.SourceContextPropertyName)
                     .Select(static pair => new LogEventProperty(pair.Key, pair.Value));
-                var copy = logEvent.TraceId is { } traceId && logEvent.SpanId is { } spanId
+                var copy = logEvent is { TraceId: { } traceId, SpanId: { } spanId }
                     ? new LogEvent(
                         logEvent.Timestamp,
                         logEvent.Level,

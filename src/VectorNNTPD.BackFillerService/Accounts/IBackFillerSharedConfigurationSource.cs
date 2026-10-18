@@ -1,4 +1,4 @@
-using VectorNNTPD.BackFillerService.NntpDb;
+using VectorNNTPD.Common.NntpDb;
 
 namespace VectorNNTPD.BackFillerService.Accounts
 {

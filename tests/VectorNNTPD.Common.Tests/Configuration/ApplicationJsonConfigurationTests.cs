@@ -88,6 +88,145 @@ namespace VectorNNTPD.Common.Tests.Configuration
         }
 
         /// <summary>
+        /// Asserts that a builder with no JSON sources receives optional reloadable entry-assembly files before environment variables, and that a second call does not add duplicates.
+        /// </summary>
+        [Fact]
+        public void Missing_host_json_sources_are_inserted_once()
+        {
+            var builder = new ConfigurationBuilder();
+            builder.AddEnvironmentVariables();
+
+            ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
+            ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
+            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", "VectorNNTPD.RabbitMQ.json");
+            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", "VectorNNTPD.RabbitMQ.json");
+
+            var files = builder.Sources.OfType<FileConfigurationSource>().ToArray();
+            Assert.Equal(
+                new[]
+                {
+                    ApplicationJsonConfiguration.PrimaryJsonFileName(),
+                    ApplicationJsonConfiguration.EnvironmentJsonFileName("Production"),
+                    "VectorNNTPD.RabbitMQ.json",
+                },
+                files.Select(static source => source.Path).ToArray());
+            Assert.All(files, static source => Assert.True(source.Optional));
+            Assert.All(files, static source => Assert.True(source.ReloadOnChange));
+            Assert.Equal("EnvironmentVariablesConfigurationSource", builder.Sources[^1].GetType().Name);
+        }
+
+        /// <summary>
+        /// Asserts that the environment JSON value overrides the primary file for the same key, and that optional and reload flags are copied from the replaced host sources.
+        /// </summary>
+        [Fact]
+        public void Environment_json_overrides_primary_and_reload_flags_are_copied()
+        {
+            var root = Directory.CreateTempSubdirectory("vnntp-json-order-");
+            try
+            {
+                var name = Assembly.GetEntryAssembly()!.GetName().Name!;
+                Write(root.FullName, name + ".json", "primary");
+                Write(root.FullName, name + ".Production.json", "environment");
+                var builder = new ConfigurationBuilder()
+                    .SetBasePath(root.FullName)
+                    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+                    .AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: true);
+                ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
+
+                var files = builder.Sources.OfType<FileConfigurationSource>().ToArray();
+                Assert.False(files[0].Optional);
+                Assert.False(files[0].ReloadOnChange);
+                Assert.True(files[1].Optional);
+                Assert.True(files[1].ReloadOnChange);
+                Assert.Equal("environment", builder.Build()["VectorNntpConfigProbe"]);
+            }
+            finally
+            {
+                TryDelete(root.FullName);
+            }
+        }
+
+        /// <summary>
+        /// Asserts that only the supplied RabbitMQ filename is registered, that a present <c>RabbitMq.json</c> is not read, and that a blank filename is rejected.
+        /// </summary>
+        [Fact]
+        public void Supplied_rabbitmq_filename_is_exclusive_and_blank_names_are_rejected()
+        {
+            var root = Directory.CreateTempSubdirectory("vnntp-rabbit-no-fallback-");
+            try
+            {
+                Write(root.FullName, "RabbitMq.json", "legacy");
+                File.WriteAllText(
+                    Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"),
+                    """{"RabbitMQ":{"Port":5672,"Hosts":["198.18.0.4"]}}""");
+                var builder = new ConfigurationBuilder()
+                    .SetBasePath(root.FullName)
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                    .AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: true);
+                ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
+                Assert.Throws<ArgumentException>(() =>
+                    ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", " "));
+                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
+                    builder,
+                    "Production",
+                    "VectorNNTPD.RabbitMQ.json");
+
+                var paths = builder.Sources.OfType<FileConfigurationSource>().Select(static source => source.Path).ToArray();
+                Assert.Equal(
+                    new[]
+                    {
+                        ApplicationJsonConfiguration.PrimaryJsonFileName(),
+                        ApplicationJsonConfiguration.EnvironmentJsonFileName("Production"),
+                        "VectorNNTPD.RabbitMQ.json",
+                    },
+                    paths);
+                Assert.DoesNotContain("RabbitMq.json", paths);
+                var configuration = builder.Build();
+                Assert.Equal("198.18.0.4", configuration["RabbitMQ:Hosts:0"]);
+                Assert.Null(configuration["VectorNntpConfigProbe"]);
+            }
+            finally
+            {
+                TryDelete(root.FullName);
+            }
+        }
+
+        /// <summary>
+        /// Asserts that a required primary file that is missing fails with <see cref="FileNotFoundException"/>, and that malformed JSON fails with <see cref="InvalidDataException"/>.
+        /// </summary>
+        [Fact]
+        public void Missing_required_primary_and_invalid_json_fail_the_build()
+        {
+            var missing = Directory.CreateTempSubdirectory("vnntp-json-missing-required-");
+            var invalid = Directory.CreateTempSubdirectory("vnntp-json-invalid-");
+            try
+            {
+                var required = new ConfigurationBuilder()
+                    .SetBasePath(missing.FullName)
+                    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+                    .AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: false);
+                ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(required, "Production");
+                Assert.Throws<FileNotFoundException>(() => required.Build());
+
+                File.WriteAllText(
+                    Path.Combine(invalid.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
+                    "{");
+                var malformed = new ConfigurationBuilder()
+                    .SetBasePath(invalid.FullName)
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+                    .AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: false);
+                ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(malformed, "Production");
+                var exception = Assert.Throws<InvalidDataException>(() => malformed.Build());
+                Assert.IsType<FormatException>(exception.InnerException);
+            }
+            finally
+            {
+                TryDelete(missing.FullName);
+                TryDelete(invalid.FullName);
+            }
+        }
+
+        /// <summary>
         /// Writes one JSON object containing the optional probe and shared marker properties used by these facts.
         /// </summary>
         /// <param name="directory">Directory that receives the file.</param>

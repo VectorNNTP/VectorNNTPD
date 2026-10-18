@@ -20,8 +20,8 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Normalized FQDN that owns this live partition.</summary>
         private readonly string _fqdn;
 
-        /// <summary>Password used when a reloaded PFX is validated. Not logged.</summary>
-        private readonly string _pfxPassword;
+        /// <summary>Password used when the current generation is loaded or saved. Not logged. Replaced only after a new generation is current.</summary>
+        private string _pfxPassword;
 
         /// <summary>DNS SANs required on every loaded or saved certificate.</summary>
         private readonly IReadOnlyList<string> _requiredDomains;
@@ -63,6 +63,9 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>Gets the FQDN this store is scoped to.</summary>
         private string Fqdn => _fqdn;
+
+        /// <summary>Gets the password that last loaded or saved the current generation. Not logged.</summary>
+        internal string CurrentPfxPassword => _pfxPassword;
 
         /// <summary>Returns paths for the active generation (after recovery).</summary>
         internal CertificatePaths Paths()
@@ -130,18 +133,24 @@ namespace VectorNNTPD.Common.Acme
         /// Persists a new generation after a serialize → reload → validate round trip, then commits <c>current</c>.
         /// </summary>
         /// <param name="material">PFX bytes to write. They are validated before and after the write.</param>
+        /// <param name="pfxPassword">
+        /// Password for this write. <see langword="null"/> uses <see cref="CurrentPfxPassword"/>.
+        /// A non-null value becomes <see cref="CurrentPfxPassword"/> only after the new generation is current.
+        /// </param>
         /// <returns>Paths of the generation that is now current.</returns>
         /// <exception cref="AcmeCertificateException">Thrown when pre-validation or the reload round trip fails.</exception>
         /// <exception cref="AcmeStorageException">Thrown when the write fails after the new generation directory is removed.</exception>
-        internal CertificatePaths Save(CertificateMaterial material)
+        internal CertificatePaths Save(CertificateMaterial material, string? pfxPassword = null)
         {
             ArgumentNullException.ThrowIfNull(material);
+            var password = pfxPassword ?? _pfxPassword;
+            ArgumentException.ThrowIfNullOrWhiteSpace(password);
             AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
             Recover();
 
             var preStatus = CertificateValidator.ValidatePfx(
                 material.PfxBytes,
-                _pfxPassword,
+                password,
                 _requiredDomains,
                 _renewalThreshold);
             if (!preStatus.Usable || preStatus.Material is null)
@@ -169,7 +178,7 @@ namespace VectorNNTPD.Common.Acme
 
                 var roundTrip = CertificateValidator.ValidatePfx(
                     reloaded,
-                    _pfxPassword,
+                    password,
                     _requiredDomains,
                     _renewalThreshold);
                 if (!roundTrip.Usable || roundTrip.Material is null)
@@ -191,6 +200,7 @@ namespace VectorNNTPD.Common.Acme
                 throw new AcmeStorageException("certificate_persist_failed", ex.GetType().Name);
             }
 
+            _pfxPassword = password;
             CleanupNonCurrentGenerations(keep: generationId);
             return AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, generationId);
         }

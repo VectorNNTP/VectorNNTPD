@@ -18,7 +18,7 @@ namespace VectorNNTPD.BackFillerService.Hosting
     /// Faults and non-fault completions are handled the same way.
     /// </para>
     /// </remarks>
-    internal sealed class BackFillerApplicationHostedService : IHostedService, IDisposable
+    internal sealed class BackFillerApplicationHostedService : IHostedService
     {
         /// <summary>Application-service start and stop coordinator.</summary>
         private readonly ApplicationServiceManager _manager;
@@ -69,15 +69,6 @@ namespace VectorNNTPD.BackFillerService.Hosting
         /// from the manager propagate. This method does not send systemd notifications.
         /// </remarks>
         public Task StopAsync(CancellationToken cancellationToken) => _manager.StopAsync(cancellationToken);
-
-        /// <summary>
-        /// Unsubscribes lifecycle handlers and disposes manager-owned resources.
-        /// </summary>
-        public void Dispose()
-        {
-            _manager.UnexpectedServiceTermination -= OnUnexpectedServiceTermination;
-            _manager.Dispose();
-        }
 
         /// <summary>Marks watchdog health failed and requests host shutdown.</summary>
         /// <param name="sender">Event source. Not inspected.</param>

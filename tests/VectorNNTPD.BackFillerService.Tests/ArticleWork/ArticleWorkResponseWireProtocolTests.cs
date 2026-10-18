@@ -1,6 +1,7 @@
 using System.Text.Json;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {
@@ -138,7 +139,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Serialized articleId hex parses back to the same <see cref="VectorNNTPD.BackFillerService.Articles.ArticleId"/> value.
+        /// Serialized articleId hex parses back to the same <see cref="VectorNNTPD.Common.Articles.ArticleId"/> value.
         /// </summary>
         [Fact]
         public void Success_article_id_round_trips_exactly()
@@ -147,9 +148,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             using var document = JsonDocument.Parse(json);
             var hex = document.RootElement.GetProperty("articleId").GetString();
             Assert.Equal(ArticleWorkTestDeliveries.CanonicalArticleIdHex, hex);
-            Assert.True(VectorNNTPD.BackFillerService.Articles.ArticleId.TryParseLowerHex(hex, out var parsed));
+            Assert.True(VectorNNTPD.Common.Articles.ArticleId.TryParseLowerHex(hex, out var parsed));
             Assert.Equal(
-                VectorNNTPD.BackFillerService.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex),
+                VectorNNTPD.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex),
                 parsed);
         }
 

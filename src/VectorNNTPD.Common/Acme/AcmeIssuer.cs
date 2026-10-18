@@ -45,6 +45,12 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Delay between readiness polls. Default is <see cref="AcmeOrderReadiness.DefaultInterval"/>.</summary>
         private readonly TimeSpan _readinessInterval;
 
+        /// <summary>
+        /// Password supplied by <see cref="CertificateManager"/> for the next <see cref="IssueAsync"/>.
+        /// Cleared when that call reads it. <see langword="null"/> means read <see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/>.
+        /// </summary>
+        private string? _preparedIssuePassword;
+
         /// <summary>Uses <see cref="AcmeOrderReadiness.DefaultTimeout"/> and <see cref="AcmeOrderReadiness.DefaultInterval"/>.</summary>
         /// <param name="options">ACME directory, email, password, and renewal threshold.</param>
         /// <param name="accountStore">Persisted account key store.</param>
@@ -106,6 +112,17 @@ namespace VectorNNTPD.Common.Acme
         }
 
         /// <summary>
+        /// Encrypts the next <see cref="IssueAsync"/> PFX with <paramref name="password"/> instead of a later options read.
+        /// </summary>
+        /// <param name="password">PKCS#12 password for that attempt. Not logged.</param>
+        /// <exception cref="ArgumentException"><paramref name="password"/> is null or whitespace.</exception>
+        internal void UsePasswordForNextIssue(string password)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(password);
+            _preparedIssuePassword = password;
+        }
+
+        /// <summary>
         /// Registers or reuses the ACME account, orders the DNS identifiers, publishes dns-01 TXT records,
         /// waits until the order is ready, finalizes a PKCS#10 CSR, and returns a validated PKCS#12.
         /// DNS records created for this call are deleted before return, including on failure.
@@ -114,6 +131,10 @@ namespace VectorNNTPD.Common.Acme
         /// <param name="domains">DNS names for the order and CSR. Empty throws category <c>missing_identities</c>.</param>
         /// <param name="cancellationToken">Cancels order, DNS, and finalize work. A cancelled call still attempts DNS cleanup.</param>
         /// <returns>PFX material that passed <see cref="CertificateValidator.RequireValidPfx"/>.</returns>
+        /// <remarks>
+        /// When <see cref="UsePasswordForNextIssue"/> was called, that password encrypts the PFX.
+        /// Otherwise the password is read from options at the start of this call.
+        /// </remarks>
         public async Task<CertificateMaterial> IssueAsync(
             IReadOnlyList<string> domains,
             CancellationToken cancellationToken)
@@ -126,7 +147,8 @@ namespace VectorNNTPD.Common.Acme
 
             var options = _options.Value;
             var renewalThreshold = TimeSpan.FromDays(options.AcmeRenewalThresholdDays);
-            var password = options.AcmeCertificatePassword;
+            var password = _preparedIssuePassword ?? options.AcmeCertificatePassword;
+            _preparedIssuePassword = null;
             var account = EnsureAccount(options, cancellationToken);
             var directoryUri = new Uri(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute);
 

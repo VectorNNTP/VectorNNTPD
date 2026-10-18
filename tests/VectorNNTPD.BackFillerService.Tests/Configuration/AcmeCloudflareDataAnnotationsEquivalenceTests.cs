@@ -4,8 +4,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -151,11 +153,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             });
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Cloudflare.ICloudflareDnsReconciler>(
+            builder.Services.AddSingleton<VectorNNTPD.Common.Cloudflare.ICloudflareDnsReconciler>(
                 new NoOpCloudflareDnsReconciler());
             builder.Services.AddSingleton<IPhysicalMemoryProvider>(
                 new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
-            builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Messaging.RabbitMq.IRabbitMqConnectionFactory>(
+            builder.Services.AddSingleton<VectorNNTPD.Common.Messaging.RabbitMq.IRabbitMqConnectionFactory>(
                 new FakeBackFillerRabbitMqConnectionFactory());
             builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Accounts.IProviderAccountSource>(
                 new FakeProviderAccountSource());

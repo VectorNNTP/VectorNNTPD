@@ -5,9 +5,15 @@ using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Core;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
-using VectorNNTPD.BackFillerService.Networking.Listeners;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.Common.Acme;
+using System.Net;
+using System.Net.Sockets;
+using VectorNNTPD.Common.Networking.Certificates;
+using VectorNNTPD.Common.Networking.Listeners;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 
 namespace VectorNNTPD.BackFillerService.Listener
 {
@@ -29,7 +35,8 @@ namespace VectorNNTPD.BackFillerService.Listener
     /// Admission is a compare-and-swap on <see cref="ActiveConnections"/> against
     /// <see cref="BackFillerListenerRuntimeOptions.MaxActiveConnections"/>. The handshake timeout and
     /// per-read/write no-progress timeout come from <see cref="BackFillerRuntimeOptions.Listener"/>.
-    /// <see cref="StartAsync"/> and <see cref="StopAsync"/> do not observe their cancellation tokens.
+    /// <see cref="StopAsync"/> does not observe its cancellation token.
+    /// <see cref="StartAsync"/> forwards its token only to listener-bound DNS publication.
     /// </para>
     /// </remarks>
     internal sealed class CacheListenerService : IHostedService, IApplicationService, IAsyncDisposable
@@ -54,6 +61,11 @@ namespace VectorNNTPD.BackFillerService.Listener
 
         /// <summary>Logger for <see cref="CacheListenerLogMessages"/>.</summary>
         private readonly ILogger<CacheListenerService> _logger;
+
+        /// <summary>
+        /// Publishes Cloudflare A/AAAA after the listener binds. Null in tests that do not reconcile DNS.
+        /// </summary>
+        private readonly IListenerDnsPublication? _publication;
 
         /// <summary>
         /// Non-recursive lock for <see cref="_state"/> and <see cref="_listenSockets"/>.
@@ -119,7 +131,11 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// Clock for listener <c>DATE</c>. Null uses <see cref="TimeProvider.System"/>.
         /// Production passes the retention <see cref="TimeProvider"/>.
         /// </param>
-        /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
+        /// <param name="publication">
+        /// DNS publication invoked after a successful bind. Null skips publication.
+        /// Production passes <see cref="IListenerDnsPublication"/> when the listener-bound lease is registered.
+        /// </param>
+        /// <exception cref="ArgumentNullException">Thrown when any required argument is null.</exception>
         internal CacheListenerService(
             BackFillerRuntimeOptions runtime,
             ITlsCertificateContextProvider certificates,
@@ -127,7 +143,8 @@ namespace VectorNNTPD.BackFillerService.Listener
             IAcmeCertificateReadiness readiness,
             IBackFillerStartupJournal journal,
             ILogger<CacheListenerService> logger,
-            TimeProvider? time = null)
+            TimeProvider? time = null,
+            IListenerDnsPublication? publication = null)
         {
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(certificates);
@@ -142,6 +159,7 @@ namespace VectorNNTPD.BackFillerService.Listener
             _journal = journal;
             _logger = logger;
             _time = time ?? TimeProvider.System;
+            _publication = publication;
         }
 
         /// <summary>Builds a readiness gate that is already marked ready for the test constructor.</summary>
@@ -253,6 +271,11 @@ namespace VectorNNTPD.BackFillerService.Listener
                 if (_listenSockets.Count == 0)
                 {
                     throw new InvalidOperationException("Cache Listener failed to bind any endpoint.");
+                }
+
+                if (_publication is not null)
+                {
+                    await _publication.PublishAfterListenerBoundAsync(cancellationToken).ConfigureAwait(false);
                 }
 
                 lock (_gate)

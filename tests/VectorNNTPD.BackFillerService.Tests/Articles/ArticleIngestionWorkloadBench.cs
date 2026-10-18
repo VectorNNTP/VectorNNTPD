@@ -2,13 +2,14 @@ using System.Diagnostics;
 using System.IO.Hashing;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Articles.Processing;
-using VectorNNTPD.BackFillerService.Articles.YEnc;
+using VectorNNTPD.Common.Articles.Processing;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Retention;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Articles.YEnc;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {

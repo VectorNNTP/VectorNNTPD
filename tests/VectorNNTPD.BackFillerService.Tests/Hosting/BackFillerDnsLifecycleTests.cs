@@ -5,19 +5,23 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Listener;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
-using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Networking;
+using System.Net.Sockets;
+using System.Net;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting
 {
     /// <summary>
-    /// Regresses Cloudflare DNS reconciliation ordering in <see cref="ApplicationServiceManager"/> and full-host startup:
+    /// Regresses Cloudflare DNS reconciliation ordering in <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/> and full-host startup:
     /// DNS runs before ACME and the cache listener, rollback removes only the BackFiller FQDN, and bind resolution runs once per start attempt.
     /// </summary>
     public sealed class BackFillerDnsLifecycleTests
@@ -33,14 +37,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                 typeof(CloudflareDnsReconciliationService).Assembly,
                 typeof(CloudflareDnsReconciliationApplicationService).Assembly);
             Assert.Equal(
-                "VectorNNTPD.BackFillerService.Cloudflare",
+                "VectorNNTPD.Common.Cloudflare",
                 typeof(CloudflareDnsReconciliationApplicationService).Namespace);
             Assert.Null(
                 typeof(BackFillerServiceCollectionExtensions).Assembly
                     .GetType("VectorNNTPD.BackFillerService.Hosting.CloudflareDnsReconciliationHostedService"));
         }
 
-        /// <summary>When DNS reconcile throws, later application services never start, started-services is empty, and remove runs for the BackFiller FQDN only.</summary>
+        /// <summary>
+        /// When DNS reconcile throws, later application services never start.
+        /// Ownership never becomes active, so the name is not removed; only ids created by the attempt are deleted.
+        /// </summary>
         [Fact]
         public async Task Dns_startup_failure_does_not_start_later_services_and_cleans_up()
         {
@@ -51,14 +58,15 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             var later = new OrderRecordingService("AcmeCertificate", order);
             var manager = CreateManager(dns, later);
 
-            await Assert.ThrowsAsync<CloudflareDnsException>(() => manager.StartAsync(CancellationToken.None));
+            var thrown = await Assert.ThrowsAsync<CloudflareDnsException>(() => manager.StartAsync(CancellationToken.None));
+            Assert.Equal("reconcile failed", thrown.Message);
 
             Assert.Equal(["start:CloudflareDnsReconciliation"], order);
             Assert.Equal(0, later.StartCount);
             Assert.Empty(manager.StartedServices);
             Assert.Equal([harness.Options.Fqdn], harness.Reconciler.ReconcileCalls.Select(static call => call.Fqdn));
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.DoesNotContain(UnrelatedFqdn, harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
+            Assert.Empty(harness.Reconciler.RemoveCalls);
+            Assert.Equal([(harness.Options.CloudFlareZoneId, harness.Options.Fqdn, 0)], harness.Reconciler.DeleteCalls);
             Assert.Equal(1, harness.Resolver.ResolveCount);
         }
 
@@ -203,7 +211,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                 static service => service.GetType().Name == "CloudflareDnsReconciliationHostedService");
         }
 
-        /// <summary>Builds an <see cref="ApplicationServiceManager"/> with valid runtime options and no logging side effects.</summary>
+        /// <summary>Builds a <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/> with valid runtime options and no logging side effects.</summary>
         /// <param name="services">Ordered application services under test.</param>
         private static VectorNNTPD.BackFillerService.Core.ApplicationServiceManager CreateManager(params IApplicationService[] services)
         {

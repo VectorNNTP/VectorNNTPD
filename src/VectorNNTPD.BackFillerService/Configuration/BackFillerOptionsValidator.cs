@@ -1,4 +1,7 @@
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+
+using Microsoft.Extensions.Options;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Configuration
 {

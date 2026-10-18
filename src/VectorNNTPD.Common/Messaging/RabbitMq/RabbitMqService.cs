@@ -153,6 +153,21 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary>Gets the number of times a usable connection was installed (tests).</summary>
         internal int ConnectionCount { get; private set; }
 
+        /// <summary>
+        /// Gets whether <see cref="DisposeAsync"/> has set the shutdown flag.
+        /// Recovery tests wait for this before releasing a blocked connection dispose.
+        /// </summary>
+        internal bool IsStopping
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _stopping;
+                }
+            }
+        }
+
         /// <inheritdoc />
         public bool TryGetCurrent(out RabbitMqConnectionHandle handle)
         {
