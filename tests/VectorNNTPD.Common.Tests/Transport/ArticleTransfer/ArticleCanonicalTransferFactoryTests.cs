@@ -33,6 +33,12 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
             Assert.Equal(record.ArtLines, transferred.ArtLines);
             Assert.Equal(record.CanonicalUtc, transferred.CanonicalUtc);
             Assert.Equal(record.Fields, transferred.Fields);
+            Assert.Equal(record.Framing.IsFrameable, transferred.Framing.IsFrameable);
+            Assert.Equal(record.Framing.BodyStart, transferred.Framing.BodyStart);
+            var live = CanonicalArticleFraming.Analyze(transferred.ArtData.Span);
+            Assert.Equal(transferred.Framing.IsFrameable, live.IsFrameable);
+            Assert.Equal(transferred.Framing.BodyStart, live.BodyStart);
+            Assert.Equal(transferred.ArtHash, System.IO.Hashing.XxHash3.HashToUInt64(transferred.ArtData.Span));
             Assert.True(transferred.ArtData.Span.SequenceEqual(artData));
             Assert.True(IsSameBuffer(transferred.ArtData, artData));
         }

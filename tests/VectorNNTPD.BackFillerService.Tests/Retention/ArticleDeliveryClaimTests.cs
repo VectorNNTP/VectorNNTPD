@@ -448,10 +448,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             var key = method.IndexOf("CreateDeliveryKey", StringComparison.Ordinal);
             var gate = method.IndexOf("lock (_gate)", StringComparison.Ordinal);
             var published = method.IndexOf("_deliveryClaims.Add", StringComparison.Ordinal);
-            var scan = method.IndexOf("IsFrameable(", StringComparison.Ordinal);
+            var scan = method.IndexOf("CanonicalArticleFraming.Analyze(", StringComparison.Ordinal);
             Assert.True(key >= 0 && gate > key);
             Assert.True(published > gate && scan > published);
-            Assert.DoesNotContain("IsFrameable(", method[..published], StringComparison.Ordinal);
+            Assert.DoesNotContain("CanonicalArticleFraming.Analyze(", method[..published], StringComparison.Ordinal);
         }
 
         /// <summary>Locates the retention authority source from the test output directory.</summary>

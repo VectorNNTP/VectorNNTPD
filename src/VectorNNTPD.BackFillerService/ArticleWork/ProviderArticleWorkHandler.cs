@@ -302,7 +302,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             "MessageIdMismatch");
                     }
 
-                    if (!ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
+                    if (!record.Framing.IsFrameable)
                     {
                         LogArticleProcessed(
                             item,

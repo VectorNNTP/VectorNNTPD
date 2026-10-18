@@ -410,7 +410,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
             var record = Admit(authority, pool, "<a@b>", "body\r\n");
             var image = record.ArtData.ToArray();
-            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray());
+            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray(), blockOnWrite: 3);
             var running = new NntpCacheListenerSession(transport, authority, new ManualTimeProvider(Start)).RunAsync(CancellationToken.None);
 
             await transport.BodyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -439,7 +439,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
             var record = Admit(authority, pool, "<a@b>", "body\r\n");
             var image = record.ArtData.ToArray();
-            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray());
+            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray(), blockOnWrite: 3);
             using var cts = new CancellationTokenSource();
             var running = new NntpCacheListenerSession(transport, authority, new ManualTimeProvider(Start)).RunAsync(cts.Token);
 
@@ -458,14 +458,129 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             Assert.Equal(0, pool.Outstanding);
         }
 
+        /// <summary>
+        /// A dot-leading header is a separate write. The rented body slice stays leased until that later write finishes.
+        /// </summary>
+        [Fact]
+        public async Task Listener_holds_the_rented_buffer_until_the_split_body_write_completes()
+        {
+            var pool = new TrackingBytePool();
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            var record = Admit(authority, pool, "<a@b>", "BODY-MARK\r\n", ".X-Dot: kept\r\n");
+            var image = record.ArtData.ToArray();
+            var bodyStart = record.Framing.BodyStart;
+            Assert.True(bodyStart > 0);
+            var body = image.AsSpan(bodyStart).ToArray();
+            Assert.Contains("BODY-MARK\r\n"u8, body);
+            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray(), blockOnWrite: 4);
+            var running = new NntpCacheListenerSession(transport, authority, new ManualTimeProvider(Start)).RunAsync(CancellationToken.None);
+
+            await transport.BodyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, authority.RetainedCount);
+            Assert.Equal(0, pool.ReturnCount);
+            Assert.True(record.ArtData.Span.SequenceEqual(image));
+            Assert.Contains("..X-Dot: kept\r\n"u8, transport.Written);
+            Assert.DoesNotContain("BODY-MARK\r\n"u8, transport.Written);
+
+            transport.ReleaseBody.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, authority.RetainedCount);
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(1, CountSequence(transport.Written, body));
+            Assert.True(transport.Written.AsSpan()[^5..].SequenceEqual("\r\n.\r\n"u8));
+            Assert.DoesNotContain("\r\n.\r\n"u8, image);
+            await authority.DisposeAsync();
+            Assert.Equal(1, pool.ReturnCount);
+        }
+
+        /// <summary>
+        /// Cancelling the retained-body write does not return the rented array, and the bytes already written stay a prefix.
+        /// </summary>
+        [Fact]
+        public async Task Listener_cancellation_during_the_split_body_write_releases_the_buffer_once()
+        {
+            var pool = new TrackingBytePool();
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            var record = Admit(authority, pool, "<a@b>", "BODY-MARK\r\n", ".X-Dot: kept\r\n");
+            var image = record.ArtData.ToArray();
+            var transport = new BlockingBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray(), blockOnWrite: 4);
+            using var cts = new CancellationTokenSource();
+            var running = new NntpCacheListenerSession(transport, authority, new ManualTimeProvider(Start)).RunAsync(cts.Token);
+
+            await transport.BodyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, pool.ReturnCount);
+            Assert.True(record.ArtData.Span.SequenceEqual(image));
+            Assert.DoesNotContain("BODY-MARK\r\n"u8, transport.Written);
+            await cts.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(1, authority.RetainedCount);
+            Assert.Equal(0, pool.ReturnCount);
+            Assert.True(record.ArtData.Span.SequenceEqual(image));
+            Assert.Equal(0, CountSequence(transport.Written, image.AsSpan(record.Framing.BodyStart).ToArray()));
+
+            await authority.DisposeAsync();
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(0, pool.Outstanding);
+        }
+
+        /// <summary>
+        /// A short body write is retried from the unsent suffix. The rented array stays live across both writes and the body appears once.
+        /// </summary>
+        [Fact]
+        public async Task Listener_partial_body_write_does_not_release_or_repeat_the_retained_slice()
+        {
+            var pool = new TrackingBytePool();
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            var record = Admit(authority, pool, "<a@b>", "BODY-MARK\r\n", ".X-Dot: kept\r\n");
+            var image = record.ArtData.ToArray();
+            var body = image.AsSpan(record.Framing.BodyStart).ToArray();
+            var transport = new PartialBodyTransport("ARTICLE <a@b>\r\n"u8.ToArray(), body);
+            var running = new NntpCacheListenerSession(transport, authority, new ManualTimeProvider(Start)).RunAsync(CancellationToken.None);
+
+            await transport.BodyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, pool.ReturnCount);
+            Assert.True(record.ArtData.Span.SequenceEqual(image));
+            Assert.Equal(0, CountSequence(transport.Written, body));
+
+            transport.ReleaseBody.TrySetResult();
+            await running.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(1, CountSequence(transport.Written, body));
+            Assert.True(transport.Written.AsSpan()[^5..].SequenceEqual("\r\n.\r\n"u8));
+            await authority.DisposeAsync();
+            Assert.Equal(1, pool.ReturnCount);
+        }
+
+        /// <summary>Counts non-overlapping occurrences of <paramref name="needle"/> in <paramref name="haystack"/>.</summary>
+        private static int CountSequence(byte[] haystack, byte[] needle)
+        {
+            var count = 0;
+            var span = haystack.AsSpan();
+            var index = 0;
+            while (index <= span.Length - needle.Length)
+            {
+                var found = span[index..].IndexOf(needle);
+                if (found < 0)
+                {
+                    break;
+                }
+
+                count++;
+                index += found + needle.Length;
+            }
+
+            return count;
+        }
+
         /// <summary>Retains a pooled record and drops the creator reference, matching Article Work after a successful retain.</summary>
         private static ArticleRecord Admit(
             ArticleRetentionAuthority authority,
             TrackingBytePool pool,
             string messageId,
-            string body)
+            string body,
+            string extraHeaders = "")
         {
-            var created = Create(pool, messageId, body);
+            var created = Create(pool, messageId, body, extraHeaders);
             Assert.Equal(ArticleRetentionKind.Retained, Retain(authority, created).Kind);
             created.Record.ReleaseUnusedCanonicalBuffer();
             Assert.False(created.Record.ArtData.IsEmpty);
@@ -473,11 +588,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         }
 
         /// <summary>Builds a pooled record without retaining it.</summary>
-        private static Prepared Create(TrackingBytePool pool, string messageId, string body)
+        private static Prepared Create(TrackingBytePool pool, string messageId, string body, string extraHeaders = "")
         {
             var created = ArticleRecordFactory.TryCreate(
                 new NntpArticleParser("backfiller.test"),
-                Article(messageId, body),
+                Article(messageId, body, extraHeaders),
                 ArticlePathMode.Traverse,
                 pool);
             Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
@@ -493,7 +608,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
                 prepared.SelectedDateHeaderName);
 
         /// <summary>Destuffed article bytes for one retention test.</summary>
-        private static byte[] Article(string messageId, string body) =>
+        private static byte[] Article(string messageId, string body, string extraHeaders = "") =>
             Encoding.ASCII.GetBytes(
                 "Path: peer.example\r\n"
                 + "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n"
@@ -501,6 +616,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
                 + "Newsgroups: alt.test\r\n"
                 + "From: user@example.test\r\n"
                 + "Subject: s\r\n"
+                + extraHeaders
                 + "\r\n"
                 + body);
 
@@ -548,12 +664,18 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         {
             private readonly byte[] _inbound;
             private readonly List<byte> _written = [];
+            private readonly int _blockOnWrite;
             private int _offset;
             private int _writeCalls;
 
-            /// <summary>Feeds <paramref name="inbound"/> as the client command.</summary>
+            /// <summary>Feeds <paramref name="inbound"/> as the client command and pauses write number <paramref name="blockOnWrite"/>.</summary>
             /// <param name="inbound">Command bytes, including CRLF.</param>
-            internal BlockingBodyTransport(byte[] inbound) => _inbound = inbound;
+            /// <param name="blockOnWrite">1-based write that waits for <see cref="ReleaseBody"/> before reading its buffer.</param>
+            internal BlockingBodyTransport(byte[] inbound, int blockOnWrite)
+            {
+                _inbound = inbound;
+                _blockOnWrite = blockOnWrite;
+            }
 
             /// <summary>Bytes copied from writes that have already returned.</summary>
             internal byte[] Written => _written.ToArray();
@@ -582,7 +704,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             public async ValueTask<int> WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
             {
                 _writeCalls++;
-                if (_writeCalls == 3)
+                if (_writeCalls == _blockOnWrite)
                 {
                     BodyEntered.TrySetResult();
                     await ReleaseBody.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -594,6 +716,85 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
                 }
 
                 return buffer.Length;
+            }
+
+            /// <inheritdoc />
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+
+        /// <summary>Accepts the first half of the retained body only after <see cref="ReleaseBody"/>, then the remainder.</summary>
+        private sealed class PartialBodyTransport : ICacheListenerTransport
+        {
+            private readonly byte[] _inbound;
+            private readonly byte[] _body;
+            private readonly List<byte> _written = [];
+            private int _offset;
+            private bool _pausedBody;
+
+            /// <summary>Feeds <paramref name="inbound"/> and pauses the write that begins with <paramref name="body"/>.</summary>
+            /// <param name="inbound">Command bytes, including CRLF.</param>
+            /// <param name="body">Retained body slice. The paused write must start with these bytes.</param>
+            internal PartialBodyTransport(byte[] inbound, byte[] body)
+            {
+                _inbound = inbound;
+                _body = body;
+            }
+
+            /// <summary>Bytes copied from writes that have already returned.</summary>
+            internal byte[] Written => _written.ToArray();
+
+            /// <summary>Set when the body write has started and has not yet read the buffer.</summary>
+            internal TaskCompletionSource BodyEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            /// <summary>Releases the first partial body write.</summary>
+            internal TaskCompletionSource ReleaseBody { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            /// <inheritdoc />
+            public ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            {
+                if (_offset >= _inbound.Length || buffer.IsEmpty)
+                {
+                    return ValueTask.FromResult(0);
+                }
+
+                var count = Math.Min(buffer.Length, _inbound.Length - _offset);
+                _inbound.AsSpan(_offset, count).CopyTo(buffer.Span);
+                _offset += count;
+                return ValueTask.FromResult(count);
+            }
+
+            /// <inheritdoc />
+            public async ValueTask<int> WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
+            {
+                if (!_pausedBody && buffer.Length >= _body.Length && buffer.Span.StartsWith(_body))
+                {
+                    _pausedBody = true;
+                    BodyEntered.TrySetResult();
+                    await ReleaseBody.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    var count = Math.Max(1, buffer.Length / 2);
+                    if (count >= buffer.Length)
+                    {
+                        count = buffer.Length - 1;
+                    }
+
+                    buffer.Span[..count].CopyTo(Append(count));
+                    return count;
+                }
+
+                buffer.Span.CopyTo(Append(buffer.Length));
+                return buffer.Length;
+            }
+
+            /// <summary>Reserves <paramref name="count"/> bytes at the end of the captured output.</summary>
+            private Span<byte> Append(int count)
+            {
+                var start = _written.Count;
+                for (var i = 0; i < count; i++)
+                {
+                    _written.Add(0);
+                }
+
+                return CollectionsMarshal.AsSpan(_written).Slice(start, count);
             }
 
             /// <inheritdoc />

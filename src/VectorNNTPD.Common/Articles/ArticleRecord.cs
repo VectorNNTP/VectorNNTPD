@@ -81,6 +81,9 @@ namespace VectorNNTPD.Common.Articles
             ParseStatus = parseStatus;
             _buffer = canonicalBuffer;
             Fields = fields;
+            Framing = _buffer is null
+                ? CanonicalArticleFraming.None
+                : CanonicalArticleFraming.Analyze(_buffer.Memory.Span);
         }
 
         /// <summary>Gets the internal article identity BLAKE3(Message-ID value bytes).</summary>
@@ -133,6 +136,16 @@ namespace VectorNNTPD.Common.Articles
 
         /// <summary>Gets header value ranges into <see cref="ArtData"/>.</summary>
         public ArticleFieldTable Fields { get; }
+
+        /// <summary>
+        /// Gets the framing of the logical <see cref="ArtData"/> bytes at construction.
+        /// </summary>
+        /// <remarks>
+        /// Derived once from <see cref="ArtData"/> as it existed when this record was built.
+        /// A rented array's unused capacity is not part of that span. The value is not refreshed
+        /// if a caller later writes into the array.
+        /// </remarks>
+        internal CanonicalArticleFraming Framing { get; }
 
         /// <summary>Gets the Message-ID header value bytes in ArtData.</summary>
         internal ReadOnlySpan<byte> MessageId => Fields.MessageId.Slice(ArtData.Span);

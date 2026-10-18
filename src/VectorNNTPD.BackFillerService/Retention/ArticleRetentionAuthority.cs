@@ -607,10 +607,13 @@ namespace VectorNNTPD.BackFillerService.Retention
                 }
             }
 
-            if (!ArticleWorkDeliveryFraming.IsFrameable(pending.Claim.ArticleBytes.Span))
+            var deliveryFraming = CanonicalArticleFraming.Analyze(pending.Claim.ArticleBytes.Span);
+            if (!deliveryFraming.IsFrameable)
             {
                 return ArticleDeliveryClaimResult.NotFrameable();
             }
+
+            pending.Claim.BindDeliveryFraming(deliveryFraming);
 
             var release = false;
             var disposedDuringScan = false;
@@ -1302,6 +1305,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                 _lease = lease;
                 ArticleBytes = record.ArtData;
                 MessageId = messageId;
+                DeliveryFraming = CanonicalArticleFraming.None;
             }
 
             /// <summary>
@@ -1309,6 +1313,16 @@ namespace VectorNNTPD.BackFillerService.Retention
             /// A rented buffer may be returned to its pool when settlement drops the last consumer.
             /// </summary>
             internal ReadOnlyMemory<byte> ArticleBytes { get; }
+
+            /// <summary>
+            /// Framing of <see cref="ArticleBytes"/> from the post-lock scan.
+            /// <see cref="CanonicalArticleFraming.None"/> until <see cref="BindDeliveryFraming"/> runs.
+            /// </summary>
+            internal CanonicalArticleFraming DeliveryFraming { get; private set; }
+
+            /// <summary>Stores the framing of the bytes that passed the post-lock scan.</summary>
+            /// <param name="framing">Result of analyzing <see cref="ArticleBytes"/> after the claim was reserved.</param>
+            internal void BindDeliveryFraming(CanonicalArticleFraming framing) => DeliveryFraming = framing;
 
             /// <summary>Exact stored Message-ID. Not rewritten from ArtData.</summary>
             internal string MessageId { get; }

@@ -16,9 +16,9 @@ namespace VectorNNTPD.BackFillerService.Listener
     /// </para>
     /// <para>
     /// A successful <c>ARTICLE</c> writes <c>220 0</c>, the multiline article image, and one <c>.CRLF</c> terminator.
-    /// Header lines that begin with <c>.</c> gain one stuffing dot in that image only. The retained body is copied
-    /// unchanged, so a stuffing dot already stored on a body line is not added again. The retained entry is removed
-    /// only after all three writes complete. A failure before that rolls the claim
+    /// Header lines that begin with <c>.</c> gain one stuffing dot in that image only. The retained body is written
+    /// as its own slice, so a stuffing dot already stored on a body line is not added again. The retained entry is removed
+    /// only after every response write completes. A failure before that rolls the claim
     /// back when the entry is still eligible. Completion of the local writes is not proof the peer processed the article.
     /// A disconnect during the write can leave the peer with a prefix and, after rollback, a later retry can deliver
     /// the article again. A commit followed by a lost connection cannot be delivered again.
@@ -182,8 +182,9 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <remarks>
         /// <see cref="WriteFullyAsync"/> returns only after the transport write has completed or thrown, so the
         /// claim lease is still held while <see cref="ICacheListenerTransport.WriteAsync"/> reads
-        /// <see cref="ArticleRetentionAuthority.ArticleDeliveryClaim.ArticleBytes"/>. Commit and dispose run after
-        /// that await, on this call. This session is the only owner of the claim, so settlement does not overlap the write.
+        /// <see cref="ArticleRetentionAuthority.ArticleDeliveryClaim.ArticleBytes"/>. A stuffed header is a separate
+        /// small buffer. The body write is the retained slice and is not a copy. Commit and dispose run after
+        /// every one of those awaits, on this call. This session is the only owner of the claim, so settlement does not overlap the write.
         /// </remarks>
         private async Task HandleArticleAsync(ReadOnlyMemory<byte> line, CancellationToken cancellationToken)
         {
@@ -219,14 +220,23 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
 
             using var claim = claimed.Claim!;
-            var payload = claim.ArticleBytes;
-            if (ArticleWorkDeliveryFraming.TryStuffHeaderLines(claim.ArticleBytes.Span, out var stuffed))
-            {
-                payload = stuffed;
-            }
+            var article = claim.ArticleBytes;
+            var bodyStart = claim.DeliveryFraming.BodyStart;
+            byte[]? stuffedHeader = null;
+            var splitBody = bodyStart >= 0
+                && ArticleWorkDeliveryFraming.TryCreateStuffedHeader(article.Span, bodyStart, out stuffedHeader);
 
             await WriteFullyAsync(BuildFollowsLine(argument.Span), cancellationToken).ConfigureAwait(false);
-            await WriteFullyAsync(payload, cancellationToken).ConfigureAwait(false);
+            if (splitBody)
+            {
+                await WriteFullyAsync(stuffedHeader, cancellationToken).ConfigureAwait(false);
+                await WriteFullyAsync(article[bodyStart..], cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await WriteFullyAsync(article, cancellationToken).ConfigureAwait(false);
+            }
+
             await WriteFullyAsync(Terminator, cancellationToken).ConfigureAwait(false);
             claim.Commit();
         }
