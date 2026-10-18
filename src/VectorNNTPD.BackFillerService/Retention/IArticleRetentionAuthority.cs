@@ -77,7 +77,9 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// Does not copy ArtData. Does not remove the entry. RequestIds stay openable until
         /// <see cref="ArticleRetentionAuthority.ArticleDeliveryClaim.Commit"/>.
         /// An entry whose lines are not exclusively CRLF, or that has a dot-leading line and no header/body
-        /// separator, is <see cref="ArticleDeliveryClaimKind.NotFrameable"/>. The retained buffer is not rewritten.
+        /// separator, is <see cref="ArticleDeliveryClaimKind.NotFrameable"/>. The article is scanned after the
+        /// claim is reserved and after the retention lock is released. A failed scan releases that claim before
+        /// the result is returned. The retained buffer is not rewritten.
         /// A second claim while one is active is <see cref="ArticleDeliveryClaimKind.InDelivery"/>.
         /// </remarks>
         /// <exception cref="ObjectDisposedException">The authority has been disposed.</exception>
