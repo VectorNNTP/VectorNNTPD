@@ -102,7 +102,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
         }
 
         /// <summary>
-        /// A CRLF article from Common is frameable. Delivery stuffs the dot-leading header once and copies the already-stuffed body, including a single-dot line and a run of dots.
+        /// A CRLF article from Common is frameable. Delivery stuffs the dot-leading header once and writes the already-stuffed body from the retained slice.
         /// </summary>
         [Fact]
         public void Delivery_does_not_stuff_a_common_body_a_second_time()
@@ -127,16 +127,24 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
                 ArticlePathMode.Normalize);
             Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
             var retained = created.Record.ArtData.Span;
-            Assert.True(ArticleWorkDeliveryFraming.IsFrameable(retained));
-            Assert.True(ArticleWorkDeliveryFraming.TryStuffHeaderLines(retained, out var socket));
-            Assert.NotNull(socket);
+            var bodyStart = created.Record.Framing.BodyStart;
+            Assert.True(created.Record.Framing.IsFrameable);
+            Assert.True(bodyStart > 0 && bodyStart < retained.Length);
+            Assert.True(ArticleWorkDeliveryFraming.TryCreateStuffedHeader(retained, bodyStart, out var header));
+            Assert.NotNull(header);
+            Assert.True(header.Length < retained.Length);
+            var wire = new byte[header.Length + retained.Length - bodyStart];
+            header.CopyTo(wire);
+            retained[bodyStart..].CopyTo(wire.AsSpan(header.Length));
             Assert.Equal(retained.ToArray(), created.Record.ArtData.ToArray());
+            Assert.True(wire.AsSpan(header.Length).SequenceEqual(retained[bodyStart..]));
 
-            var separator = socket.AsSpan().IndexOf("\r\n\r\n"u8);
+            var separator = wire.AsSpan().IndexOf("\r\n\r\n"u8);
             Assert.True(separator > 0);
-            Assert.Contains("..X-Dot: kept\r\n"u8, socket);
-            Assert.Equal("\r\n..\r\n...\r\n....\r\nplain\r\n"u8, socket.AsSpan(separator + 4));
-            Assert.False(socket.AsSpan().EndsWith("\r\n.\r\n"u8));
+            Assert.Contains("..X-Dot: kept\r\n"u8, wire);
+            Assert.Equal("\r\n..\r\n...\r\n....\r\nplain\r\n"u8, wire.AsSpan(separator + 4));
+            Assert.False(wire.AsSpan().EndsWith("\r\n.\r\n"u8));
+            Assert.False(created.Record.ArtData.Span.EndsWith("\r\n.\r\n"u8));
         }
 
         /// <summary>

@@ -1,4 +1,5 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {
@@ -47,7 +48,23 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
             var retained = article.ToArray();
             Assert.True(ArticleWorkDeliveryFraming.IsFrameable(article));
             Assert.True(ArticleWorkDeliveryFraming.TryStuffHeaderLines(article, out var stuffed));
-            Assert.Equal("..X-Dot: kept\r\n\r\n.only\r\n"u8.ToArray(), stuffed);
+            Assert.Equal("..X-Dot: kept\r\n\r\n"u8.ToArray(), stuffed);
+            Assert.Equal(".only\r\n"u8.ToArray(), article.AsSpan(".X-Dot: kept\r\n\r\n"u8.Length).ToArray());
+            Assert.Equal(retained, article);
+        }
+
+        /// <summary>
+        /// Several dot-leading header lines are stuffed, and the already-stuffed body is not part of that buffer.
+        /// </summary>
+        [Fact]
+        public void Several_dot_leading_headers_are_stuffed_without_copying_the_body()
+        {
+            var article = ".X-One: a\r\n.X-Two: b\r\n\r\n.only\r\n..\r\n"u8.ToArray();
+            var retained = article.ToArray();
+            Assert.True(ArticleWorkDeliveryFraming.TryStuffHeaderLines(article, out var stuffed));
+            Assert.Equal("..X-One: a\r\n..X-Two: b\r\n\r\n"u8.ToArray(), stuffed);
+            Assert.True(stuffed.Length < article.Length);
+            Assert.Equal(".only\r\n..\r\n"u8.ToArray(), article.AsSpan(".X-One: a\r\n.X-Two: b\r\n\r\n"u8.Length).ToArray());
             Assert.Equal(retained, article);
         }
 
@@ -105,6 +122,54 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
         public void An_lf_only_separator_does_not_produce_a_socket_image()
         {
             AssertRejected(".X-Dot: kept\n\nbody\n"u8.ToArray());
+        }
+
+        /// <summary>
+        /// A median-sized body is not allocated again when only the header needs a stuffing dot.
+        /// </summary>
+        [Fact]
+        public void Stuffing_a_dot_leading_header_does_not_allocate_the_body()
+        {
+            const int bodyLength = 740 * 1024;
+            var header = ".X-Dot: kept\r\n\r\n"u8;
+            var article = new byte[header.Length + bodyLength];
+            header.CopyTo(article);
+            article.AsSpan(header.Length, bodyLength - 2).Fill((byte)'x');
+            article[^2] = (byte)'\r';
+            article[^1] = (byte)'\n';
+            var bodyStart = CanonicalArticleFraming.Analyze(article).BodyStart;
+            Assert.Equal(header.Length, bodyStart);
+            ArticleWorkDeliveryFraming.TryCreateStuffedHeader(article, bodyStart, out _);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.True(ArticleWorkDeliveryFraming.TryCreateStuffedHeader(article, bodyStart, out var stuffed));
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.True(allocated < 85_000, $"Header stuffing allocated {allocated} bytes.");
+            Assert.True(stuffed.Length < 85_000);
+            Assert.Equal("..X-Dot: kept\r\n\r\n"u8.ToArray(), stuffed);
+        }
+
+        /// <summary>No header dot means the caller keeps the retained article and no socket image is allocated.</summary>
+        [Fact]
+        public void A_header_without_a_leading_dot_does_not_allocate_a_socket_image()
+        {
+            const int bodyLength = 740 * 1024;
+            var header = "Subject: s\r\n\r\n"u8;
+            var article = new byte[header.Length + bodyLength];
+            header.CopyTo(article);
+            article.AsSpan(header.Length, bodyLength - 2).Fill((byte)'x');
+            article[^2] = (byte)'\r';
+            article[^1] = (byte)'\n';
+            var bodyStart = CanonicalArticleFraming.Analyze(article).BodyStart;
+            ArticleWorkDeliveryFraming.TryCreateStuffedHeader(article, bodyStart, out _);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.False(ArticleWorkDeliveryFraming.TryCreateStuffedHeader(article, bodyStart, out var stuffed));
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Null(stuffed);
+            Assert.Equal(0, allocated);
         }
 
         /// <summary>Asserts framing and header stuffing both fail without altering the caller's byte snapshot.</summary>

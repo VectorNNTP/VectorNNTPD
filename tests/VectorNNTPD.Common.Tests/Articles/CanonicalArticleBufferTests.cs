@@ -41,11 +41,17 @@ namespace VectorNNTPD.Common.Tests.Articles
             Assert.True(pooled.Record.ArtSize > LargeBodyBytes);
             Assert.Equal(exact.Record.ArtSize, pooled.Record.ArtSize);
             Assert.Equal(exact.Record.ArtHash, pooled.Record.ArtHash);
+            Assert.Equal(exact.Record.Framing.IsFrameable, pooled.Record.Framing.IsFrameable);
+            Assert.Equal(exact.Record.Framing.BodyStart, pooled.Record.Framing.BodyStart);
             Assert.True(pooled.Record.ArtData.Span.SequenceEqual(exact.Record.ArtData.Span));
             Assert.True(MemoryMarshal.TryGetArray(pooled.Record.ArtData, out var segment));
             Assert.True(segment.Array!.Length > pooled.Record.ArtSize);
             segment.Array.AsSpan(pooled.Record.ArtSize).Fill(0x5A);
             Assert.Equal(exact.Record.ArtHash, System.IO.Hashing.XxHash3.HashToUInt64(pooled.Record.ArtData.Span));
+            Assert.Equal(exact.Record.Framing.BodyStart, pooled.Record.Framing.BodyStart);
+            Assert.Equal(
+                exact.Record.Framing.BodyStart,
+                CanonicalArticleFraming.Analyze(pooled.Record.ArtData.Span).BodyStart);
             Assert.NotEqual(
                 exact.Record.ArtHash,
                 System.IO.Hashing.XxHash3.HashToUInt64(segment.Array));
