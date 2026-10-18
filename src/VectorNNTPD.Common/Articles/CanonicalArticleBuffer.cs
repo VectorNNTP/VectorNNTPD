@@ -244,7 +244,8 @@ namespace VectorNNTPD.Common.Articles
         /// <c>RetainCanonical</c>, <c>TryClaimForDelivery</c>, <c>SweepExpired</c>, and <c>DisposeAsync</c>
         /// do not await, schedule work, or take a callback that enters another scope while one is active.
         /// A nested scope does not return arrays. The outermost <see cref="Dispose"/> does, after that call's lock is released.
-        /// One throwing <see cref="ArrayPool{T}.Return(T[], bool)"/> does not skip the rest of the batch.
+        /// One ordinary failure from <see cref="ArrayPool{T}.Return(T[], bool)"/> does not skip the rest of the batch.
+        /// A process-fatal failure leaves the loop immediately, so later queued arrays in that batch are not returned.
         /// </remarks>
         internal readonly ref struct ReturnScope
         {
@@ -265,7 +266,22 @@ namespace VectorNNTPD.Common.Articles
             }
 
             /// <summary>Returns queued arrays when this is the outermost scope.</summary>
-            public void Dispose()
+            public void Dispose() => DisposeCurrentThreadScope();
+
+            /// <summary>
+            /// Ends the current thread's scope and, at the outermost scope, returns every queued array.
+            /// </summary>
+            /// <remarks>
+            /// Thread-static <c>_depth</c> and <c>_pending</c> are written only from this static method and from
+            /// <see cref="Enter"/> and <see cref="DeferOrReturn"/>. An ordinary return failure is remembered and
+            /// the rest of the batch is still returned. <see cref="IsFatal"/> failures propagate at once, which
+            /// leaves any not-yet-returned arrays from this batch unreturned.
+            /// </remarks>
+            /// <exception cref="Exception">
+            /// The first ordinary <see cref="ArrayPool{T}.Return(T[], bool)"/> failure, after the batch has been attempted.
+            /// A fatal failure propagates from the return that threw it.
+            /// </exception>
+            private static void DisposeCurrentThreadScope()
             {
                 if (_depth == 0)
                 {
@@ -293,7 +309,7 @@ namespace VectorNNTPD.Common.Articles
                     {
                         pool.Return(bytes, clearArray: true);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!IsFatal(ex))
                     {
                         first ??= ex;
                     }
@@ -304,6 +320,30 @@ namespace VectorNNTPD.Common.Articles
                     throw first;
                 }
             }
+
+            /// <summary>
+            /// Reports whether <paramref name="exception"/> must leave the deferred-return loop immediately.
+            /// </summary>
+            /// <param name="exception">Failure from <see cref="ArrayPool{T}.Return(T[], bool)"/>.</param>
+            /// <returns>
+            /// <see langword="true"/> for <see cref="OutOfMemoryException"/> (including <see cref="InsufficientMemoryException"/>),
+            /// <see cref="StackOverflowException"/>, <see cref="AccessViolationException"/>,
+            /// <see cref="AppDomainUnloadedException"/>, and <see cref="System.Runtime.InteropServices.SEHException"/>.
+            /// </returns>
+            /// <remarks>
+            /// These are the catchable or host-surfaced failures after which returning more arrays is not a recovery.
+            /// <see cref="OutOfMemoryException"/> and <see cref="System.Runtime.InteropServices.SEHException"/> can be caught on
+            /// <c>net10.0</c>. <see cref="StackOverflowException"/> and <see cref="AccessViolationException"/> usually fail
+            /// the process before a managed catch runs; the check applies when a host does deliver them.
+            /// <c>ThreadAbortException</c> is not part of this runtime. Ordinary failures, including a bad image or a
+            /// pool that rejects one array, stay in the loop so the rest of the batch is still returned.
+            /// </remarks>
+            private static bool IsFatal(Exception exception) =>
+                exception is OutOfMemoryException
+                    or StackOverflowException
+                    or AccessViolationException
+                    or AppDomainUnloadedException
+                    or System.Runtime.InteropServices.SEHException;
 
             /// <summary>
             /// Queues <paramref name="bytes"/> while a scope is active. Otherwise returns it now.

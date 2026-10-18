@@ -149,6 +149,73 @@ namespace VectorNNTPD.Common.Tests.Articles
         }
 
         /// <summary>
+        /// A nested return scope keeps the array queued until the outermost scope ends.
+        /// </summary>
+        [Fact]
+        public void Nested_return_scope_returns_the_array_only_from_the_outer_scope()
+        {
+            var pool = new ScriptedReturnPool();
+            var buffer = CanonicalArticleBuffer.Rented(new byte[8], 4, pool);
+            using (CanonicalArticleBuffer.ReturnScope.Enter())
+            {
+                using (CanonicalArticleBuffer.ReturnScope.Enter())
+                {
+                    buffer.ReleaseCreator();
+                    Assert.Equal(0, pool.ReturnCount);
+                }
+
+                Assert.Equal(0, pool.ReturnCount);
+            }
+
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(new[] { true }, pool.Cleared);
+            default(CanonicalArticleBuffer.ReturnScope).Dispose();
+            Assert.Equal(1, pool.ReturnCount);
+        }
+
+        /// <summary>
+        /// An ordinary pool-return failure is kept and rethrown after every later queued array is returned.
+        /// </summary>
+        [Fact]
+        public void Ordinary_pool_return_failure_still_returns_the_remaining_queued_arrays()
+        {
+            var pool = new ScriptedReturnPool(new InvalidOperationException("first return failed"));
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+            {
+                using (CanonicalArticleBuffer.ReturnScope.Enter())
+                {
+                    CanonicalArticleBuffer.Rented(new byte[8], 3, pool).ReleaseCreator();
+                    CanonicalArticleBuffer.Rented(new byte[8], 3, pool).ReleaseCreator();
+                }
+            });
+
+            Assert.Equal("first return failed", failure.Message);
+            Assert.Equal(2, pool.ReturnCount);
+            Assert.Equal(new[] { true, true }, pool.Cleared);
+        }
+
+        /// <summary>
+        /// A fatal return failure leaves the loop before later queued arrays are returned.
+        /// </summary>
+        [Fact]
+        public void Fatal_pool_return_failure_does_not_continue_the_batch()
+        {
+            var pool = new ScriptedReturnPool(new OutOfMemoryException("return exhausted memory"));
+            var failure = Assert.Throws<OutOfMemoryException>(() =>
+            {
+                using (CanonicalArticleBuffer.ReturnScope.Enter())
+                {
+                    CanonicalArticleBuffer.Rented(new byte[8], 4, pool).ReleaseCreator();
+                    CanonicalArticleBuffer.Rented(new byte[8], 4, pool).ReleaseCreator();
+                }
+            });
+
+            Assert.Equal("return exhausted memory", failure.Message);
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(new[] { true }, pool.Cleared);
+        }
+
+        /// <summary>
         /// Separates the first pooled rent, which allocates the article array, from later rents of a private reuse pool.
         /// The warmed bound is the pass condition. This is not an <see cref="ArrayPool{T}.Shared"/> measurement:
         /// Shared may retain a large array for the process lifetime, and the printed GC snapshot still contains the exact-path arrays.
@@ -307,6 +374,39 @@ namespace VectorNNTPD.Common.Tests.Articles
             public override void Return(byte[] array, bool clearArray = false)
             {
                 _cached = array;
+            }
+        }
+
+        /// <summary>Pool whose <see cref="Return(byte[], bool)"/> throws the scripted faults in order.</summary>
+        private sealed class ScriptedReturnPool : ArrayPool<byte>
+        {
+            private readonly Queue<Exception?> _faults;
+
+            /// <summary>Records whether each return asked the pool to clear the array.</summary>
+            private readonly List<bool> _cleared = [];
+
+            /// <summary>Creates a pool that throws each non-null fault on the matching return.</summary>
+            /// <param name="faults">Faults in return order. A null entry returns successfully.</param>
+            public ScriptedReturnPool(params Exception?[] faults) => _faults = new Queue<Exception?>(faults);
+
+            /// <summary>How many <see cref="Return(byte[], bool)"/> calls ran, including the one that threw.</summary>
+            public int ReturnCount { get; private set; }
+
+            /// <summary>Clear flags from each return, in call order.</summary>
+            public IReadOnlyList<bool> Cleared => _cleared;
+
+            /// <inheritdoc />
+            public override byte[] Rent(int minimumLength) => new byte[minimumLength];
+
+            /// <inheritdoc />
+            public override void Return(byte[] array, bool clearArray = false)
+            {
+                ReturnCount++;
+                _cleared.Add(clearArray);
+                if (_faults.Count > 0 && _faults.Dequeue() is { } fault)
+                {
+                    throw fault;
+                }
             }
         }
 
