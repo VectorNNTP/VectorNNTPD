@@ -1,4 +1,5 @@
 using System.Security.Authentication;
+using System.Net.Security;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {

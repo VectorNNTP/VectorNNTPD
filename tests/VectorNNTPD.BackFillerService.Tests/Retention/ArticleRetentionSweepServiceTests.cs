@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Retention;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Retention
 {
@@ -88,8 +89,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             public ArticleRetentionResult RetainCanonical(
                 string messageId,
                 Guid requestId,
-                VectorNNTPD.BackFillerService.Articles.ArticleRecord record,
-                VectorNNTPD.BackFillerService.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+                VectorNNTPD.Common.Articles.ArticleRecord record,
+                VectorNNTPD.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
                 string? endpointFqdn = null) =>
                 new(ArticleRetentionKind.ShuttingDown, null, null, null, 0, 0);
 
@@ -140,8 +141,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             public ArticleRetentionResult RetainCanonical(
                 string messageId,
                 Guid requestId,
-                VectorNNTPD.BackFillerService.Articles.ArticleRecord record,
-                VectorNNTPD.BackFillerService.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+                VectorNNTPD.Common.Articles.ArticleRecord record,
+                VectorNNTPD.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
                 string? endpointFqdn = null) =>
                 new(ArticleRetentionKind.ShuttingDown, null, null, null, 0, 0);
 
@@ -189,8 +190,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             public ArticleRetentionResult RetainCanonical(
                 string messageId,
                 Guid requestId,
-                VectorNNTPD.BackFillerService.Articles.ArticleRecord record,
-                VectorNNTPD.BackFillerService.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
+                VectorNNTPD.Common.Articles.ArticleRecord record,
+                VectorNNTPD.Common.Articles.Parsing.NntpArticleHeaderName selectedDateHeaderName,
                 string? endpointFqdn = null) =>
                 new(ArticleRetentionKind.ShuttingDown, null, null, null, 0, 0);
 

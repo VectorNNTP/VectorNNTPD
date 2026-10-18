@@ -12,7 +12,8 @@ namespace VectorNNTPD.Common.Configuration
     /// <c>{assembly name}.{environment}.json</c>. Both use
     /// <see cref="Assembly.GetEntryAssembly"/>, not the process executable path.
     /// Generic Host defaults (<c>appsettings.json</c> and <c>{application}.settings.json</c>)
-    /// are not left in place as a fallback.
+    /// are removed and are not a fallback. The RabbitMQ file name is supplied by the caller.
+    /// There is no default RabbitMQ filename and no fallback to <c>RabbitMq.json</c>.
     /// </remarks>
     public static class ApplicationJsonConfiguration
     {
@@ -49,16 +50,21 @@ namespace VectorNNTPD.Common.Configuration
         }
 
         /// <summary>
-        /// Replaces Generic Host JSON sources with the entry-assembly filenames.
+        /// Removes Generic Host JSON defaults and registers the entry-assembly JSON files.
         /// </summary>
         /// <param name="configuration">Host configuration builder, before it is read.</param>
         /// <param name="environmentName">Current host environment name.</param>
         /// <exception cref="ArgumentNullException"><paramref name="configuration"/> is null.</exception>
         /// <exception cref="ArgumentException"><paramref name="environmentName"/> is empty.</exception>
-        /// <exception cref="InvalidOperationException">The host did not register the default JSON sources.</exception>
         /// <remarks>
-        /// Optional and reload-on-change flags are copied from the sources they replace.
-        /// <c>appsettings.json</c> and <c>{application}.settings.json</c> are not loaded.
+        /// <c>appsettings.json</c>, <c>appsettings.{environment}.json</c>, and
+        /// <c>{application}.settings.json</c> are removed when the host registered them.
+        /// <see cref="PrimaryJsonFileName"/> and <see cref="EnvironmentJsonFileName"/> are then
+        /// inserted at that position when they are not already present. Optional and
+        /// reload-on-change are copied from the removed host source. When the host did not
+        /// register one, the added source is optional and reloads on change, and it is inserted
+        /// at the start of the source list. A second call does not add another copy.
+        /// The host default names are not a fallback. This method does not change the builder base path.
         /// </remarks>
         internal static void UseEntryAssemblyJsonFiles(IConfigurationBuilder configuration, string environmentName)
         {
@@ -68,8 +74,9 @@ namespace VectorNNTPD.Common.Configuration
             var primary = PrimaryJsonFileName();
             var environmentFile = EnvironmentJsonFileName(environmentName);
             var legacyEnvironment = "appsettings." + environmentName + ".json";
-            var replacedPrimary = false;
-            var replacedEnvironment = false;
+            var insertAt = -1;
+            FileConfigurationSource? primaryTemplate = null;
+            FileConfigurationSource? environmentTemplate = null;
 
             for (var index = configuration.Sources.Count - 1; index >= 0; index--)
             {
@@ -81,65 +88,89 @@ namespace VectorNNTPD.Common.Configuration
                 if (IsHostNamedSettingsFile(file.Path))
                 {
                     configuration.Sources.RemoveAt(index);
+                    if (insertAt > index)
+                    {
+                        insertAt--;
+                    }
+
                     continue;
                 }
 
-                string? replacement = null;
-                if (file.Path.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase))
-                {
-                    replacement = primary;
-                    replacedPrimary = true;
-                }
-                else if (file.Path.Equals(legacyEnvironment, StringComparison.OrdinalIgnoreCase))
-                {
-                    replacement = environmentFile;
-                    replacedEnvironment = true;
-                }
-
-                if (replacement is null)
+                var isLegacyPrimary = file.Path.Equals("appsettings.json", StringComparison.OrdinalIgnoreCase);
+                var isLegacyEnvironment = file.Path.Equals(legacyEnvironment, StringComparison.OrdinalIgnoreCase);
+                if (!isLegacyPrimary && !isLegacyEnvironment)
                 {
                     continue;
                 }
 
-                var source = new JsonConfigurationSource
+                if (isLegacyPrimary)
                 {
-                    Path = replacement,
-                    Optional = file.Optional,
-                    ReloadOnChange = file.ReloadOnChange,
-                    FileProvider = file.FileProvider,
-                    OnLoadException = file.OnLoadException,
-                };
-                source.ResolveFileProvider();
-                configuration.Sources[index] = source;
+                    primaryTemplate = file;
+                }
+                else
+                {
+                    environmentTemplate = file;
+                }
+
+                if (insertAt < 0 || index < insertAt)
+                {
+                    insertAt = index;
+                }
+
+                configuration.Sources.RemoveAt(index);
+                if (insertAt > index)
+                {
+                    insertAt--;
+                }
             }
 
-            if (!replacedPrimary || !replacedEnvironment)
+            if (insertAt < 0)
             {
-                throw new InvalidOperationException(
-                    "Generic Host JSON configuration sources were not found.");
+                insertAt = 0;
+            }
+
+            if (!ContainsFile(configuration, primary))
+            {
+                configuration.Sources.Insert(insertAt, CreateJsonSource(primary, primaryTemplate ?? environmentTemplate));
+                insertAt++;
+            }
+
+            if (!ContainsFile(configuration, environmentFile))
+            {
+                configuration.Sources.Insert(insertAt, CreateJsonSource(environmentFile, environmentTemplate ?? primaryTemplate));
             }
         }
 
-        /// <summary>Shared RabbitMQ configuration filename, loaded from the application binary directory.</summary>
-        private const string SharedRabbitMqFileName = "RabbitMq.json";
-
         /// <summary>
-        /// Inserts <see cref="SharedRabbitMqFileName"/> after the entry-assembly JSON sources
-        /// and before environment variables and command-line arguments.
+        /// Inserts the shared RabbitMQ JSON file after the entry-assembly JSON sources
+        /// and before later sources such as environment variables and command-line arguments.
         /// </summary>
         /// <param name="configuration">Host configuration builder after <see cref="UseEntryAssemblyJsonFiles"/>.</param>
         /// <param name="environmentName">Current host environment name.</param>
+        /// <param name="sharedFileName">
+        /// RabbitMQ JSON filename. BackFiller passes <c>VectorNNTPD.RabbitMQ.json</c>.
+        /// The method registers this path only. It does not substitute <c>RabbitMq.json</c> or any other name.
+        /// </param>
         /// <exception cref="ArgumentNullException"><paramref name="configuration"/> is null.</exception>
-        /// <exception cref="ArgumentException"><paramref name="environmentName"/> is empty.</exception>
+        /// <exception cref="ArgumentException">
+        /// <paramref name="environmentName"/> or <paramref name="sharedFileName"/> is empty.
+        /// </exception>
         /// <exception cref="InvalidOperationException">The entry-assembly JSON sources were not found.</exception>
         /// <remarks>
-        /// Optional and reload-on-change match the primary JSON source. There is no
-        /// environment-specific RabbitMQ file. The section name inside the file remains <c>RabbitMQ</c>.
+        /// Optional and reload-on-change match the last entry-assembly JSON source found.
+        /// There is no environment-specific RabbitMQ file. The section name inside the file remains <c>RabbitMQ</c>.
+        /// A second call with the same filename does nothing. A missing file follows that source's optional flag
+        /// and does not cause another filename to be loaded.
         /// </remarks>
-        internal static void AddSharedRabbitMqJsonFile(IConfigurationBuilder configuration, string environmentName)
+        internal static void AddSharedRabbitMqJsonFile(
+            IConfigurationBuilder configuration,
+            string environmentName,
+            string sharedFileName)
         {
             ArgumentNullException.ThrowIfNull(configuration);
             ArgumentException.ThrowIfNullOrWhiteSpace(environmentName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(sharedFileName);
+            var rabbitFile = sharedFileName.Trim();
 
             var primary = PrimaryJsonFileName();
             var environmentFile = EnvironmentJsonFileName(environmentName);
@@ -152,7 +183,7 @@ namespace VectorNNTPD.Common.Configuration
                     continue;
                 }
 
-                if (file.Path.Equals(SharedRabbitMqFileName, StringComparison.OrdinalIgnoreCase))
+                if (file.Path.Equals(rabbitFile, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
                 }
@@ -173,7 +204,7 @@ namespace VectorNNTPD.Common.Configuration
 
             var source = new JsonConfigurationSource
             {
-                Path = SharedRabbitMqFileName,
+                Path = rabbitFile,
                 Optional = template.Optional,
                 ReloadOnChange = template.ReloadOnChange,
                 FileProvider = template.FileProvider,
@@ -193,5 +224,47 @@ namespace VectorNNTPD.Common.Configuration
             path.EndsWith(".settings.json", StringComparison.OrdinalIgnoreCase)
             || (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                 && path.Contains(".settings.", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// Returns whether a file source with <paramref name="path"/> is already registered.
+        /// </summary>
+        /// <param name="configuration">Builder whose sources are scanned. Non-file sources are ignored.</param>
+        /// <param name="path">Source path compared ordinal-ignore-case.</param>
+        /// <returns><see langword="true"/> when a matching <see cref="FileConfigurationSource"/> is present.</returns>
+        private static bool ContainsFile(IConfigurationBuilder configuration, string path)
+        {
+            foreach (var source in configuration.Sources)
+            {
+                if (source is FileConfigurationSource file
+                    && string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Builds a JSON file source for <paramref name="path"/>, copying optional, reload, provider, and load-exception settings from <paramref name="template"/>.
+        /// </summary>
+        /// <param name="path">JSON file name or path inserted into the builder.</param>
+        /// <param name="template">
+        /// Existing file source to copy. When null, the source is optional and reloads on change, with no file provider until resolve.
+        /// </param>
+        /// <returns>A source whose file provider has been resolved.</returns>
+        private static JsonConfigurationSource CreateJsonSource(string path, FileConfigurationSource? template)
+        {
+            var source = new JsonConfigurationSource
+            {
+                Path = path,
+                Optional = template?.Optional ?? true,
+                ReloadOnChange = template?.ReloadOnChange ?? true,
+                FileProvider = template?.FileProvider,
+                OnLoadException = template?.OnLoadException,
+            };
+            source.ResolveFileProvider();
+            return source;
+        }
     }
 }

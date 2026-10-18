@@ -14,6 +14,7 @@ using Serilog.Events;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Tests.Logging
 {
@@ -365,6 +366,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Logging
                 var fileSink = Assert.Single(
                     sinks,
                     static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
+                Assert.Equal("VectorNNTPD.Common", fileSink.GetType().Assembly.GetName().Name);
                 Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
                 Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
                 Assert.Equal(BackFillerLoggingOptions.DefaultLogRetentionDays, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
@@ -626,6 +628,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Logging
             var flush = Assert.Single(
                 sinks,
                 static n => n.GetType().Name.Equals("PeriodicFileFlushSink", StringComparison.Ordinal));
+            Assert.Equal("VectorNNTPD.Common", flush.GetType().Assembly.GetName().Name);
             var timer = ReadInstanceField(flush, "_timer")
                         ?? throw new InvalidOperationException("PeriodicFlushToDiskSink._timer was not found.");
             var holder = timer.GetType().GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(timer)

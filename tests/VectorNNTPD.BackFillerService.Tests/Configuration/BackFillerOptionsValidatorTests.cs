@@ -4,6 +4,8 @@ using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Hosting;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -432,7 +434,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 .Build();
             var options = new BackFillerOptions();
             configuration.GetSection(BackFillerOptions.SectionName).Bind(options);
-            var rabbit = new VectorNNTPD.BackFillerService.Messaging.RabbitMq.RabbitMqOptions();
+            var rabbit = new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqOptions();
             configuration.GetSection("RabbitMQ").Bind(rabbit);
             Assert.Null(typeof(BackFillerOptions).GetProperty("RabbitMQ"));
             Assert.Equal("canonical-user", rabbit.Username);

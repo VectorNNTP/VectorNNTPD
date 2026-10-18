@@ -40,7 +40,7 @@ The production project references the `StuDev.AotAnywhere` 1.0.4 MSBuild SDK. On
 
 Native AOT publish keeps trim and AOT analysis enabled. CI then runs the published executable with `VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1` and `VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG` pointing at an isolated JSON file. The process must print `BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja` and exit 0. That checkpoint is configuration binding and host construction. It does not open a listener or contact a database, broker, DNS provider, or certificate authority.
 
-The standalone project has no external build/runtime dependency on a separate `VectorNNTPD.Common` project or assembly.
+BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, ACME certificate management, the Cloudflare DNS API client, authoritative DNS queries used for DNS-01, RabbitMQ connectivity, and article parsing and validation. It keeps its own `ApplicationServiceManager` and does not use Common's `ApplicationLifecycle`. BackFiller still owns certificate watchdog health, the decision to publish listener-bound A/AAAA records only after the cache listener binds, Article Work topology, the RabbitMQ hosted adapter, and the retained article image that dot-stuffs body lines after Common's parser accepts the article.
 
 ## Linux service
 

@@ -1,4 +1,5 @@
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Hosting
 {

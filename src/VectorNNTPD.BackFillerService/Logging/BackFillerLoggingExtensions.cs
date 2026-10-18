@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Serilog;
 using Serilog.Events;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Logging
 {

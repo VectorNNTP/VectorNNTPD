@@ -9,7 +9,7 @@ using Serilog.Sinks.File;
 namespace VectorNNTPD.Common.Logging
 {
     /// <summary>
-    /// Registers <see cref="GzipRollingFileSink"/> with the same flush wrapping as Serilog's File sink.
+    /// Registers <see cref="GzipRollingFileSink"/> and, when a flush interval is set, <see cref="PeriodicFileFlushSink"/>.
     /// </summary>
     public static class DailyGzipFileLoggerConfigurationExtensions
     {
@@ -23,7 +23,7 @@ namespace VectorNNTPD.Common.Logging
         /// <param name="fileSizeLimitBytes">Active-file size cap. <see langword="null"/> is unlimited.</param>
         /// <param name="buffered">Whether the active file buffers writes.</param>
         /// <param name="flushToDiskInterval">
-        /// When set, wraps the rolling sink with <see cref="PeriodicFlushToDiskSink"/>.
+        /// When set, wraps the rolling sink with <see cref="PeriodicFileFlushSink"/>.
         /// </param>
         /// <param name="rollingInterval">Roll period. Production file targets use <see cref="RollingInterval.Day"/>.</param>
         /// <param name="rollOnFileSizeLimit">Whether a full active file rolls to the next sequence.</param>
@@ -80,6 +80,11 @@ namespace VectorNNTPD.Common.Logging
         /// <param name="compressor">Compression implementation. Defaults to <see cref="GzipLogFileCompressor"/>.</param>
         /// <param name="timeProvider">Clock used for roll checkpoints.</param>
         /// <returns>The logger configuration, so calls can be chained.</returns>
+        /// <remarks>
+        /// When <paramref name="flushToDiskInterval"/> is set, a <see cref="PeriodicFileFlushSink"/> wraps the rolling
+        /// sink. Serilog stores that wrapper and calls <see cref="IDisposable.Dispose"/> when the logger is closed.
+        /// The wrapper flushes before disposing the rolling sink, so the active file is durable before shutdown returns.
+        /// </remarks>
         public static LoggerConfiguration DailyGzipFile(
             this LoggerSinkConfiguration sinkConfiguration,
             ITextFormatter formatter,
@@ -109,13 +114,9 @@ namespace VectorNNTPD.Common.Logging
                 compressor,
                 onCompletedFile,
                 timeProvider);
-            ILogEventSink sink = rolling;
-            if (flushToDiskInterval is { } interval)
-            {
-#pragma warning disable CS0618 // Same one-second flush wrapper Serilog.Sinks.File 7.0.0 applies.
-                sink = new PeriodicFlushToDiskSink(rolling, interval);
-#pragma warning restore CS0618
-            }
+            ILogEventSink sink = flushToDiskInterval is { } interval
+                ? new PeriodicFileFlushSink(rolling, interval)
+                : rolling;
 
             return sinkConfiguration.Sink(sink, restrictedToMinimumLevel);
         }

@@ -1,4 +1,5 @@
 using Serilog.Debugging;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

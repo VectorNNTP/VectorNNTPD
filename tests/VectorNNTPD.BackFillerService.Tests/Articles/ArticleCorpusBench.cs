@@ -2,10 +2,11 @@ using System.Diagnostics;
 using System.IO.Hashing;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Articles.Processing;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Articles.Parsing;
+using System.Text;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Articles.Processing;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {

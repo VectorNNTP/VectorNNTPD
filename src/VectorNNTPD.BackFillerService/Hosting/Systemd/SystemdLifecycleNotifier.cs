@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
+using Microsoft.Extensions.Options;
 
 namespace VectorNNTPD.BackFillerService.Hosting.Systemd
 {

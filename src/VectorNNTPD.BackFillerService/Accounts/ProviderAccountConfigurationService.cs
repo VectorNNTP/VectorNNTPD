@@ -1,8 +1,10 @@
-using VectorNNTPD.BackFillerService.Acme;
+using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Nntp;
-using VectorNNTPD.BackFillerService.NntpDb;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.NntpDb;
+using VectorNNTPD.Common.Acme;
 
 namespace VectorNNTPD.BackFillerService.Accounts
 {
@@ -127,12 +129,7 @@ namespace VectorNNTPD.BackFillerService.Accounts
             {
                 lock (_gate)
                 {
-                    if (_shared is not { } snapshot)
-                    {
-                        throw new InvalidOperationException("nntpsharedconfig has not been published.");
-                    }
-
-                    return snapshot;
+                    return _shared is not { } snapshot ? throw new InvalidOperationException("nntpsharedconfig has not been published.") : snapshot;
                 }
             }
         }
@@ -349,9 +346,16 @@ namespace VectorNNTPD.BackFillerService.Accounts
             }
         }
 
-        /// <summary>Copies one shared snapshot onto the live BackFiller and ACME options.</summary>
+        /// <summary>Copies one shared snapshot onto the live BackFiller, ACME, and RabbitMQ options.</summary>
         /// <param name="shared">Snapshot captured for this refresh.</param>
         /// <param name="fqdn">FQDN already checked for that same snapshot.</param>
+        /// <remarks>
+        /// ACME, DNS, and RabbitMQ credentials use <see cref="NntpSharedConfiguration.CopyAcmeDnsTo"/> and
+        /// <see cref="NntpSharedConfiguration.CopyRabbitMqCredentialsTo"/>. The application FQDN is assigned
+        /// after the copy because the snapshot copy does not set it. BackFiller-owned option fields that
+        /// mirror directory, renewal, zone, and suffix are assigned separately. Hosts, virtual host, and TLS
+        /// settings are left unchanged.
+        /// </remarks>
         private void Project(NntpSharedConfiguration shared, string fqdn)
         {
             var backFiller = _backFillerOptions.Value;
@@ -363,7 +367,9 @@ namespace VectorNNTPD.BackFillerService.Accounts
             var acme = _acmeOptions.Value;
             shared.CopyAcmeDnsTo(acme);
             acme.Fqdn = fqdn;
-            shared.CopyRabbitMqCredentialsTo(_rabbitMq.Value);
+
+            var rabbit = _rabbitMq.Value;
+            shared.CopyRabbitMqCredentialsTo(rabbit);
         }
 
         /// <summary>Logs additions, record changes, and removals. Passwords are not written.</summary>

@@ -5,8 +5,8 @@ using VectorNNTPD.BackFillerService.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {

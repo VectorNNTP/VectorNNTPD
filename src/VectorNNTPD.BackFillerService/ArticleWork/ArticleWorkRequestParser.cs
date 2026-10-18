@@ -1,6 +1,7 @@
 using System.Text.Json;
-using VectorNNTPD.BackFillerService.Articles.Validation;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Articles.Validation;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {

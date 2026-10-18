@@ -101,9 +101,13 @@ namespace VectorNNTPD.Common.Logging
         /// <param name="compressor">Compression used when a file becomes inactive. Defaults to gzip.</param>
         /// <param name="onCompletedFile">
         /// Invoked with the uncompressed path after it is closed and before compression.
-        /// Exceptions are logged and do not skip compression.
+        /// Exceptions other than <see cref="OperationCanceledException"/> are written to Serilog self-log and do not skip compression.
+        /// <see cref="OperationCanceledException"/> propagates to the caller.
         /// </param>
         /// <param name="timeProvider">Clock for roll checkpoints. Defaults to <see cref="TimeProvider.System"/>.</param>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="path"/> is empty or its file name is <c>.</c>, <c>..</c>, or contains a directory separator.</exception>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="path"/> or <paramref name="textFormatter"/> is null.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="fileSizeLimitBytes"/> or <paramref name="retainedFileCountLimit"/> is less than 1.</exception>
         public GzipRollingFileSink(
             string path,
             ITextFormatter textFormatter,
@@ -150,6 +154,14 @@ namespace VectorNNTPD.Common.Logging
             _directory = Path.GetFullPath(pathDirectory);
             _filenamePrefix = Path.GetFileNameWithoutExtension(path);
             _filenameSuffix = Path.GetExtension(path);
+            if (string.IsNullOrEmpty(_filenamePrefix)
+                || _filenamePrefix is "." or ".."
+                || _filenamePrefix.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0
+                || _filenameSuffix.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+            {
+                throw new ArgumentException("The log path file name must be a single relative segment.", nameof(path));
+            }
+
             _filenameMatcher = new Regex(
                 "^" +
                 Regex.Escape(_filenamePrefix) +
@@ -297,7 +309,7 @@ namespace VectorNNTPD.Common.Logging
                 {
                     _onCompletedFile?.Invoke(path);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     SelfLog.WriteLine("Completed-log handler failed for {0}: {1}", path, ex);
                 }
@@ -307,7 +319,7 @@ namespace VectorNNTPD.Common.Logging
                 {
                     compressed = _compressor.TryCompressAndReplace(path);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     SelfLog.WriteLine("Log compression threw for {0}: {1}", path, ex);
                 }
@@ -409,7 +421,7 @@ namespace VectorNNTPD.Common.Logging
                 token += "_" + sequence.Value.ToString("000", CultureInfo.InvariantCulture);
             }
 
-            return Path.Combine(_directory, _filenamePrefix + token + _filenameSuffix);
+            return Path.Join(_directory, _filenamePrefix + token + _filenameSuffix);
         }
 
         /// <summary>Returns whether <paramref name="path"/> is the open active file, using a case-insensitive comparison.</summary>
@@ -422,7 +434,7 @@ namespace VectorNNTPD.Common.Logging
         /// <param name="instant">Local time.</param>
         /// <returns><see langword="null"/> when the interval is infinite.</returns>
         /// <exception cref="InvalidOperationException">The interval is not infinite, year, month, day, hour, or minute.</exception>
-        private DateTime? Checkpoint(DateTime instant) => _interval switch
+        internal DateTime? Checkpoint(DateTime instant) => _interval switch
         {
             RollingInterval.Infinite => null,
             RollingInterval.Year => new DateTime(instant.Year, 1, 1, 0, 0, 0, instant.Kind),
@@ -444,7 +456,7 @@ namespace VectorNNTPD.Common.Logging
         /// <param name="instant">Local time.</param>
         /// <returns><see langword="null"/> when the interval is infinite.</returns>
         /// <exception cref="InvalidOperationException">The interval is not infinite, year, month, day, hour, or minute.</exception>
-        private DateTime? NextCheckpoint(DateTime instant) => _interval switch
+        internal DateTime? NextCheckpoint(DateTime instant) => _interval switch
         {
             RollingInterval.Infinite => null,
             RollingInterval.Year => new DateTime(instant.Year + 1, 1, 1, 0, 0, 0, instant.Kind),

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using VectorNNTPD.Common.Configuration;
 
 namespace VectorNNTPD.BackFillerService.Configuration
 {

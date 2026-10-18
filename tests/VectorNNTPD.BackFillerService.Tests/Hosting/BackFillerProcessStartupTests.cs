@@ -2,6 +2,8 @@ using System.Diagnostics;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting
 {

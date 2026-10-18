@@ -4,8 +4,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using System.Text;
 
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {
@@ -671,7 +673,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Outcome = ArticleWorkOutcome.Success,
                 Fqdn = ArticleWorkTestDeliveries.CanonicalFqdn,
                 ListenerPort = ArticleWorkTestDeliveries.CanonicalListenerPort,
-                ArticleId = VectorNNTPD.BackFillerService.Articles.ArticleId.ParseLowerHex(
+                ArticleId = VectorNNTPD.Common.Articles.ArticleId.ParseLowerHex(
                     ArticleWorkTestDeliveries.CanonicalArticleIdHex),
             };
 

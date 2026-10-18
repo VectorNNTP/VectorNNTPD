@@ -1,4 +1,6 @@
-using VectorNNTPD.BackFillerService.Articles.Parsing;
+
+using VectorNNTPD.Common.Articles.Parsing;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {

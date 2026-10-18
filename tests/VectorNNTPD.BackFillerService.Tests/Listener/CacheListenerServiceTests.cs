@@ -5,14 +5,17 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Abstractions;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Listener;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Retention;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
+using System.Net.Sockets;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Networking.Certificates;
+using System.Net;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Listener
 {

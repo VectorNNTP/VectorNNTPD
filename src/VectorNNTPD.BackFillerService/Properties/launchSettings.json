@@ -2,7 +2,7 @@
   "profiles": {
     "BackFiller": {
       "commandName": "Project",
-      "commandLineArgs": "--console"
+      "commandLineArgs": "--console --log-context"
     }
   }
 }

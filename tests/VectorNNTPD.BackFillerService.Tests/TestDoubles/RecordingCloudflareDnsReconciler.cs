@@ -1,5 +1,6 @@
-using VectorNNTPD.BackFillerService.Cloudflare;
-using VectorNNTPD.BackFillerService.Networking;
+
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.Common.Networking;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {
@@ -18,8 +19,17 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <summary>Recorded <see cref="RemoveAllRecordsForFqdnAsync"/> zone/FQDN pairs.</summary>
         public List<(string ZoneId, string Fqdn)> RemoveCalls { get; } = [];
 
+        /// <summary>Recorded <see cref="DeleteRecordIdsAsync"/> calls and the number of ids requested.</summary>
+        public List<(string ZoneId, string Fqdn, int IdCount)> DeleteCalls { get; } = [];
+
         /// <summary>When set, thrown after the reconcile call is recorded; does not contact Cloudflare.</summary>
         public Exception? ReconcileException { get; set; }
+
+        /// <summary>
+        /// Whether the last recorded reconcile is treated as having deleted a pre-existing record.
+        /// Tests set this before a failing reconcile when they need the compensating-cleanup branch.
+        /// </summary>
+        public bool DeletedPreExistingDuringLastReconcile { get; set; }
 
         /// <summary>
         /// Records zone and FQDN under lock, then throws <see cref="ReconcileException"/> when configured.
@@ -74,6 +84,44 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             lock (_gate)
             {
                 RemoveCalls.Add((zoneId, fqdn));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Returns no record ids. Does not contact Cloudflare.</summary>
+        /// <param name="zoneId">Zone id. Not recorded.</param>
+        /// <param name="fqdn">FQDN. Not recorded.</param>
+        /// <param name="cancellationToken">Honored before returning.</param>
+        /// <returns>An empty id list.</returns>
+        public Task<IReadOnlyList<string>> ListRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        /// <summary>Completes without deleting the supplied ids. Does not contact Cloudflare.</summary>
+        /// <param name="zoneId">Zone id. Not recorded.</param>
+        /// <param name="fqdn">FQDN. Not recorded.</param>
+        /// <param name="recordIds">Record ids. Not deleted.</param>
+        /// <param name="cancellationToken">Honored before returning.</param>
+        /// <param name="operationTimeout">Ignored.</param>
+        /// <returns>A completed task.</returns>
+        public Task DeleteRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyCollection<string> recordIds,
+            CancellationToken cancellationToken,
+            TimeSpan? operationTimeout = null)
+        {
+            ArgumentNullException.ThrowIfNull(recordIds);
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                DeleteCalls.Add((zoneId, fqdn, recordIds.Count));
             }
 
             return Task.CompletedTask;

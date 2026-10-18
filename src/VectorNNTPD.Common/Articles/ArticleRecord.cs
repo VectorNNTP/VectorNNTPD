@@ -14,7 +14,7 @@ namespace VectorNNTPD.Common.Articles
     public readonly struct ArticleRecord
     {
         /// <summary>
-        /// Canonical unstuffed article buffer. Field ranges index these bytes. The struct stores the reference and does not copy the array.
+        /// Canonical stuffed article buffer. Field ranges index these bytes. The struct stores the reference and does not copy the array.
         /// </summary>
         private readonly byte[] _artData;
 
@@ -27,7 +27,7 @@ namespace VectorNNTPD.Common.Articles
         /// <param name="artLines">Body line count for overview <c>:lines</c>.</param>
         /// <param name="canonicalUtc">Winning Date-family header as UTC.</param>
         /// <param name="parseStatus">Parse/validation state of this record, not of any request.</param>
-        /// <param name="artData">Canonical unstuffed article bytes whose lifetime is managed by the caller workflow.</param>
+        /// <param name="artData">Canonical stuffed article bytes whose lifetime is managed by the caller workflow. The record does not copy this array.</param>
         /// <param name="fields">Header value ranges into <paramref name="artData"/>.</param>
         internal ArticleRecord(
             ArticleId artId,
@@ -62,7 +62,7 @@ namespace VectorNNTPD.Common.Articles
         /// </remarks>
         internal ulong ArtHash { get; }
 
-        /// <summary>Gets the canonical unstuffed article size; always <c>ArtData.Length</c>.</summary>
+        /// <summary>Gets the stuffed retained article size; always <c>ArtData.Length</c>.</summary>
         public int ArtSize => _artData?.Length ?? 0;
 
         /// <summary>Gets the Diablo-derived article type flags. Not <c>NntpArticleType</c>.</summary>
@@ -72,8 +72,8 @@ namespace VectorNNTPD.Common.Articles
         /// Gets the body line count for overview <c>:lines</c>.
         /// Empty body is 0. Each CRLF/CR/LF-terminated line counts as one line; a final
         /// unterminated fragment also counts as one line. Uses the same walk as the parser
-        /// body-length check. Materialization does not rewrite the body, so the count is
-        /// valid for canonical ArtData.
+        /// body-length check. Body dot-stuffing adds a leading dot and does not add a line,
+        /// so the count remains valid for canonical ArtData.
         /// </summary>
         public int ArtLines { get; }
 
@@ -86,7 +86,10 @@ namespace VectorNNTPD.Common.Articles
         /// </summary>
         public ArticleParseStatus ParseStatus { get; }
 
-        /// <summary>Gets the canonical unstuffed article bytes referenced by this record (headers, blank line, encoded body).</summary>
+        /// <summary>
+        /// Gets the canonical retained article bytes: unstuffed headers, the header/body separator,
+        /// and a body whose lines that begin with <c>.</c> already have one stuffing dot. The NNTP terminator is not included.
+        /// </summary>
         public ReadOnlyMemory<byte> ArtData => _artData;
 
         /// <summary>Gets header value ranges into <see cref="ArtData"/>.</summary>

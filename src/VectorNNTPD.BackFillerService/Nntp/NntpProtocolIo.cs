@@ -1,3 +1,6 @@
+using System.Text;
+using System.Buffers;
+
 namespace VectorNNTPD.BackFillerService.Nntp
 {
     /// <summary>

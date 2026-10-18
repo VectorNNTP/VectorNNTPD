@@ -11,7 +11,11 @@ using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
+using System.Net.Sockets;
+using System.Net;
 
 namespace VectorNNTPD.BackFillerService.Tests.Logging
 {

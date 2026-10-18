@@ -32,8 +32,23 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Logger for idle, provisioning, and renewal events.</summary>
         private readonly ILogger<AcmeCertificateService> _logger;
 
+        /// <summary>Clock for the renewal delay and due checks. Production uses <see cref="TimeProvider.System"/>.</summary>
+        private readonly TimeProvider _time;
+
+        /// <summary>Optional application observer. Null skips watchdog notification.</summary>
+        private readonly IAcmeCertificateObservation? _observation;
+
         /// <summary>Cancels <see cref="RunRenewalLoopAsync"/>. Disposed by <see cref="DisposeAsync"/>.</summary>
         private readonly CancellationTokenSource _runCts = new();
+
+        /// <summary>Completed renewal checks, including failed checks. Shutdown cancellation is excluded.</summary>
+        private int _renewalChecksCompleted;
+
+        /// <summary>How many renewal delays the loop has armed.</summary>
+        private int _renewalWaitsStarted;
+
+        /// <summary>Faults the next renewal iterations should throw before contacting the manager. Zero in production.</summary>
+        private int _renewalFaultsToInject;
 
         /// <summary>Manager created during a TLS-enabled start. <see langword="null"/> when TLS is disabled or start has not created it.</summary>
         private CertificateManager? _manager;
@@ -53,12 +68,16 @@ namespace VectorNNTPD.Common.Acme
         /// <param name="certificatePublisher">Publishes PFX bytes for the TLS listener.</param>
         /// <param name="readiness">Gate set after the first successful publish.</param>
         /// <param name="logger">Logger for this service.</param>
+        /// <param name="time">Clock for renewal delays and due checks. Null uses <see cref="TimeProvider.System"/>.</param>
+        /// <param name="observation">Optional certificate observer. Null leaves application health unchanged.</param>
         internal AcmeCertificateService(
             IOptions<AcmeCloudflareOptions> options,
             AcmeComponentFactory factory,
             IAcmeCertificatePublisher certificatePublisher,
             IAcmeCertificateReadiness readiness,
-            ILogger<AcmeCertificateService> logger)
+            ILogger<AcmeCertificateService> logger,
+            TimeProvider? time = null,
+            IAcmeCertificateObservation? observation = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(factory);
@@ -70,6 +89,21 @@ namespace VectorNNTPD.Common.Acme
             _certificatePublisher = certificatePublisher;
             _readiness = readiness;
             _logger = logger;
+            _time = time ?? TimeProvider.System;
+            _observation = observation;
+        }
+
+        /// <summary>Completed renewal checks, including failed checks that notified the observer. Shutdown cancellation is excluded.</summary>
+        internal int RenewalChecksCompleted => Volatile.Read(ref _renewalChecksCompleted);
+
+        /// <summary>How many renewal delays the loop has armed.</summary>
+        internal int RenewalWaitsStarted => Volatile.Read(ref _renewalWaitsStarted);
+
+        /// <summary>Faults the next renewal iterations should throw before contacting the manager. Zero in production.</summary>
+        internal int RenewalFaultsToInject
+        {
+            get => Volatile.Read(ref _renewalFaultsToInject);
+            set => Volatile.Write(ref _renewalFaultsToInject, value);
         }
 
         /// <summary>Stable service name <c>AcmeCertificate</c> read by the host application-service adapter.</summary>
@@ -116,8 +150,9 @@ namespace VectorNNTPD.Common.Acme
             try
             {
                 var material = await _manager.EnsureCertificateAsync(cancellationToken).ConfigureAwait(false);
-                _certificatePublisher.PublishFromPfx(material.PfxBytes, options.AcmeCertificatePassword);
+                _certificatePublisher.PublishFromPfx(material.PfxBytes, _manager.CurrentPfxPassword);
                 _readiness.MarkReady();
+                _observation?.OnObserved(_manager.EvaluateExisting(_time.GetUtcNow()), renewalReplacedCertificate: true);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -187,6 +222,9 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>
         /// After <see cref="RenewalCheckInterval"/>, renews when due and publishes the new PFX.
+        /// Each attempt reads <see cref="AcmeCloudflareOptions.AcmeCertificatePassword"/> once and uses that snapshot
+        /// for issuance, persistence, and publish. A blank snapshot keeps the password that last saved the live PFX.
+        /// The existing file is loaded with the password that saved it, not with a newer snapshot.
         /// Failures other than cancellation of <paramref name="cancellationToken"/> are logged and the loop continues.
         /// </summary>
         /// <param name="cancellationToken">Stops the loop. This is <see cref="_runCts"/>, not the start token.</param>
@@ -198,29 +236,68 @@ namespace VectorNNTPD.Common.Acme
                 return;
             }
 
-            var password = _options.Value.AcmeCertificatePassword;
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    await Task.Delay(RenewalCheckInterval, cancellationToken).ConfigureAwait(false);
-                    var renewed = await _manager.RenewIfDueAsync(cancellationToken).ConfigureAwait(false);
+                    Interlocked.Increment(ref _renewalWaitsStarted);
+                    await Task.Delay(RenewalCheckInterval, _time, cancellationToken).ConfigureAwait(false);
+                    if (Volatile.Read(ref _renewalFaultsToInject) > 0
+                        && Interlocked.Decrement(ref _renewalFaultsToInject) >= 0)
+                    {
+                        throw new InvalidOperationException("injected ACME renewal fault");
+                    }
+
+                    var now = _time.GetUtcNow();
+                    var configuredPassword = _options.Value.AcmeCertificatePassword;
+                    var issuePassword = string.IsNullOrWhiteSpace(configuredPassword) ? null : configuredPassword;
+                    var renewed = await _manager.RenewIfDueAsync(cancellationToken, now, issuePassword).ConfigureAwait(false);
                     if (renewed)
                     {
                         var material = _manager.CurrentMaterial
                             ?? throw new AcmeCertificateException("no_certificate", "renewed without material");
-                        _certificatePublisher.PublishFromPfx(material.PfxBytes, password);
+                        var publishPassword = issuePassword ?? _manager.CurrentPfxPassword;
+                        _certificatePublisher.PublishFromPfx(material.PfxBytes, publishPassword);
                         AcmeLogMessages.RenewalCompleted(_logger);
                     }
+
+                    _observation?.OnObserved(_manager.EvaluateExisting(now), renewed);
+                    Interlocked.Increment(ref _renewalChecksCompleted);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     break;
                 }
+                // codeql[cs/catch-of-all-exceptions] Certificate renewal must record every failure and continue the documented recovery path.
                 catch (Exception ex)
                 {
                     AcmeLogMessages.RenewalCheckFailed(_logger, AcmeFailureSanitizer.Sanitize(ex));
+                    ObserveFailure();
+                    Interlocked.Increment(ref _renewalChecksCompleted);
                 }
+            }
+        }
+
+        /// <summary>
+        /// After a renewal exception, re-reads the certificate and notifies <see cref="_observation"/>.
+        /// An unreadable store is reported through <see cref="IAcmeCertificateObservation.OnUnreadable"/>.
+        /// Shutdown cancellation does not call this method.
+        /// </summary>
+        private void ObserveFailure()
+        {
+            if (_manager is null || _observation is null)
+            {
+                return;
+            }
+
+            try
+            {
+                _observation.OnObserved(_manager.EvaluateExisting(_time.GetUtcNow()), renewalReplacedCertificate: false);
+            }
+            // codeql[cs/catch-of-all-exceptions] An unreadable certificate must be reported without ending the renewal loop.
+            catch (Exception ex)
+            {
+                _observation.OnUnreadable(ex);
             }
         }
     }

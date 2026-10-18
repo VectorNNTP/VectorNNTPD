@@ -19,7 +19,7 @@ NNTPD TAKETHIS, POST, and IHAVE construct an ArticleRecord before queue admissio
 
 ## 1. Overview
 
-`ArticleRecord` is a `readonly struct` that holds the result of one successful Common parse, Diablo-derived classification, and Date/Path canonicalization of a **destuffed** NNTP article.
+`ArticleRecord` is a `readonly struct` that holds the result of one successful Common parse, Diablo-derived classification, and Date/Path canonicalization. The factory input is a destuffed article. The retained `ArtData` is the stuffed canonical image.
 
 It exists so Vector processes can keep article identity, type, size, line count, overview ranges, and a fast fingerprint of the canonical bytes **without scanning the article again**. Downstream code that already has a `CanonicalV1` record should read `ArtId`, `ArtType`, `Fields`, `ArtSize`, and `ArtLines` instead of calling `NntpArticleParser.Parse` again.
 
@@ -84,7 +84,7 @@ The constructor is `internal`. The public construction path is `ArticleRecordFac
 | `ArtLines` | `int` | Body line count from the parser walk (overview `:lines`) |
 | `CanonicalUtc` | `DateTime` | Winning Date-family header resolved to UTC |
 | `ParseStatus` | `ArticleParseStatus` | `None` or `CanonicalV1` |
-| `ArtData` | `ReadOnlyMemory<byte>` | Canonical unstuffed article (headers + blank line + encoded body) |
+| `ArtData` | `ReadOnlyMemory<byte>` | Canonical stuffed article (headers + blank line + body with dot-leading lines already stuffed). The NNTP terminator is not included. |
 | `Fields` | `ArticleFieldTable` | Integer ranges into **this** ArtData |
 
 The span properties slice `Fields.*` against the referenced buffer. They allocate no header strings.
@@ -153,9 +153,9 @@ ArtHash is not folded into the materializer. The path is: materialize one `byte[
 
 ## 5. ArtSize
 
-`ArtSize` is `ArtData.Length` of the **canonical unstuffed** article: destuffed headers + blank-line separator + destuffed body, after Date/Path rewrite.
+`ArtSize` is `ArtData.Length` of the **canonical stuffed** article: headers + blank-line separator + body, after Date/Path rewrite, plus one byte for each body line whose first content byte is `.`.
 
-It is **not** NNTP wire size. Dot-stuffing makes wire length transport-dependent. Tests assert `record.ArtSize == record.ArtData.Length` and, when Path is rewritten, `ArtSize != destuffed.Length` (`TryCreate_ProducesCanonicalV1RecordWithDiabloTypeAndFinalRanges`).
+Header lines are not stuffed. The terminating NNTP `.CRLF` is not stored, so `ArtSize` is not the full multiline response length. Tests assert `record.ArtSize == record.ArtData.Length` and, when Path is rewritten, `ArtSize != destuffed.Length` (`TryCreate_ProducesCanonicalV1RecordWithDiabloTypeAndFinalRanges`). A body with no dot-leading line has the same length as the pre-stuff projection.
 
 ---
 
@@ -214,7 +214,7 @@ Semantics (tests: `Parse_BodyLineCount_MatchesParserLineWalk`):
 
 Terminators: CR, LF, or CRLF (`FindLineTerminator` / `AdvancePastTerminator`). The last unterminated fragment counts as one line.
 
-Materialization copies the body byte-for-byte, so the destuffed body line count is valid for canonical ArtData. Overview `:lines` can use `ArtLines` without another body scan. `:bytes` is `ArtSize`.
+Materialization copies body lines and inserts one leading `.` on each line whose first content byte is `.`. That does not add a line, so the destuffed body line count stays valid for canonical ArtData. Overview `:lines` can use `ArtLines` without another body scan. `:bytes` is the stuffed `ArtSize`.
 
 ---
 
@@ -325,7 +325,7 @@ Headers are split on CR, LF, or CRLF. A zero-length line is the header/body sepa
 
 ### yEnc
 
-If a body line in the detection window starts with `=ybegin `, `YEncArticleValidator.Validate` runs on the destuffed body. Failure → `YEncDecodingFailed`. Success does **not** replace the body with decoded payload. ArtData keeps encoded yEnc.
+If a body line in the detection window starts with `=ybegin `, `YEncArticleValidator.Validate` runs on the destuffed body. Failure → `YEncDecodingFailed`. Success does **not** replace the body with decoded payload. ArtData keeps encoded yEnc, with dot-leading body lines stuffed.
 
 ### Classification during parse
 
@@ -336,8 +336,8 @@ Parse also sets `NntpArticleParseResult.ArticleType` (`NntpArticleType`). Factor
 | | Validation (parser) | Canonicalization (materializer) |
 |---|---|---|
 | Input | Destuffed article | Accepted `NntpArticleParseResult` |
-| Mutates bytes | No | Yes: winning Date value + Path value or Path insert |
-| Output | Slices + metadata | One new exact-size `byte[]` |
+| Mutates bytes | No | Yes: winning Date value, Path value or Path insert, and one stuffing dot on each dot-leading body line |
+| Output | Slices + metadata | One new exact-size stuffed `byte[]` |
 
 If parse fails, the factory never materializes.
 
@@ -405,7 +405,7 @@ There is **no** `ArticleRecord` method that applies a later hop. Subsequent-hop 
 
 ## 11. ArtData and ownership / lifetime
 
-ArtData is canonical unstuffed NNTP article bytes: headers, one blank line, body. Not wire framing, not dot-stuffed transport, not decoded yEnc, not rebuilt MIME.
+ArtData is the canonical retained article: unstuffed headers, one blank line, and a body whose dot-leading lines already contain one stuffing dot. It is not the NNTP status line, not the terminating `.CRLF`, and not decoded yEnc or rebuilt MIME. Header lines that begin with `.` are stuffed only by `VectorNNTPD.BackFillerService.ArticleWork.ArticleWorkDeliveryFraming`, in a separate socket image. The listener appends one `.\r\n` after that image. Callers may retain the `ArtData` array. The factory does not mutate it after the record is returned.
 
 `ArticleRecord` is a `readonly struct`. It holds a `byte[]` reference and exposes it as `ReadOnlyMemory<byte>`. Copying the struct copies the reference; it does **not** copy the article. The type system does not enforce unique ownership.
 
@@ -580,9 +580,11 @@ A rematerialized buffer would change ArtData, ArtSize, ArtHash, and Path/later r
 
 ## 17. Current scope / future integration
 
-ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. It is **not** used by:
+ArticleRecord v1 is a Common model plus `ArticleRecordFactory`. That factory is the only canonical materializer. BackFiller parse, validation, retention, and the listener all use its stuffed `ArtData`. There is no second BackFiller materializer. `NntpArticleIdentity.MatchesRequest` compares the retained record with the Article Work Message-ID.
 
-- BackFiller retrieve / parse / materialize / retain (Phase 4 still retains a canonical `byte[]` and uses `NntpArticleIdentity.MatchesRequest` separately)
+This repository does not persist article bodies or `ArtHash` to disk. Retention is an in-memory index in `ArticleRetentionAuthority`. Overview `:bytes` is `ArtSize` of the retained buffer when an application encodes an overview. VATP META stores `record.ArtHash`, and the receiver checks XXH3-64 of the ArtData bytes it actually received. It does not destuff or restuff before that check, and it does not accept a second hash of a different representation. A peer that still transfers unstuffed ArtData will pass that check when its META hash matches those unstuffed bytes. A later delivery that assumes the body is already stuffed would then stuff it again. This repository has no second materializer and no version field that distinguishes the two representations.
+
+It is **not** used by:
 - NNTPD IHAVE now constructs CanonicalV1 `ArticleRecord` before queue admission (same factory as TAKETHIS/POST). `IhaveArticleInterpreter.DestuffToArticle` remains a bench/classifier helper only.
 - RabbitMQ Article Work JSON / cache URIs
 - Retention, storage, XOVER/XHDR
@@ -593,7 +595,6 @@ NNTPD ingestion encodes the Common OverviewDB protobuf subset (`OverviewArticleV
 
 ### Future scope (not implemented)
 
-- Construct records at BackFiller retrieve/retain
 - Request Message-ID match as an orchestration step **after** or **beside** factory construction
 - Path prepend that produces a new record without a full reparse
 - Serialized envelope of the full record (scalars + ArtData + range table + ArtHash check)

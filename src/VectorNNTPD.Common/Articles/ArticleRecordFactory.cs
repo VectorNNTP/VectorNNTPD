@@ -9,16 +9,18 @@ namespace VectorNNTPD.Common.Articles
 {
     /// <summary>
     /// Builds an <see cref="ArticleRecord"/> from destuffed article bytes or from a validated
-    /// canonical transfer (META + ArtData).
+    /// canonical transfer (META + stuffed ArtData).
     /// </summary>
     /// <remarks>
     /// Uses the existing Common parser, Diablo <see cref="ArticleTypeClassifier"/>, and
-    /// Date/Path materializer. ArtHash is one-shot XXH3-64 of the completed
-    /// canonical ArtData (<c>XxHash3.HashToUInt64</c>), not an incremental hash
-    /// and not IEEE CRC-32.
+    /// Date/Path materializer. The materialized ArtData is headers, the separator, and a body
+    /// with one stuffing dot on each line whose first content byte is <c>.</c>. The NNTP terminator
+    /// is not stored. ArtHash is one-shot XXH3-64 of that stuffed buffer
+    /// (<c>XxHash3.HashToUInt64</c>), not an incremental hash and not IEEE CRC-32.
     /// The destuffed source buffer is not retained. FieldTable
     /// ranges are located on the materialized ArtData so Date/Path length changes cannot
-    /// leave offsets pointing at the discarded source.
+    /// leave offsets pointing at the discarded source. Stuffing inserts bytes only in the body,
+    /// so header ranges stay on the header bytes.
     /// This factory has no request Message-ID parameter and does not match an IHAVE/ARTICLE
     /// request. Request matching remains an ingestion/orchestration responsibility.
     /// NNTPD TAKETHIS and POST construct the record before queue admission.
@@ -31,8 +33,8 @@ namespace VectorNNTPD.Common.Articles
         /// Parses and materializes an article, recording a receiving-system Path hop.
         /// </summary>
         /// <param name="parser">Common article parser. Its local identity is the application FQDN.</param>
-        /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
-        /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
+        /// <param name="destuffedArticle">Destuffed article bytes. Not retained after success. The returned ArtData is the stuffed form.</param>
+        /// <returns>Accepted record referencing the stuffed ArtData buffer, or a failure classification.</returns>
         public static ArticleRecordCreateResult TryCreate(
             NntpArticleParser parser,
             ReadOnlyMemory<byte> destuffedArticle)
@@ -42,7 +44,7 @@ namespace VectorNNTPD.Common.Articles
         /// Parses, classifies, and materializes destuffed article bytes into a CanonicalV1 record.
         /// </summary>
         /// <param name="parser">Common article parser. Its local identity is the application FQDN used by <see cref="ArticlePathMode.Traverse"/>.</param>
-        /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
+        /// <param name="destuffedArticle">Destuffed article bytes. Not retained after success. The returned ArtData is the stuffed form.</param>
         /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN. <see cref="ArticlePathMode.Normalize"/> does not.</param>
         /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
         internal static ArticleRecordCreateResult TryCreate(
@@ -60,7 +62,7 @@ namespace VectorNNTPD.Common.Articles
         /// Parses and materializes an article with one captured size limit and Path tracker.
         /// </summary>
         /// <param name="parser">Common article parser. Its local identity is the application FQDN.</param>
-        /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
+        /// <param name="destuffedArticle">Destuffed article bytes. Not retained after success. The returned ArtData is the stuffed form.</param>
         /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN.</param>
         /// <param name="maxArticleBytes">Article-size boundary captured for this operation.</param>
         /// <param name="organizationalTrackerHost">Path tracker captured with <paramref name="maxArticleBytes"/>.</param>

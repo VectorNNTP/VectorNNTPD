@@ -2,8 +2,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.EnvironmentVariables;
 using Microsoft.Extensions.Hosting;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -18,8 +19,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         [Fact]
         public void Production_assembly_names_the_configuration_files()
         {
-            Assert.Equal("VectorNNTPD.BackFillerService", typeof(ApplicationJsonConfiguration).Assembly.GetName().Name);
-            Assert.Equal("VectorNNTPD.RabbitMQ.json", ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            Assert.Equal("VectorNNTPD.Common", typeof(ApplicationJsonConfiguration).Assembly.GetName().Name);
+            Assert.Null(typeof(BackFillerJsonFiles).Assembly.GetType(
+                "VectorNNTPD.BackFillerService.Configuration.ApplicationJsonConfiguration"));
+            Assert.Equal("VectorNNTPD.RabbitMQ.json", BackFillerJsonFiles.SharedRabbitMqFileName);
 
             var root = RepositoryFiles.Root();
             Assert.True(File.Exists(RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService", "VectorNNTPD.BackFillerService.json")));
@@ -42,14 +45,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             builder.AddEnvironmentVariables();
 
             ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
-            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production");
+            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", BackFillerJsonFiles.SharedRabbitMqFileName);
 
             var primary = ApplicationJsonConfiguration.PrimaryJsonFileName();
             var environment = ApplicationJsonConfiguration.EnvironmentJsonFileName("Production");
             var files = FileSources(builder).ToArray();
             var actual = files.Select(static source => source.Path ?? string.Empty).ToArray();
             Assert.Equal(
-                new[] { primary, environment, ApplicationJsonConfiguration.SharedRabbitMqFileName },
+                new[] { primary, environment, BackFillerJsonFiles.SharedRabbitMqFileName },
                 actual);
             Assert.False(files[0].Optional);
             Assert.False(files[0].ReloadOnChange);
@@ -70,7 +73,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             builder.AddEnvironmentVariables();
 
             ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
-            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production");
+            ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", BackFillerJsonFiles.SharedRabbitMqFileName);
 
             var files = FileSources(builder).ToArray();
             Assert.Equal(3, files.Length);
@@ -80,7 +83,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         }
 
         /// <summary>
-        /// Optional environment and RabbitMQ files may be absent without failing <see cref="IConfigurationBuilder.Build"/>.
+        /// Optional environment and RabbitMQ files may be absent without failing <see cref="IConfigurationBuilder.Build"/>. A present <c>RabbitMq.json</c> is not loaded in their place.
         /// </summary>
         [Fact]
         public void Missing_optional_files_do_not_fail_configuration_build()
@@ -88,13 +91,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             var directory = Directory.CreateTempSubdirectory("bf-json-missing-");
             try
             {
+                File.WriteAllText(Path.Join(directory.FullName, "RabbitMq.json"), """{"RabbitMQ":{"Hosts":["198.18.0.9"]}}""");
                 var builder = new ConfigurationBuilder();
                 builder.SetBasePath(directory.FullName);
                 builder.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
                 builder.AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: false);
                 ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
-                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production");
+                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", BackFillerJsonFiles.SharedRabbitMqFileName);
 
+                var paths = FileSources(builder).Select(static source => source.Path).ToArray();
+                Assert.Contains(BackFillerJsonFiles.SharedRabbitMqFileName, paths);
+                Assert.DoesNotContain("RabbitMq.json", paths);
                 var configuration = builder.Build();
                 Assert.Null(configuration["BackFiller:ServerId"]);
                 Assert.Null(configuration["RabbitMQ:Hosts:0"]);
@@ -174,7 +181,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                     builder.Environment.EnvironmentName);
                 ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(
                     builder.Configuration,
-                    builder.Environment.EnvironmentName);
+                    builder.Environment.EnvironmentName,
+                    BackFillerJsonFiles.SharedRabbitMqFileName);
 
                 var paths = FileSources(builder.Configuration).Select(static source => source.Path).ToArray();
                 Assert.DoesNotContain(
@@ -186,7 +194,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 Assert.Contains(
                     ApplicationJsonConfiguration.EnvironmentJsonFileName(builder.Environment.EnvironmentName),
                     paths);
-                Assert.Contains(ApplicationJsonConfiguration.SharedRabbitMqFileName, paths);
+                Assert.Contains(BackFillerJsonFiles.SharedRabbitMqFileName, paths);
             }
             finally
             {
@@ -195,7 +203,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         }
 
         /// <summary>
-        /// The shipped RabbitMQ file is copied into the service build output under <see cref="ApplicationJsonConfiguration.SharedRabbitMqFileName"/>, binds, and validates.
+        /// The shipped RabbitMQ file is copied into the service build output under <see cref="BackFillerJsonFiles.SharedRabbitMqFileName"/>, binds, and validates.
         /// </summary>
         [Fact]
         public void Shipped_rabbitmq_file_is_copied_and_loads()
@@ -203,7 +211,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             const string obsoleteFileName = "VectorNNTP.RabbitMQ.json";
             var root = RepositoryFiles.Root();
             var projectDirectory = RelativePath.Under(root, "src", "VectorNNTPD.BackFillerService");
-            var sourcePath = Path.Join(projectDirectory, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            var sourcePath = Path.Join(projectDirectory, BackFillerJsonFiles.SharedRabbitMqFileName);
             var project = File.ReadAllText(Path.Join(projectDirectory, "VectorNNTPD.BackFillerService.csproj"));
             Assert.Contains("<Content Update=\"VectorNNTPD.RabbitMQ.json\">", project, StringComparison.Ordinal);
             Assert.Contains("<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>", project, StringComparison.Ordinal);
@@ -211,7 +219,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.DoesNotContain(obsoleteFileName, project, StringComparison.Ordinal);
 
             var outputDirectory = ServiceOutputDirectory(root);
-            var outputPath = Path.Join(outputDirectory, ApplicationJsonConfiguration.SharedRabbitMqFileName);
+            var outputPath = Path.Join(outputDirectory, BackFillerJsonFiles.SharedRabbitMqFileName);
             Assert.True(File.Exists(outputPath), outputPath);
             Assert.False(File.Exists(Path.Join(outputDirectory, obsoleteFileName)));
             Assert.Equal(File.ReadAllBytes(sourcePath), File.ReadAllBytes(outputPath));
@@ -219,7 +227,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             var directory = Directory.CreateTempSubdirectory("bf-rabbit-json-");
             try
             {
-                File.Copy(sourcePath, Path.Join(directory.FullName, ApplicationJsonConfiguration.SharedRabbitMqFileName));
+                File.Copy(sourcePath, Path.Join(directory.FullName, BackFillerJsonFiles.SharedRabbitMqFileName));
                 File.WriteAllText(
                     Path.Join(directory.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
                     "{}");
@@ -228,7 +236,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 builder.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
                 builder.AddJsonFile("appsettings.Production.json", optional: true, reloadOnChange: false);
                 ApplicationJsonConfiguration.UseEntryAssemblyJsonFiles(builder, "Production");
-                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production");
+                ApplicationJsonConfiguration.AddSharedRabbitMqJsonFile(builder, "Production", BackFillerJsonFiles.SharedRabbitMqFileName);
 
                 var configuration = builder.Build();
                 Assert.Equal("5672", configuration["RabbitMQ:Port"]);

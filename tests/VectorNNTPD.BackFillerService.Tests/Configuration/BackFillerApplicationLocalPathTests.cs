@@ -4,8 +4,10 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Configuration
 {
@@ -240,6 +242,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(
                 ApplicationLocalPath.ResolveApplicationLocalPath("logs", AppContext.BaseDirectory),
                 runtime.LogDirectory);
+            Assert.Equal("VectorNNTPD.Common", typeof(ApplicationLocalPath).Assembly.GetName().Name);
+            Assert.Null(typeof(BackFillerRuntimeOptions).Assembly.GetType(
+                "VectorNNTPD.BackFillerService.Configuration.ApplicationLocalPath"));
             Assert.Contains(
                 "ApplicationLocalPath.ResolveApplicationLocalPath",
                 File.ReadAllText(FindRepoFile(RelativePath.Under("src", "VectorNNTPD.BackFillerService", "Hosting", "BackFillerServiceCollectionExtensions.cs"))),

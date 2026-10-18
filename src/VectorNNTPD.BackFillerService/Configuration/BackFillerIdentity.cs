@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Configuration;
+
 namespace VectorNNTPD.BackFillerService.Configuration
 {
     /// <summary>

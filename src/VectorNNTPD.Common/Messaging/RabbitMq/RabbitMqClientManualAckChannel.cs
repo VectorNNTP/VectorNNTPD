@@ -1,25 +1,45 @@
+using System.Runtime.ExceptionServices;
 using System.Text;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
+using Serilog.Debugging;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
 {
     /// <summary>Owns one RabbitMQ.Client channel for topology, manual-ack consume, and settlement.</summary>
+    /// <remarks>
+    /// The channel has one consumer slot. Registration and disposal share a gate so a failed registration
+    /// cannot leave a handler attached and dispose cannot close the client channel while registration is in progress.
+    /// Acknowledgement and the delivery callback do not take that gate.
+    /// </remarks>
     internal sealed class RabbitMqClientManualAckChannel : IRabbitMqManualAckChannel
     {
         /// <summary>
         /// Owned channel with publisher confirms disabled. <see cref="DisposeAsync"/> unsubscribes the consumer,
-        /// closes the channel when open (close errors are swallowed), then disposes it.
+        /// closes the channel when this dispose owns the close, then disposes it.
         /// </summary>
         private readonly IChannel _channel;
 
-        /// <summary>Consumer registered by <see cref="BasicConsumeAsync"/>. Unsubscribed on dispose.</summary>
+        /// <summary>Serializes <see cref="BasicConsumeAsync"/> and <see cref="DisposeAsync"/>. Not taken by ack, nack, or the delivery callback.</summary>
+        private readonly SemaphoreSlim _lifecycle = new(1, 1);
+
+        /// <summary>Consumer registered by a completed <see cref="BasicConsumeAsync"/>. Unsubscribed on dispose.</summary>
         private AsyncEventingBasicConsumer? _consumer;
 
         /// <summary>Delivery handler from <see cref="BasicConsumeAsync"/>. A null handler drops the delivery without ack or nack.</summary>
         private Func<RabbitMqManualAckDelivery, Task>? _onDelivery;
 
-        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
+        /// <summary>
+        /// Optional dispose hook. When set, the disposed mark and handler detach run inside the hook before the client channel is closed.
+        /// Article Work uses this so settlement and close do not overlap. Not invoked for ack or nack.
+        /// </summary>
+        private Func<Func<Task>, Task>? _exclusiveDispose;
+
+        /// <summary>Threads waiting to enter <see cref="_lifecycle"/>.</summary>
+        private int _lifecycleWaiters;
+
+        /// <summary><c>1</c> after the first <see cref="DisposeAsync"/> has marked the channel disposed.</summary>
         private int _disposed;
 
         /// <summary>
@@ -37,8 +57,22 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <inheritdoc />
         public long Generation { get; }
 
+        /// <summary>Threads currently waiting to enter consumer registration or disposal.</summary>
+        internal int LifecycleWaiters => Volatile.Read(ref _lifecycleWaiters);
+
+        /// <summary>
+        /// Runs the disposed mark and handler detach inside <paramref name="exclusiveDispose"/> before the client channel is closed.
+        /// </summary>
+        /// <param name="exclusiveDispose">Hook that invokes its argument while the caller holds its own gate. Stored until dispose.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="exclusiveDispose"/> is null.</exception>
+        internal void UseExclusiveDispose(Func<Func<Task>, Task> exclusiveDispose)
+        {
+            ArgumentNullException.ThrowIfNull(exclusiveDispose);
+            Volatile.Write(ref _exclusiveDispose, exclusiveDispose);
+        }
+
         /// <inheritdoc />
-        public bool IsOpen => _channel.IsOpen;
+        public bool IsOpen => Volatile.Read(ref _disposed) == 0 && _channel.IsOpen;
 
         /// <inheritdoc />
         public Task ExchangeDeclareAsync(
@@ -111,19 +145,43 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             ArgumentException.ThrowIfNullOrWhiteSpace(queue);
             ArgumentNullException.ThrowIfNull(onDelivery);
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-            if (!_channel.IsOpen)
+            await EnterLifecycleAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                throw new InvalidOperationException("RabbitMQ channel is not open for consume.");
-            }
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                if (_consumer is not null)
+                {
+                    throw new InvalidOperationException("RabbitMQ manual-ack channel already has a consumer.");
+                }
 
-            _onDelivery = onDelivery;
-            await _channel.BasicQosAsync(0, prefetchCount, global: false, cancellationToken).ConfigureAwait(false);
-            var consumer = new AsyncEventingBasicConsumer(_channel);
-            consumer.ReceivedAsync += OnReceivedAsync;
-            _consumer = consumer;
-            return await _channel
-                .BasicConsumeAsync(queue, autoAck: false, consumer, cancellationToken)
-                .ConfigureAwait(false);
+                if (!_channel.IsOpen)
+                {
+                    throw new InvalidOperationException("RabbitMQ channel is not open for consume.");
+                }
+
+                await _channel.BasicQosAsync(0, prefetchCount, global: false, cancellationToken).ConfigureAwait(false);
+                var consumer = new AsyncEventingBasicConsumer(_channel);
+                _onDelivery = onDelivery;
+                consumer.ReceivedAsync += OnReceivedAsync;
+                try
+                {
+                    var consumerTag = await _channel
+                        .BasicConsumeAsync(queue, autoAck: false, consumer, cancellationToken)
+                        .ConfigureAwait(false);
+                    _consumer = consumer;
+                    return consumerTag;
+                }
+                catch (Exception)
+                {
+                    _onDelivery = null;
+                    consumer.ReceivedAsync -= OnReceivedAsync;
+                    throw;
+                }
+            }
+            finally
+            {
+                _lifecycle.Release();
+            }
         }
 
         /// <inheritdoc />
@@ -151,16 +209,97 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <inheritdoc />
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 1)
+            await EnterLifecycleAsync(CancellationToken.None).ConfigureAwait(false);
+            try
             {
-                return;
+                var close = false;
+                Exception? hookFailure = null;
+
+                async Task MarkDisposedAsync()
+                {
+                    if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                    {
+                        return;
+                    }
+
+                    DetachConsumer();
+                    close = true;
+                }
+
+                try
+                {
+                    var exclusiveDispose = Volatile.Read(ref _exclusiveDispose);
+                    if (exclusiveDispose is null)
+                    {
+                        await MarkDisposedAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await exclusiveDispose(MarkDisposedAsync).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // The hook runs the mark inside the caller's gate. A throw after that mark used to
+                    // skip the client close, and a later dispose saw the channel as already marked and
+                    // skipped the close again. A throw before the mark still has to close the client channel.
+                    hookFailure = ex;
+                    if (Volatile.Read(ref _disposed) == 0)
+                    {
+                        await MarkDisposedAsync().ConfigureAwait(false);
+                    }
+                }
+
+                if (close)
+                {
+                    await CloseChannelAsync().ConfigureAwait(false);
+                }
+
+                if (hookFailure is not null)
+                {
+                    ExceptionDispatchInfo.Capture(hookFailure).Throw();
+                }
+            }
+            finally
+            {
+                _lifecycle.Release();
+            }
+        }
+
+        /// <summary>Waits for <see cref="_lifecycle"/> and reports the waiter to <see cref="LifecycleWaiters"/>.</summary>
+        /// <param name="cancellationToken">Cancels the wait. A cancelled wait does not hold the gate.</param>
+        private async Task EnterLifecycleAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _lifecycleWaiters);
+            try
+            {
+                await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _lifecycleWaiters);
+            }
+        }
+
+        /// <summary>Unsubscribes the current consumer and drops the delivery handler.</summary>
+        private void DetachConsumer()
+        {
+            if (_consumer is not null)
+            {
+                _consumer.ReceivedAsync -= OnReceivedAsync;
+                _consumer = null;
             }
 
-            _consumer?.ReceivedAsync -= OnReceivedAsync;
-            _consumer = null;
-
             _onDelivery = null;
+        }
 
+        /// <summary>
+        /// Closes an open client channel, then disposes it.
+        /// Already-closed, interrupted, I/O, disposed, and timeout failures are written to the Serilog self-log.
+        /// Any other close failure is propagated after dispose.
+        /// </summary>
+        private async ValueTask CloseChannelAsync()
+        {
             try
             {
                 if (_channel.IsOpen)
@@ -168,11 +307,18 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     await _channel.CloseAsync().ConfigureAwait(false);
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is AlreadyClosedException
+                or OperationInterruptedException
+                or IOException
+                or ObjectDisposedException
+                or TimeoutException)
             {
+                SelfLog.WriteLine("RabbitMQ channel close failed and disposal will continue. " + ex);
             }
-
-            await _channel.DisposeAsync().ConfigureAwait(false);
+            finally
+            {
+                await _channel.DisposeAsync().ConfigureAwait(false);
+            }
         }
 
         /// <summary>

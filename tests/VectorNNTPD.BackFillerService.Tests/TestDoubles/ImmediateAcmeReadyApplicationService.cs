@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.Common.Acme;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

@@ -2,7 +2,10 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Runtime.ExceptionServices;
-using VectorNNTPD.BackFillerService.Articles;
+using System.Net.Security;
+using VectorNNTPD.Common.Articles;
+using System.Buffers;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {

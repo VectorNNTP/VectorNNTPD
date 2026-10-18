@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {
@@ -440,7 +441,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         public void Parser_does_not_decode_body_as_string_before_json()
         {
             var body = Encoding.UTF8.GetBytes(ArticleWorkTestDeliveries.CanonicalRequestJson);
-            var delivery = new VectorNNTPD.BackFillerService.Messaging.RabbitMq.RabbitMqManualAckDelivery(
+            var delivery = new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery(
                 1,
                 body,
                 ArticleWorkTestDeliveries.CanonicalCorrelationId,
@@ -498,7 +499,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var paddedJson = json.Replace("\"Giganews\"", $"\"{padding}Giganews\"");
             var body = Encoding.UTF8.GetBytes(paddedJson);
 
-            var delivery = new VectorNNTPD.BackFillerService.Messaging.RabbitMq.RabbitMqManualAckDelivery(
+            var delivery = new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery(
                 1,
                 body,
                 ArticleWorkTestDeliveries.CanonicalCorrelationId,

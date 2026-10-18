@@ -1,7 +1,7 @@
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Articles.Processing;
+using VectorNNTPD.Common.Articles.Processing;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Articles.Parsing;
 
 namespace VectorNNTPD.BackFillerService.Tests.Articles
 {
@@ -303,7 +303,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Articles
             var stream = new MemoryStream(framed, writable: false);
             var reader = new NntpStreamReader(stream, 4096);
             return await reader.ReadArticlePayloadAsync(
-                VectorNNTPD.BackFillerService.Articles.ArticleResourceLimits.MaxArticleBytes,
+                VectorNNTPD.Common.Articles.ArticleResourceLimits.MaxArticleBytes,
                 TimeSpan.FromSeconds(5),
                 CancellationToken.None);
         }

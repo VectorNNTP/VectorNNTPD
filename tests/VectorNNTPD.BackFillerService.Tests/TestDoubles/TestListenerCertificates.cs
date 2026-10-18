@@ -1,7 +1,8 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
+using VectorNNTPD.Common.Networking.Certificates;
+using System.Net;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

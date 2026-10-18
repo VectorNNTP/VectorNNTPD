@@ -1,6 +1,9 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using VectorNNTPD.BackFillerService.Nntp;
+using System.Net.Sockets;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

@@ -245,6 +245,41 @@ namespace VectorNNTPD.Common.Tests.Articles
         }
 
         /// <summary>
+        /// Dot-leading body lines are stuffed once. ArtHash is XXH3-64 of that stuffed buffer, ArtId stays the Message-ID digest, and a second materialization matches byte for byte.
+        /// </summary>
+        [Fact]
+        public void TryCreate_StuffedBody_ArtHashCoversRetainedBytes_AndRepeats()
+        {
+            var body = ".\r\n..\r\nplain\r\n";
+            var first = CreateAccepted("peer.example", "Fri, 23 Aug 2024 07:30:10 +0000", "<stuffed@example.test>", body);
+            var second = CreateAccepted("peer.example", "Fri, 23 Aug 2024 07:30:10 +0000", "<stuffed@example.test>", body);
+            Assert.Equal(first.ArtHash, second.ArtHash);
+            Assert.True(first.ArtData.Span.SequenceEqual(second.ArtData.Span));
+            Assert.Equal(XxHash3.HashToUInt64(first.ArtData.Span), first.ArtHash);
+            Assert.Equal(ArticleId.FromMessageId("<stuffed@example.test>"u8), first.ArtId);
+
+            var separator = first.ArtData.Span.IndexOf("\r\n\r\n"u8);
+            Assert.True(separator > 0);
+            Assert.Equal("..\r\n...\r\nplain\r\n"u8, first.ArtData.Span[(separator + 4)..]);
+            Assert.Equal(3, first.ArtLines);
+            Assert.False(first.ArtData.Span.EndsWith("\r\n.\r\n"u8));
+        }
+
+        /// <summary>
+        /// A rejected oversize article does not return a record with ArtData.
+        /// </summary>
+        [Fact]
+        public void TryCreate_WhenMaterializationRejects_ReturnsNoRecord()
+        {
+            var created = ArticleRecordFactory.TryCreate(
+                new NntpArticleParser(LocalFqdn),
+                new byte[ArticleResourceLimits.MaxArticleBytes + 1]);
+            Assert.False(created.IsAccepted);
+            Assert.Equal(0, created.Record.ArtSize);
+            Assert.True(created.Record.ArtData.IsEmpty);
+        }
+
+        /// <summary>
         /// Builds a destuffed article and returns the accepted <see cref="ArticleRecord"/>.
         /// </summary>
         /// <param name="path">Path header value before canonical insertion.</param>

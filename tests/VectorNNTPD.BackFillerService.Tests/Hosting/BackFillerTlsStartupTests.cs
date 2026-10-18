@@ -3,14 +3,19 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Listener;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Net;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Cloudflare;
+using System.Net.Sockets;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting
 {
@@ -166,7 +171,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             pairs["BackFiller:BindAddress:0"] = "*";
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Cloudflare.ICloudflareDnsReconciler>(
+            builder.Services.AddSingleton<VectorNNTPD.Common.Cloudflare.ICloudflareDnsReconciler>(
                 new NoOpCloudflareDnsReconciler());
             builder.Services.AddSingleton<IPhysicalMemoryProvider>(
                 new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));

@@ -59,14 +59,19 @@ namespace VectorNNTPD.Common.Logging
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The gzip file is complete. A later open deletes the source once it can.
+                Serilog.Debugging.SelfLog.WriteLine(
+                    "Compressed log was kept and the source log could not be deleted: {0}",
+                    ex);
             }
 
             return File.Exists(destination);
         }
 
-        /// <summary>Deletes <paramref name="path"/> when it exists. An IO or access failure is ignored.</summary>
-        /// <param name="path">Partial or leftover file.</param>
+        /// <summary>
+        /// Deletes <paramref name="path"/> when it exists. <see cref="IOException"/> and
+        /// <see cref="UnauthorizedAccessException"/> are written to Serilog <c>SelfLog</c> and not thrown.
+        /// </summary>
+        /// <param name="path">Source log or <c>.gz.partial</c> path.</param>
         private static void TryDelete(string path)
         {
             try
@@ -78,6 +83,7 @@ namespace VectorNNTPD.Common.Logging
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                Serilog.Debugging.SelfLog.WriteLine("Temporary log file could not be deleted: {0}", ex);
             }
         }
     }

@@ -9,7 +9,7 @@ namespace VectorNNTPD.Common.Articles
         None = 0,
 
         /// <summary>
-        /// This record's own pipeline completed: destuffed canonical ArtData,
+        /// This record's own pipeline completed: canonical ArtData with body lines dot-stuffed and headers left unstuffed,
         /// Common parser validation, Diablo <c>ArticleType</c> classification,
         /// Date/Path canonicalization, ArtId bound to the Message-ID <em>value</em>,
         /// ArtHash (XXH3-64 of that ArtData), and FieldTable ranges bound to the same buffer.

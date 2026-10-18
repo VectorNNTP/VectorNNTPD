@@ -1,5 +1,5 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {

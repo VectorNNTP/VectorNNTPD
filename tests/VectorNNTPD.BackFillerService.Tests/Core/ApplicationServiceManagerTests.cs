@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using BackFillerApplicationServiceManager = VectorNNTPD.BackFillerService.Core.ApplicationServiceManager;
 
 namespace VectorNNTPD.BackFillerService.Tests.Core
@@ -78,6 +78,42 @@ namespace VectorNNTPD.BackFillerService.Tests.Core
             Task<(string ServiceName, Exception? Exception)> termination = AwaitUnexpectedTerminationAsync(manager);
             await manager.StartAsync(CancellationToken.None);
             execution.SetResult();
+
+            var observed = await termination;
+            Assert.Equal("worker", observed.ServiceName);
+            Assert.Null(observed.Exception);
+
+            await manager.StopAsync(CancellationToken.None);
+        }
+
+        /// <summary>
+        /// The manager is not disposable. Stop releases the execution watch; the host does not dispose the singleton.
+        /// </summary>
+        [Fact]
+        public void Manager_is_not_disposable()
+        {
+            Assert.False(typeof(BackFillerApplicationServiceManager).IsAssignableTo(typeof(IDisposable)));
+        }
+
+        /// <summary>
+        /// A canceled execution raises unexpected termination with a null exception, the same as normal completion.
+        /// </summary>
+        [Fact]
+        public async Task Unexpected_termination_event_for_canceled_execution_has_null_exception()
+        {
+            var execution = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var service = new MonitoredService("worker", execution.Task);
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                BackFillerTestOptions.CreateValid(),
+                BackFillerTestOptions.CreateValidNntpDb());
+            var manager = new BackFillerApplicationServiceManager(
+                [service],
+                runtime,
+                NullLogger<BackFillerApplicationServiceManager>.Instance);
+
+            Task<(string ServiceName, Exception? Exception)> termination = AwaitUnexpectedTerminationAsync(manager);
+            await manager.StartAsync(CancellationToken.None);
+            execution.SetCanceled();
 
             var observed = await termination;
             Assert.Equal("worker", observed.ServiceName);

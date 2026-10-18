@@ -3,8 +3,10 @@ using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {

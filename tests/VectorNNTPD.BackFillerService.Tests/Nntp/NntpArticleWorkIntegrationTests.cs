@@ -5,6 +5,8 @@ using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {

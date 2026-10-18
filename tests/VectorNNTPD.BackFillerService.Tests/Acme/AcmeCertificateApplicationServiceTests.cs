@@ -3,14 +3,16 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Acme;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.Common.Networking.Certificates;
 
 namespace VectorNNTPD.BackFillerService.Tests.Acme
 {
@@ -96,36 +98,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         }
 
         /// <summary>
-        /// Contract: Certificate manager evaluate throws after dispose.
-        /// </summary>
-
-        [Fact]
-        public void Certificate_manager_evaluate_throws_after_dispose()
-        {
-            var options = BackFillerTestOptions.CreateValidAcme();
-            var domains = CertificateIdentities.ForFqdn(options.Fqdn, includeNewsHostname: false);
-            var manager = new CertificateManager(
-                options.Fqdn,
-                AppContext.BaseDirectory,
-                options.AcmeDirectoryUrl,
-                new CertificateStore(
-                    AppContext.BaseDirectory,
-                    options.Fqdn,
-                    options.AcmeCertificatePassword,
-                    domains,
-                    TimeSpan.FromDays(options.AcmeRenewalThresholdDays)),
-                new ThrowingIssuer(),
-                options.AcmeCertificatePassword,
-                TimeSpan.FromDays(options.AcmeRenewalThresholdDays),
-                NullLogger<CertificateManager>.Instance,
-                includeNewsHostname: false);
-
-            manager.Dispose();
-
-            Assert.Throws<ObjectDisposedException>(() => manager.EvaluateExisting());
-        }
-
-        /// <summary>
         /// A usable certificate outside the renewal window stays healthy after one injected renewal fault.
         /// </summary>
         [Fact]
@@ -166,33 +138,35 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             observed.Health.MarkStarted();
             await observed.Service.StartAsync(CancellationToken.None);
             Assert.True(observed.Health.IsHealthyForWatchdog);
-            var lease = observed.Publisher.Acquire();
-            var reader = Task.Run(() =>
+            using (observed.Publisher.Acquire())
             {
-                while (Volatile.Read(ref reading) == 0)
+                var reader = Task.Run(() =>
                 {
-                    _ = observed.Health.IsHealthyForWatchdog;
-                    if (observed.Publisher.IsAvailable)
+                    while (Volatile.Read(ref reading) == 0)
                     {
-                        using var current = observed.Publisher.Acquire();
+                        _ = observed.Health.IsHealthyForWatchdog;
+                        if (observed.Publisher.IsAvailable)
+                        {
+                            using var current = observed.Publisher.Acquire();
+                        }
                     }
-                }
-            });
+                });
 
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
-            observed.Time.Advance(TimeSpan.FromHours(6));
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
-            Assert.False(observed.Health.IsHealthyForWatchdog);
+                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+                observed.Time.Advance(TimeSpan.FromHours(6));
+                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+                Assert.False(observed.Health.IsHealthyForWatchdog);
 
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 2, TimeSpan.FromSeconds(2));
-            observed.Time.Advance(TimeSpan.FromHours(6));
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 2, TimeSpan.FromSeconds(2));
-            Assert.True(observed.Health.IsHealthyForWatchdog);
-            Assert.True(observed.Publisher.IsAvailable);
+                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 2, TimeSpan.FromSeconds(2));
+                observed.Time.Advance(TimeSpan.FromHours(6));
+                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 2, TimeSpan.FromSeconds(2));
+                Assert.True(observed.Health.IsHealthyForWatchdog);
+                Assert.True(observed.Publisher.IsAvailable);
 
-            Volatile.Write(ref reading, 1);
-            await reader.WaitAsync(TimeSpan.FromSeconds(2));
-            lease.Dispose();
+                Volatile.Write(ref reading, 1);
+                await reader.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
             using (observed.Publisher.Acquire())
             {
             }
@@ -221,10 +195,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
 
             Assert.False(observed.Health.IsHealthyForWatchdog);
-            Assert.True(AcmeCertificateService.CertificateRequiresWatchdogBlock(
+            Assert.True(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
                 new CertificateStatus(Usable: false, DueForRenewal: true, Material: null, Reason: "expired"),
                 renewalReplacedCertificate: false));
-            Assert.True(AcmeCertificateService.CertificateRequiresWatchdogBlock(
+            Assert.True(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
                 new CertificateStatus(Usable: false, DueForRenewal: true, Material: null, Reason: "absent"),
                 renewalReplacedCertificate: true));
         }
@@ -258,6 +232,154 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         /// <summary>
         /// Builds a TLS-enabled certificate service on a manual clock with watchdog health and an in-memory publisher.
         /// </summary>
+        /// <summary>
+        /// A password changed after startup is the password used to issue, store, and publish the next renewal.
+        /// </summary>
+        [Fact]
+        public async Task Renewal_uses_the_pfx_password_from_the_attempt_snapshot()
+        {
+            var started = DateTimeOffset.UtcNow;
+            await using var scope = CreatePasswordRenewal(started, fixedPassword: null);
+            var original = scope.Options.AcmeCertificatePassword;
+            await scope.Service.StartAsync(CancellationToken.None);
+            Assert.Equal([original], scope.Publisher.Passwords);
+
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            scope.Options.AcmeCertificatePassword = "rotated-pfx-password";
+            scope.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+
+            Assert.Equal([original, "rotated-pfx-password"], scope.Publisher.Passwords);
+            Assert.NotNull(LoadMaterial(scope, "rotated-pfx-password"));
+            Assert.Throws<AcmeStorageException>(() => LoadMaterial(scope, original));
+        }
+
+        /// <summary>
+        /// A snapshot that cannot validate the issued PFX leaves the previous certificate and its password in place.
+        /// </summary>
+        [Fact]
+        public async Task Renewal_with_a_mismatched_pfx_password_keeps_the_existing_certificate()
+        {
+            var started = DateTimeOffset.UtcNow;
+            await using var scope = CreatePasswordRenewal(started, fixedPassword: null);
+            var original = scope.Options.AcmeCertificatePassword;
+            scope.Issuer.FreezePassword(original);
+            await scope.Service.StartAsync(CancellationToken.None);
+
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            scope.Options.AcmeCertificatePassword = "rotated-pfx-password";
+            scope.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+
+            Assert.Equal([original], scope.Publisher.Passwords);
+            Assert.NotNull(LoadMaterial(scope, original));
+            Assert.Throws<AcmeStorageException>(() => LoadMaterial(scope, "rotated-pfx-password"));
+        }
+
+        /// <summary>
+        /// A blank refreshed password does not replace the password that last saved the live PFX.
+        /// </summary>
+        [Fact]
+        public async Task Renewal_with_a_blank_pfx_password_keeps_the_previous_password()
+        {
+            var started = DateTimeOffset.UtcNow;
+            await using var scope = CreatePasswordRenewal(started, fixedPassword: null);
+            var original = scope.Options.AcmeCertificatePassword;
+            scope.Issuer.FreezePassword(original);
+            await scope.Service.StartAsync(CancellationToken.None);
+
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            scope.Options.AcmeCertificatePassword = " ";
+            scope.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+
+            Assert.Equal([original, original], scope.Publisher.Passwords);
+            Assert.NotNull(LoadMaterial(scope, original));
+        }
+
+        /// <summary>
+        /// A failure after the new generation is current still publishes that generation with the password that saved it.
+        /// </summary>
+        [Fact]
+        public async Task Renewal_publishes_the_saved_certificate_when_the_journal_fails_after_persist()
+        {
+            var started = DateTimeOffset.UtcNow;
+            await using var scope = CreatePasswordRenewal(started, fixedPassword: null);
+            var original = scope.Options.AcmeCertificatePassword;
+            var persists = 0;
+            scope.Manager.AfterPersistForTests = () =>
+            {
+                if (Interlocked.Increment(ref persists) == 2)
+                {
+                    throw new IOException("journal failed after persist");
+                }
+            };
+
+            await scope.Service.StartAsync(CancellationToken.None);
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            scope.Options.AcmeCertificatePassword = "rotated-pfx-password";
+            scope.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+
+            Assert.Equal([original, "rotated-pfx-password"], scope.Publisher.Passwords);
+            var saved = LoadMaterial(scope, "rotated-pfx-password");
+            Assert.NotNull(saved);
+            using var loaded = PfxCrypto.LoadCertificate(saved.PfxBytes, "rotated-pfx-password");
+            using var published = scope.Manager.CreateTlsCertificate();
+            Assert.Equal(loaded.Thumbprint, published.Thumbprint);
+        }
+
+        /// <summary>Builds a renewal service whose issuer and publisher expose the PFX password used for each attempt.</summary>
+        private static PasswordRenewal CreatePasswordRenewal(DateTimeOffset clock, string? fixedPassword)
+        {
+            var time = new ManualTimeProvider(clock);
+            var directory = new TempAcmeDir();
+            var options = BackFillerTestOptions.CreateValidAcme();
+            options.AcmeStateDir = directory.Path;
+            options.Fqdn = "backfiller01.usenet.ninja";
+            options.IncludeNewsHostnameInCertificate = false;
+            var domains = CertificateIdentities.ForFqdn(options.Fqdn, includeNewsHostname: false);
+            var store = new CertificateStore(
+                directory.Path,
+                options.Fqdn,
+                options.AcmeCertificatePassword,
+                domains,
+                TimeSpan.FromDays(options.AcmeRenewalThresholdDays));
+            var issuer = new PasswordIssuer(options, clock, fixedPassword);
+            var manager = new CertificateManager(
+                options.Fqdn,
+                directory.Path,
+                options.AcmeDirectoryUrl,
+                store,
+                issuer,
+                options.AcmeCertificatePassword,
+                TimeSpan.FromDays(options.AcmeRenewalThresholdDays),
+                NullLogger<CertificateManager>.Instance,
+                includeNewsHostname: false);
+            var publisher = new RecordingPublisher();
+            var service = new AcmeCertificateService(
+                Options.Create<AcmeCloudflareOptions>(options),
+                new InjectedManagerFactory(manager, Options.Create<AcmeCloudflareOptions>(options)),
+                publisher,
+                new AcmeCertificateReadiness(),
+                NullLogger<AcmeCertificateService>.Instance,
+                time,
+                observation: null);
+            return new PasswordRenewal(service, time, options, issuer, publisher, directory, domains, manager);
+        }
+
+        /// <summary>Loads the live PFX with <paramref name="password"/>.</summary>
+        private static CertificateMaterial? LoadMaterial(PasswordRenewal scope, string password)
+        {
+            var store = new CertificateStore(
+                scope.Directory.Path,
+                scope.Options.Fqdn,
+                password,
+                scope.Domains,
+                TimeSpan.FromDays(scope.Options.AcmeRenewalThresholdDays));
+            return store.Load();
+        }
+
         private static ObservedRenewal CreateObservedRenewal(
             DateTimeOffset clock,
             ICertificateIssuer issuer,
@@ -302,7 +424,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
                 readiness,
                 NullLogger<AcmeCertificateService>.Instance,
                 time,
-                health);
+                new AcmeCertificateWatchdog(health, NullLogger<AcmeCertificateWatchdog>.Instance));
             return new ObservedRenewal(service, health, time, publisher, dir);
         }
 
@@ -721,6 +843,109 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             {
                 _readiness.MarkReady();
             }
+        }
+
+        /// <summary>Renewal collaborators whose password the test can change between attempts.</summary>
+        private sealed class PasswordRenewal : IAsyncDisposable
+        {
+            /// <summary>Retains the service, clock, options, issuer, publisher, directory, domains, and manager.</summary>
+            internal PasswordRenewal(
+                AcmeCertificateService service,
+                ManualTimeProvider time,
+                AcmeCloudflareOptions options,
+                PasswordIssuer issuer,
+                RecordingPublisher publisher,
+                TempAcmeDir directory,
+                IReadOnlyList<string> domains,
+                CertificateManager manager)
+            {
+                Service = service;
+                Time = time;
+                Options = options;
+                Issuer = issuer;
+                Publisher = publisher;
+                Directory = directory;
+                Domains = domains;
+                Manager = manager;
+            }
+
+            /// <summary>Service under test.</summary>
+            internal AcmeCertificateService Service { get; }
+
+            /// <summary>Clock advanced by the test.</summary>
+            internal ManualTimeProvider Time { get; }
+
+            /// <summary>Options object mutated by the test. The service reads this instance.</summary>
+            internal AcmeCloudflareOptions Options { get; }
+
+            /// <summary>Issuer that can freeze the PFX password it embeds.</summary>
+            internal PasswordIssuer Issuer { get; }
+
+            /// <summary>Publisher that records each password it receives.</summary>
+            internal RecordingPublisher Publisher { get; }
+
+            /// <summary>Certificate state directory.</summary>
+            internal TempAcmeDir Directory { get; }
+
+            /// <summary>DNS names required by the store.</summary>
+            internal IReadOnlyList<string> Domains { get; }
+
+            /// <summary>Manager whose persist hook the test can arm.</summary>
+            internal CertificateManager Manager { get; }
+
+            /// <summary>Disposes the service and deletes the state directory.</summary>
+            public async ValueTask DisposeAsync()
+            {
+                await Service.DisposeAsync().ConfigureAwait(false);
+                Directory.Dispose();
+            }
+        }
+
+        /// <summary>Issuer that embeds either a frozen password or the live options password.</summary>
+        private sealed class PasswordIssuer : ICertificateIssuer
+        {
+            /// <summary>Options read when no password is frozen.</summary>
+            private readonly AcmeCloudflareOptions _options;
+
+            /// <summary>Clock origin used to choose the first and later certificate lifetimes.</summary>
+            private readonly DateTimeOffset _started;
+
+            /// <summary>Password embedded in later PFX material. <see langword="null"/> reads <see cref="_options"/>.</summary>
+            private string? _fixedPassword;
+
+            /// <summary>1-based issue count.</summary>
+            private int _calls;
+
+            /// <summary>Stores the options, clock, and optional frozen password.</summary>
+            internal PasswordIssuer(AcmeCloudflareOptions options, DateTimeOffset started, string? fixedPassword)
+            {
+                _options = options;
+                _started = started;
+                _fixedPassword = fixedPassword;
+            }
+
+            /// <summary>Later issues embed <paramref name="password"/> even if options change.</summary>
+            internal void FreezePassword(string password) => _fixedPassword = password;
+
+            /// <inheritdoc />
+            public Task<CertificateMaterial> IssueAsync(IReadOnlyList<string> domains, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var call = Interlocked.Increment(ref _calls);
+                var password = _fixedPassword ?? _options.AcmeCertificatePassword;
+                var notAfter = call == 1 ? _started.AddDays(20) : _started.AddDays(90);
+                return Task.FromResult(CreateMaterial(domains, password, notAfter));
+            }
+        }
+
+        /// <summary>Publisher that records the PKCS#12 password from each publish.</summary>
+        private sealed class RecordingPublisher : IAcmeCertificatePublisher
+        {
+            /// <summary>Passwords passed to <see cref="PublishFromPfx"/>, in order.</summary>
+            internal List<string> Passwords { get; } = [];
+
+            /// <inheritdoc />
+            public void PublishFromPfx(ReadOnlySpan<byte> pfxBytes, string password) => Passwords.Add(password);
         }
     }
 }

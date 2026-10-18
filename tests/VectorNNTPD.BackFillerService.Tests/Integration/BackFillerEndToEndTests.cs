@@ -3,7 +3,9 @@ using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Retention;
-using VectorNNTPD.BackFillerService.Articles;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Articles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Integration
 {

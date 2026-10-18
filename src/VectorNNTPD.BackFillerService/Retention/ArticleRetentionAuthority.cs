@@ -1,8 +1,9 @@
 using System.Runtime.InteropServices;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
-using VectorNNTPD.BackFillerService.Articles.Processing;
+using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Articles.Parsing;
+using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
 
 namespace VectorNNTPD.BackFillerService.Retention
 {
@@ -480,7 +481,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                 }
 
                 if (!NntpArticleIdentity.MatchesRequest(record.MessageId, messageIdOctets)
-                    || !NntpDeliveryFraming.IsFrameable(record.ArtData.Span))
+                    || !ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
                 {
                     return ArticleDeliveryClaimResult.NotFrameable();
                 }

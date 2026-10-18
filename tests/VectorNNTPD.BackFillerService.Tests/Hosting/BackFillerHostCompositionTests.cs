@@ -1,23 +1,32 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MySqlConnector;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
-using VectorNNTPD.BackFillerService.Cloudflare;
 using VectorNNTPD.BackFillerService.Configuration;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
 using VectorNNTPD.BackFillerService.Listener;
 using VectorNNTPD.BackFillerService.Logging;
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
-using VectorNNTPD.BackFillerService.Networking.Certificates;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.NntpDb;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.NntpDb;
+using VectorNNTPD.Common.Cloudflare;
+using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Networking.Certificates;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Configuration;
+using System.Net.Sockets;
+using System.Net;
 
 namespace VectorNNTPD.BackFillerService.Tests.Hosting
 {
@@ -44,6 +53,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.IsType<RabbitMqServiceHostedAdapter>(hosted[4]);
             Assert.Same(host.Services.GetRequiredService<NntpProviderRegistry>(), hosted[5]);
             Assert.IsType<BackFillerApplicationHostedService>(hosted[6]);
+            Assert.False(typeof(BackFillerApplicationHostedService).IsAssignableTo(typeof(IDisposable)));
+            Assert.IsType<VectorNNTPD.BackFillerService.Core.ApplicationServiceManager>(
+                host.Services.GetRequiredService<VectorNNTPD.BackFillerService.Core.ApplicationServiceManager>());
             Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[7]);
             Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[8]);
             Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[9]);
@@ -66,6 +78,20 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                 application[0].GetType().Assembly);
             Assert.IsType<AcmeCertificateApplicationService>(application[1]);
             Assert.Same(host.Services.GetRequiredService<CacheListenerService>(), application[2]);
+            Assert.All(
+                application,
+                static service => Assert.IsAssignableFrom<IApplicationService>(service));
+            Assert.DoesNotContain(application, static service => service is NntpDbService);
+            Assert.DoesNotContain(application, static service => service is RabbitMqService);
+            var database = host.Services.GetRequiredService<NntpDbService>();
+            Assert.Equal("VectorNNTPD.Common", database.GetType().Assembly.GetName().Name);
+            Assert.Same(database, Assert.Single(host.Services.GetServices<NntpDbService>()));
+            Assert.IsType<NntpDbSharedConfigurationSource>(
+                host.Services.GetRequiredService<IBackFillerSharedConfigurationSource>());
+            Assert.Same(
+                host.Services.GetRequiredService<ProviderAccountConfigurationService>(),
+                host.Services.GetRequiredService<INntpSharedConfigurationCatalogue>());
+            Assert.DoesNotContain(hosted, static service => service is CacheListenerService);
             Assert.Same(
                 host.Services.GetRequiredService<ArticleRetentionAuthority>(),
                 host.Services.GetRequiredService<IArticleRetentionAuthority>());
@@ -81,6 +107,51 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.Same(host.Services.GetRequiredService<TlsCertificateContextProvider>(), publisher);
             Assert.Same(host.Services.GetRequiredService<ITlsCertificateContextProvider>(), publisher);
             Assert.NotNull(host.Services.GetRequiredService<CloudflareDnsReconciliationService>());
+            var parser = host.Services.GetRequiredService<NntpArticleParser>();
+            Assert.Equal(typeof(NntpArticleParser), parser.GetType());
+            Assert.Equal("VectorNNTPD.Common", parser.GetType().Assembly.GetName().Name);
+            Assert.DoesNotContain(
+                typeof(BackFillerServiceCollectionExtensions).Assembly.GetTypes(),
+                static type => type.Name is "NntpArticleParser"
+                    or "YEncArticleValidator"
+                    or "NntpMessageIdValidation"
+                    or "ArticleTypeClassifier"
+                    or "ArticlePathCanonicalizer"
+                    or "NewsDateParser");
+        }
+
+        /// <summary>
+        /// The Cloudflare API client and ACME component factory resolve from Common.
+        /// Listener A/AAAA publication stays withheld until bind, and BackFiller defines no DNS query client.
+        /// </summary>
+        [Fact]
+        public void AddBackFillerHosting_resolves_common_dns_and_withholds_publication_until_bind()
+        {
+            using var host = CreateHost(replaceAcme: false);
+
+            var apiClient = host.Services.GetRequiredService<ICloudflareDnsClient>();
+            Assert.IsType<CloudflareDnsClient>(apiClient);
+            Assert.Equal("VectorNNTPD.Common", apiClient.GetType().Assembly.GetName().Name);
+            Assert.Same(apiClient, host.Services.GetRequiredService<ICloudflareDnsClient>());
+
+            var factory = host.Services.GetRequiredService<AcmeComponentFactory>();
+            Assert.Equal("VectorNNTPD.Common", factory.GetType().Assembly.GetName().Name);
+            Assert.Same(factory, host.Services.GetRequiredService<AcmeComponentFactory>());
+
+            var lease = host.Services.GetRequiredService<IDnsPublicationLease>();
+            Assert.IsType<ListenerBoundDnsPublicationLease>(lease);
+            Assert.False(lease.PublishDuringStart);
+            var publication = host.Services.GetRequiredService<IListenerDnsPublication>();
+            Assert.IsType<CloudflareDnsReconciliationService>(publication);
+            Assert.NotSame(apiClient, publication);
+
+            Assert.DoesNotContain(
+                typeof(BackFillerServiceCollectionExtensions).Assembly.GetTypes(),
+                static type => type.Namespace == "VectorNNTPD.BackFillerService.Dns"
+                    || type.Name is "AuthoritativeTxtClient"
+                        or "DnsQueryBuilder"
+                        or "ZoneApexNameserverDiscovery"
+                        or "DnsUdpExchange");
         }
 
         /// <summary><see cref="BackFillerRuntimeOptions"/> is a single snapshot shared by resolves; shutdown grace matches <see cref="HostOptions.ShutdownTimeout"/>.</summary>
@@ -178,6 +249,99 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
 
             Assert.IsType<MySqlProviderAccountSource>(host.Services.GetRequiredService<IProviderAccountSource>());
             Assert.IsType<ProviderConfigurationCatalog>(host.Services.GetRequiredService<IBackFillerProviderCatalog>());
+            Assert.IsType<NntpDbSharedConfigurationSource>(
+                host.Services.GetRequiredService<IBackFillerSharedConfigurationSource>());
+        }
+
+        /// <summary>
+        /// Common <see cref="NntpDbService"/> and <see cref="MySqlNntpDbConnectionFactory"/> are each registered once.
+        /// Account queries and <c>nntpsharedconfig</c> reads are not hosted services of their own.
+        /// </summary>
+        [Fact]
+        public void AddBackFillerHosting_registers_common_nntpdb_once()
+        {
+            var builder = Host.CreateApplicationBuilder([]);
+            builder.AddBackFillerHosting();
+
+            var database = Assert.Single(builder.Services, static descriptor => descriptor.ServiceType == typeof(NntpDbService));
+            Assert.Equal(ServiceLifetime.Singleton, database.Lifetime);
+            Assert.Equal(typeof(NntpDbService), database.ImplementationType);
+            Assert.Equal("VectorNNTPD.Common", typeof(NntpDbService).Assembly.GetName().Name);
+            var factory = Assert.Single(
+                builder.Services,
+                static descriptor => descriptor.ServiceType == typeof(INntpDbConnectionFactory));
+            Assert.Equal(typeof(MySqlNntpDbConnectionFactory), factory.ImplementationType);
+            Assert.Equal(ServiceLifetime.Singleton, factory.Lifetime);
+            var shared = Assert.Single(
+                builder.Services,
+                static descriptor => descriptor.ServiceType == typeof(IBackFillerSharedConfigurationSource));
+            Assert.Equal(typeof(NntpDbSharedConfigurationSource), shared.ImplementationType);
+            Assert.Single(builder.Services, static descriptor => descriptor.ServiceType == typeof(IProviderAccountSource));
+            Assert.Single(
+                builder.Services,
+                static descriptor => descriptor.ServiceType == typeof(INntpSharedConfigurationCatalogue));
+            Assert.DoesNotContain(
+                builder.Services,
+                static descriptor => descriptor.ImplementationType?.Namespace == "VectorNNTPD.BackFillerService.NntpDb"
+                    && descriptor.ImplementationType.Name != nameof(NntpDbServiceHostedAdapter));
+        }
+
+        /// <summary>
+        /// The hosted adapter runs Common's startup check once. A second start does not open another connection.
+        /// Stop makes further sessions fail, and a second stop does not throw.
+        /// </summary>
+        [Fact]
+        public async Task Common_nntpdb_adapter_starts_and_stops_the_service_once()
+        {
+            using var host = CreateHost();
+            var database = host.Services.GetRequiredService<NntpDbService>();
+            var adapter = Assert.Single(
+                host.Services.GetServices<IHostedService>().OfType<NntpDbServiceHostedAdapter>());
+
+            await adapter.StartAsync(CancellationToken.None);
+            Assert.Equal(1, database.StartupConnectAttempts);
+            Assert.True(database.IsAccepting);
+
+            await adapter.StartAsync(CancellationToken.None);
+            Assert.Equal(1, database.StartupConnectAttempts);
+
+            await adapter.StopAsync(CancellationToken.None);
+            Assert.False(database.IsAccepting);
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await database.OpenAsync(CancellationToken.None));
+
+            await adapter.StopAsync(CancellationToken.None);
+            Assert.False(database.IsAccepting);
+        }
+
+        /// <summary>
+        /// A rejected connection string fails the adapter immediately. Correcting the options lets the next start succeed.
+        /// </summary>
+        [Fact]
+        public async Task Common_nntpdb_adapter_propagates_configuration_failure_then_starts()
+        {
+            var options = new NntpDbOptions { ConnectionString = " " };
+            var database = new NntpDbService(
+                new SelectOneConnectionFactory(),
+                Options.Create(options),
+                NullLogger<NntpDbService>.Instance);
+            var adapter = new NntpDbServiceHostedAdapter(database);
+
+            var failure = await Assert.ThrowsAsync<NntpDbConfigurationException>(
+                () => adapter.StartAsync(CancellationToken.None));
+            Assert.Contains("ConnectionStrings:NntpDB", failure.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Password", failure.Message, StringComparison.Ordinal);
+            Assert.False(database.HasStarted);
+            Assert.False(database.IsAccepting);
+            Assert.Equal(0, database.StartupConnectAttempts);
+
+            options.ConnectionString = "Server=127.0.0.1;Database=nntp;User ID=n;Password=secret;";
+            await adapter.StartAsync(CancellationToken.None);
+            Assert.True(database.IsAccepting);
+            Assert.Equal(1, database.StartupConnectAttempts);
+
+            await adapter.StopAsync(CancellationToken.None);
+            Assert.False(database.IsAccepting);
         }
 
         /// <summary>BackFiller assembly must not take a compile-time dependency on VectorNNTP.NNTPD.</summary>
@@ -209,7 +373,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             pairs["BackFiller:Logging:File:LogDir"] = Directory.CreateTempSubdirectory("bf-host-logs-").FullName;
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
-            builder.Services.AddSingleton<VectorNNTPD.BackFillerService.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
+            builder.Services.AddSingleton<VectorNNTPD.Common.Cloudflare.ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());
             builder.Services.AddSingleton<IPhysicalMemoryProvider>(new FakePhysicalMemoryProvider(64L * 1024 * 1024 * 1024));
             builder.Services.AddSingleton<IRabbitMqConnectionFactory>(
                 factory ?? new FakeBackFillerRabbitMqConnectionFactory());
@@ -253,6 +417,52 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
             listener.Stop();
             return port;
+        }
+
+        /// <summary>Opens a session whose <c>SELECT 1</c> returns 1. SQL commands are not used.</summary>
+        private sealed class SelectOneConnectionFactory : INntpDbConnectionFactory
+        {
+            /// <inheritdoc />
+            public Task<INntpDbSession> OpenAsync(string connectionString, CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult<INntpDbSession>(new SelectOneSession());
+            }
+
+            /// <summary>Health-check session for the startup probe.</summary>
+            private sealed class SelectOneSession : INntpDbSession
+            {
+                /// <inheritdoc />
+                public ValueTask<int> SelectOneAsync(CancellationToken cancellationToken)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return ValueTask.FromResult(1);
+                }
+
+                /// <summary>Not used by the startup probe.</summary>
+                /// <returns>Never returns.</returns>
+                public MySqlCommand CreateCommand() =>
+                    throw new NotSupportedException("The startup probe does not create commands.");
+
+                /// <inheritdoc />
+                public ValueTask<MySqlTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new NotSupportedException("The startup probe does not begin a transaction.");
+                }
+
+                /// <inheritdoc />
+                public ValueTask<MySqlTransaction> BeginTransactionAsync(
+                    System.Data.IsolationLevel isolationLevel,
+                    CancellationToken cancellationToken)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    throw new NotSupportedException("The startup probe does not begin a transaction.");
+                }
+
+                /// <inheritdoc />
+                public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+            }
         }
     }
 }

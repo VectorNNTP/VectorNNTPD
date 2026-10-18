@@ -4,8 +4,9 @@ using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Messaging.RabbitMq;
 
-using VectorNNTPD.BackFillerService.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {
@@ -819,8 +820,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             };
 
         /// <summary>Article id parsed from the canonical test hex. Not a live retention key.</summary>
-        private static VectorNNTPD.BackFillerService.Articles.ArticleId CanonicalArtId() =>
-            VectorNNTPD.BackFillerService.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex);
+        private static VectorNNTPD.Common.Articles.ArticleId CanonicalArtId() =>
+            VectorNNTPD.Common.Articles.ArticleId.ParseLowerHex(ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 
         /// <summary>Completion source that runs continuations asynchronously so a test thread cannot deadlock on its own signal.</summary>
         private static TaskCompletionSource NewSource() =>

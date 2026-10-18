@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.Hosting;
-using VectorNNTPD.BackFillerService.Core;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.Common.Acme;
 
 namespace VectorNNTPD.BackFillerService.Acme
 {

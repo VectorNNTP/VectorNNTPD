@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTPD.BackFillerService.Articles;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.Common.Articles;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Retention
 {

@@ -5,8 +5,9 @@ using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Retention;
-using VectorNNTPD.BackFillerService.Articles;
-using VectorNNTPD.BackFillerService.Articles.Parsing;
+using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Articles;
 
 namespace VectorNNTPD.BackFillerService.Tests.Audit
 {
