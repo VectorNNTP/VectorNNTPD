@@ -1,7 +1,8 @@
+using System.Runtime.InteropServices;
+using System.Text;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
-using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Retention
 {
@@ -326,6 +327,158 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
             Assert.Equal(0, authority.SweepExpired());
             Assert.True(claim.ArticleBytes.Span.SequenceEqual(captured));
             Assert.True(claim.ArticleBytes.Span.SequenceEqual(prepared.Record.ArtData.Span));
+        }
+
+        /// <summary>
+        /// A later admission of the same Message-ID keeps the first entry, including an unframeable bit.
+        /// </summary>
+        [Fact]
+        public void AlreadyPresent_keeps_the_admitted_frameability()
+        {
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            RetentionTestArticles.RetainPrepared(authority, "<a@b>", "plain\nmid");
+            var replacement = RetentionTestArticles.Create("<a@b>");
+
+            var admitted = authority.RetainCanonical(
+                replacement.MessageId,
+                replacement.RequestId,
+                replacement.Record,
+                replacement.SelectedDateHeaderName);
+
+            Assert.Equal(ArticleRetentionKind.AlreadyPresent, admitted.Kind);
+            var claimed = authority.TryClaimForDelivery(Id("<a@b>"));
+            Assert.Equal(ArticleDeliveryClaimKind.NotFrameable, claimed.Kind);
+            Assert.Null(claimed.Claim);
+            Assert.Equal(1, authority.RetainedCount);
+        }
+
+        /// <summary>
+        /// Byte values above 127 map to the same char the dictionary stored. UTF-8 of that char does not.
+        /// </summary>
+        [Fact]
+        public void Delivery_key_maps_each_octet_to_the_same_char_without_case_folding()
+        {
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            var prepared = RetentionTestArticles.Create("<a@b>");
+            const string key = "\u00E9";
+            Assert.Equal(ArticleRetentionKind.Retained, authority.RetainCanonical(
+                key, prepared.RequestId, prepared.Record, prepared.SelectedDateHeaderName).Kind);
+
+            var mapped = authority.TryClaimForDelivery([(byte)key[0]]);
+            Assert.Equal(ArticleDeliveryClaimKind.NotFrameable, mapped.Kind);
+            Assert.Null(mapped.Claim);
+
+            var utf8 = authority.TryClaimForDelivery(Encoding.UTF8.GetBytes(key));
+            Assert.Equal(ArticleDeliveryClaimKind.NotFound, utf8.Kind);
+
+            var ascii = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            RetentionTestArticles.RetainPrepared(ascii, "<a@b>");
+            Assert.Equal(ArticleDeliveryClaimKind.NotFound, ascii.TryClaimForDelivery(Id("<A@B>")).Kind);
+            var exact = ascii.TryClaimForDelivery(Id("<a@b>"));
+            Assert.Equal(ArticleDeliveryClaimKind.Claimed, exact.Kind);
+            exact.Claim!.Dispose();
+        }
+
+        /// <summary>Two callers cannot both own the same entry.</summary>
+        [Fact]
+        public async Task Concurrent_callers_cannot_both_claim_one_entry()
+        {
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            RetentionTestArticles.RetainPrepared(authority, "<a@b>");
+            using var started = new Barrier(2);
+            var kinds = new ArticleDeliveryClaimKind[2];
+            var claims = new ArticleRetentionAuthority.ArticleDeliveryClaim?[2];
+            var tasks = new Task[2];
+            for (var i = 0; i < 2; i++)
+            {
+                var index = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    started.SignalAndWait(TimeSpan.FromSeconds(5));
+                    var result = authority.TryClaimForDelivery(Id("<a@b>"));
+                    kinds[index] = result.Kind;
+                    claims[index] = result.Claim;
+                });
+            }
+
+            await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, kinds.Count(kind => kind == ArticleDeliveryClaimKind.Claimed));
+            Assert.Equal(1, kinds.Count(kind => kind == ArticleDeliveryClaimKind.InDelivery));
+            Assert.Equal(1, claims.Count(claim => claim is not null));
+            foreach (var claim in claims)
+            {
+                claim?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// A byte changed after admission is still rejected, and the failed scan does not keep the claim.
+        /// </summary>
+        [Fact]
+        public void A_post_admission_mutation_is_rejected_and_releases_the_claim()
+        {
+            var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
+            Assert.True(MemoryMarshal.TryGetArray(prepared.Record.ArtData, out ArraySegment<byte> segment));
+            var body = prepared.Record.ArtData.Span.IndexOf("body\r\n"u8);
+            Assert.True(body > 0);
+            segment.Array![segment.Offset + body] = 0;
+
+            var first = authority.TryClaimForDelivery(Id("<a@b>"));
+            var second = authority.TryClaimForDelivery(Id("<a@b>"));
+
+            Assert.Equal(ArticleDeliveryClaimKind.NotFrameable, first.Kind);
+            Assert.Null(first.Claim);
+            Assert.Equal(ArticleDeliveryClaimKind.NotFrameable, second.Kind);
+            Assert.Null(second.Claim);
+            Assert.Equal(1, authority.RetainedCount);
+        }
+
+        /// <summary>
+        /// The Message-ID key is built before the retention lock, and the article scan is after the claim is published.
+        /// </summary>
+        [Fact]
+        public void TryClaimForDelivery_scans_only_after_the_claim_lock_is_released()
+        {
+            var source = File.ReadAllText(FindAuthoritySource());
+            var start = source.IndexOf("public ArticleDeliveryClaimResult TryClaimForDelivery", StringComparison.Ordinal);
+            var end = source.IndexOf("private void CompleteDelivery", start, StringComparison.Ordinal);
+            Assert.True(start >= 0 && end > start);
+            var method = source[start..end];
+            var key = method.IndexOf("CreateDeliveryKey", StringComparison.Ordinal);
+            var gate = method.IndexOf("lock (_gate)", StringComparison.Ordinal);
+            var published = method.IndexOf("_deliveryClaims.Add", StringComparison.Ordinal);
+            var scan = method.IndexOf("IsFrameable(", StringComparison.Ordinal);
+            Assert.True(key >= 0 && gate > key);
+            Assert.True(published > gate && scan > published);
+            Assert.DoesNotContain("IsFrameable(", method[..published], StringComparison.Ordinal);
+        }
+
+        /// <summary>Locates the retention authority source from the test output directory.</summary>
+        private static string FindAuthoritySource()
+        {
+            var directory = new DirectoryInfo(AppContext.BaseDirectory);
+            while (directory is not null)
+            {
+                var candidate = string.Concat(
+                    directory.FullName,
+                    Path.DirectorySeparatorChar,
+                    "src",
+                    Path.DirectorySeparatorChar,
+                    "VectorNNTPD.BackFillerService",
+                    Path.DirectorySeparatorChar,
+                    "Retention",
+                    Path.DirectorySeparatorChar,
+                    "ArticleRetentionAuthority.cs");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new InvalidOperationException("ArticleRetentionAuthority.cs was not found.");
         }
 
         /// <summary>ASCII message-id octets for TryClaimForDelivery.</summary>

@@ -14,6 +14,11 @@ namespace VectorNNTPD.BackFillerService.Retention
     /// </summary>
     /// <remarks>
     /// Index, counter, and admission mutations run under <see cref="_gate"/>.
+    /// <see cref="TryClaimForDelivery"/> builds its dictionary key before taking that lock.
+    /// The locked claim path does not walk <see cref="ArticleRecord.ArtData"/>.
+    /// Frameability is checked on the claimed bytes after the lock is released, because the caller retains
+    /// the ArtData array and may change it after admission. A failed check rolls the claim back before the
+    /// method returns.
     /// <see cref="SweepInterval"/> is fixed at construction.
     /// ArtData is referenced, not copied. A delivery reader does not pin FIFO reclaim.
     /// An openable RequestId or an active <see cref="ArticleDeliveryClaim"/> does.
@@ -453,13 +458,26 @@ namespace VectorNNTPD.BackFillerService.Retention
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// The dictionary key is created before <see cref="_gate"/> is taken. An empty octet span still enters
+        /// the lock so a disposed authority throws <see cref="ObjectDisposedException"/> instead of
+        /// <see cref="ArticleDeliveryClaimKind.NotFound"/>.
+        /// <see cref="NntpArticleIdentity.MatchesRequest(ReadOnlySpan{byte}, ReadOnlySpan{byte})"/> stays inside
+        /// the lock because it compares only the Message-ID, not <see cref="ArticleRecord.ArtData"/>.
+        /// The article scan runs after the claim is published and the lock is released. The claim keeps the
+        /// buffer alive for that scan. <see cref="UnpublishedDeliveryClaim"/> disposes that claim on every
+        /// return and exception until <see cref="UnpublishedDeliveryClaim.Transfer"/> has built the caller's
+        /// result and cleared the holder. A second lock then rejects the claim when the entry expired, was
+        /// removed, or the authority was disposed during the scan.
+        /// </remarks>
         public ArticleDeliveryClaimResult TryClaimForDelivery(ReadOnlySpan<byte> messageIdOctets)
         {
+            var key = messageIdOctets.IsEmpty ? null : CreateDeliveryKey(messageIdOctets);
+            using var pending = new UnpublishedDeliveryClaim();
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                if (!TryResolveDeliveryKey(messageIdOctets, out var key)
-                    || !_byMessageId.TryGetValue(key, out var entry))
+                if (key is null || !_byMessageId.TryGetValue(key, out var entry))
                 {
                     return ArticleDeliveryClaimResult.NotFound();
                 }
@@ -480,8 +498,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                     return ArticleDeliveryClaimResult.InDelivery();
                 }
 
-                if (!NntpArticleIdentity.MatchesRequest(record.MessageId, messageIdOctets)
-                    || !ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
+                if (!NntpArticleIdentity.MatchesRequest(record.MessageId, messageIdOctets))
                 {
                     return ArticleDeliveryClaimResult.NotFrameable();
                 }
@@ -496,10 +513,49 @@ namespace VectorNNTPD.BackFillerService.Retention
                     return ArticleDeliveryClaimResult.NotFound();
                 }
 
-                var claim = new ArticleDeliveryClaim(this, record.ArtData, entry.Identity.MessageId);
-                _deliveryClaims.Add(claim, entry);
-                return ArticleDeliveryClaimResult.Claimed(claim);
+                pending.Adopt(new ArticleDeliveryClaim(this, record.ArtData, entry.Identity.MessageId));
+                var added = false;
+                try
+                {
+                    _deliveryClaims.Add(pending.Claim, entry);
+                    added = true;
+                }
+                finally
+                {
+                    if (!added)
+                    {
+                        ReleaseDeliveryHoldLocked(entry);
+                    }
+                }
             }
+
+            if (!ArticleWorkDeliveryFraming.IsFrameable(pending.Claim.ArticleBytes.Span))
+            {
+                return ArticleDeliveryClaimResult.NotFrameable();
+            }
+
+            var release = false;
+            var disposedDuringScan = false;
+            lock (_gate)
+            {
+                disposedDuringScan = _disposed;
+                release = disposedDuringScan
+                    || !_deliveryClaims.TryGetValue(pending.Claim, out var held)
+                    || held.IsLogicallyRemoved
+                    || IsExpiredLocked(held, _time.GetUtcNow());
+            }
+
+            if (disposedDuringScan)
+            {
+                throw new ObjectDisposedException(GetType().Name);
+            }
+
+            if (release)
+            {
+                return ArticleDeliveryClaimResult.NotFound();
+            }
+
+            return pending.Transfer();
         }
 
         /// <summary>
@@ -564,25 +620,21 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// <summary>
         /// Builds the ordinal dictionary key for <paramref name="messageIdOctets"/> without trimming or case-folding.
         /// </summary>
-        /// <param name="messageIdOctets">Candidate Message-ID octets.</param>
-        /// <param name="key">One character per octet, or empty when <paramref name="messageIdOctets"/> is empty.</param>
-        /// <returns><see langword="false"/> when <paramref name="messageIdOctets"/> is empty.</returns>
-        private static bool TryResolveDeliveryKey(ReadOnlySpan<byte> messageIdOctets, out string key)
+        /// <param name="messageIdOctets">Non-empty candidate Message-ID octets.</param>
+        /// <returns>One character per octet. Byte <c>n</c> becomes <c>(char)n</c>, including values above 127.</returns>
+        /// <remarks>
+        /// <c>string.Create</c> writes the string in one allocation.
+        /// The callback runs before this method returns, so the span remains valid for the copy.
+        /// </remarks>
+        private static string CreateDeliveryKey(ReadOnlySpan<byte> messageIdOctets)
         {
-            if (messageIdOctets.IsEmpty)
+            return string.Create(messageIdOctets.Length, messageIdOctets, static (chars, octets) =>
             {
-                key = string.Empty;
-                return false;
-            }
-
-            var chars = new char[messageIdOctets.Length];
-            for (var i = 0; i < messageIdOctets.Length; i++)
-            {
-                chars[i] = (char)messageIdOctets[i];
-            }
-
-            key = new string(chars);
-            return true;
+                for (var i = 0; i < octets.Length; i++)
+                {
+                    chars[i] = (char)octets[i];
+                }
+            });
         }
 
         /// <summary>Reclaims TTL-expired entries in insertion order.</summary>
@@ -989,6 +1041,47 @@ namespace VectorNNTPD.BackFillerService.Retention
         {
             ArticleRetentionLogMessages.Rejected(_logger, kind, identity.ArticleIdHex, payloadBytes, _retainedBytes);
             return new ArticleRetentionResult(kind, identity, null, null, _retainedBytes, released);
+        }
+
+        /// <summary>
+        /// Holds a delivery claim until <see cref="Transfer"/> or disposal.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="TryClaimForDelivery"/> owns this value with <c>using</c>. Disposal releases the claim.
+        /// <see cref="Transfer"/> builds the caller's result first, then clears the holder, so a failure while
+        /// building that result still disposes the claim and a successful return does not.
+        /// </remarks>
+        private ref struct UnpublishedDeliveryClaim
+        {
+            /// <summary>Claim reserved under <see cref="_gate"/>, or <see langword="null"/> after transfer or disposal.</summary>
+            private ArticleDeliveryClaim? _claim;
+
+            /// <summary>Reserved claim. Valid after <see cref="Adopt"/> and before <see cref="Transfer"/> or disposal.</summary>
+            public ArticleDeliveryClaim Claim => _claim ?? throw new InvalidOperationException("Delivery claim is not reserved.");
+
+            /// <summary>Takes ownership of <paramref name="claim"/> until transfer or disposal.</summary>
+            /// <param name="claim">Claim already constructed for a reserved entry.</param>
+            public void Adopt(ArticleDeliveryClaim claim) => _claim = claim;
+
+            /// <summary>
+            /// Returns a claimed result and drops this holder's ownership.
+            /// </summary>
+            /// <returns>The caller's claim. This holder will not dispose it.</returns>
+            public ArticleDeliveryClaimResult Transfer()
+            {
+                var claim = Claim;
+                var result = ArticleDeliveryClaimResult.Claimed(claim);
+                _claim = null;
+                return result;
+            }
+
+            /// <summary>Rolls back the reserved claim when <see cref="Transfer"/> has not taken it.</summary>
+            public void Dispose()
+            {
+                var claim = _claim;
+                _claim = null;
+                claim?.Dispose();
+            }
         }
 
         /// <summary>
