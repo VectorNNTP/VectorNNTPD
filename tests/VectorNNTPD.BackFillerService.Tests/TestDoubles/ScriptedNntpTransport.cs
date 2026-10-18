@@ -120,9 +120,9 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
     internal sealed class ScriptedNntpServer
     {
         /// <summary>Server-to-client bytes (responses and greeting).</summary>
-        private readonly Pipe _toClient = new();
+        private readonly Pipe _toClient;
         /// <summary>Client-to-server bytes (commands).</summary>
-        private readonly Pipe _toServer = new();
+        private readonly Pipe _toServer;
         /// <summary>Raw command lines read from the client.</summary>
         private readonly List<byte[]> _commands = [];
         /// <summary>Maps uppercased command prefix to response bytes.</summary>
@@ -130,8 +130,22 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 
         /// <summary>Builds a server with the given greeting and default 430 handler.</summary>
         /// <param name="greeting">Initial status line written on accept.</param>
+        /// <remarks>
+        /// Both pipes use <see cref="PipeScheduler.Inline"/> and a large pause threshold.
+        /// Command handling then runs on the client write that flushed the command, so a busy thread pool cannot drop the handshake.
+        /// </remarks>
         internal ScriptedNntpServer(string greeting = "200 posting allowed")
         {
+            // Inline scheduling runs the peer on the caller's stack. A saturated thread pool
+            // then cannot miss the greeting or CAPABILITIES exchange inside the command timeout.
+            var options = new PipeOptions(
+                readerScheduler: PipeScheduler.Inline,
+                writerScheduler: PipeScheduler.Inline,
+                pauseWriterThreshold: 64 * 1024 * 1024,
+                resumeWriterThreshold: 32 * 1024 * 1024,
+                useSynchronizationContext: false);
+            _toClient = new Pipe(options);
+            _toServer = new Pipe(options);
             _onCommand = _ => "430 no such article\r\n"u8.ToArray();
             Greeting = greeting;
         }

@@ -43,7 +43,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.True(MemoryMarshal.TryGetArray(claimed.Claim!.ArticleBytes, out var retained));
             Assert.NotNull(retained.Array);
             Assert.NotSame(source, retained.Array);
-            Assert.Equal(expectedBytes, retained.Array);
+            Assert.Equal(expectedBytes.Length, retained.Count);
+            Assert.True(retained.Array.AsSpan(0, retained.Count).SequenceEqual(expectedBytes));
             Assert.All(source, static value => Assert.Equal(0xFF, value));
             claimed.Claim.Dispose();
             Assert.Equal(ArticleRetentionKind.Retained, handler.LastRetentionKind);

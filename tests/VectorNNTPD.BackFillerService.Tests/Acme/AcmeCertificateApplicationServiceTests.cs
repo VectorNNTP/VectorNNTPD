@@ -123,11 +123,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         /// <summary>
         /// Repeated renewal failure inside the safety window blocks watchdog keep-alives. A later replacement clears the block.
         /// </summary>
+        /// <remarks>
+        /// A second reader holds a certificate lease across both checks and reads watchdog health before releasing it.
+        /// The reader waits on a signal. It does not spin, so the renewal continuation and other tests can run.
+        /// </remarks>
         [Fact]
         public async Task Renewal_failure_inside_the_window_blocks_health_until_a_replacement_is_published()
         {
             var started = DateTimeOffset.UtcNow;
-            var reading = 0;
             var issuer = new ScriptedIssuer((call, domains, password) => call switch
             {
                 1 => CreateMaterial(domains, password, started.AddDays(20)),
@@ -140,18 +143,18 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             Assert.True(observed.Health.IsHealthyForWatchdog);
             using (observed.Publisher.Acquire())
             {
-                var reader = Task.Run(() =>
+                var releaseReader = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var readerHolding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var reader = Task.Run(async () =>
                 {
-                    while (Volatile.Read(ref reading) == 0)
-                    {
-                        _ = observed.Health.IsHealthyForWatchdog;
-                        if (observed.Publisher.IsAvailable)
-                        {
-                            using var current = observed.Publisher.Acquire();
-                        }
-                    }
+                    _ = observed.Health.IsHealthyForWatchdog;
+                    using var current = observed.Publisher.Acquire();
+                    readerHolding.TrySetResult();
+                    await releaseReader.Task.ConfigureAwait(false);
+                    _ = observed.Health.IsHealthyForWatchdog;
                 });
 
+                await readerHolding.Task.WaitAsync(TimeSpan.FromSeconds(2));
                 await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
                 observed.Time.Advance(TimeSpan.FromHours(6));
                 await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
@@ -163,7 +166,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
                 Assert.True(observed.Health.IsHealthyForWatchdog);
                 Assert.True(observed.Publisher.IsAvailable);
 
-                Volatile.Write(ref reading, 1);
+                releaseReader.TrySetResult();
                 await reader.WaitAsync(TimeSpan.FromSeconds(2));
             }
 

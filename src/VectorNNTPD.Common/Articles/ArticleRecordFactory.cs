@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Hashing;
 using VectorNNTPD.Common.Articles.DateParser;
 using VectorNNTPD.Common.Articles.Parsing;
@@ -15,8 +16,10 @@ namespace VectorNNTPD.Common.Articles
     /// Uses the existing Common parser, Diablo <see cref="ArticleTypeClassifier"/>, and
     /// Date/Path materializer. The materialized ArtData is headers, the separator, and a body
     /// with one stuffing dot on each line whose first content byte is <c>.</c>. The NNTP terminator
-    /// is not stored. ArtHash is one-shot XXH3-64 of that stuffed buffer
+    /// is not stored. ArtHash is one-shot XXH3-64 of the logical stuffed bytes
     /// (<c>XxHash3.HashToUInt64</c>), not an incremental hash and not IEEE CRC-32.
+    /// Article Work rents the canonical array from <see cref="ArrayPool{T}.Shared"/>.
+    /// A null pool still allocates an exact-size array. Hash and field ranges use the logical length.
     /// The destuffed source buffer is not retained. FieldTable
     /// ranges are located on the materialized ArtData so Date/Path length changes cannot
     /// leave offsets pointing at the discarded source. Stuffing inserts bytes only in the body,
@@ -46,17 +49,22 @@ namespace VectorNNTPD.Common.Articles
         /// <param name="parser">Common article parser. Its local identity is the application FQDN used by <see cref="ArticlePathMode.Traverse"/>.</param>
         /// <param name="destuffedArticle">Destuffed article bytes. Not retained after success. The returned ArtData is the stuffed form.</param>
         /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN. <see cref="ArticlePathMode.Normalize"/> does not.</param>
+        /// <param name="canonicalBufferPool">
+        /// Pool for the canonical array. Null allocates an exact-size array.
+        /// </param>
         /// <returns>Accepted record referencing the materialized ArtData buffer, or a failure classification.</returns>
         internal static ArticleRecordCreateResult TryCreate(
             NntpArticleParser parser,
             ReadOnlyMemory<byte> destuffedArticle,
-            ArticlePathMode pathMode)
+            ArticlePathMode pathMode,
+            ArrayPool<byte>? canonicalBufferPool = null)
             => TryCreate(
                 parser,
                 destuffedArticle,
                 pathMode,
                 ArticleResourceLimits.MaxArticleBytes,
-                ArticlePathCanonicalizer.OrganizationalTrackerHost);
+                ArticlePathCanonicalizer.OrganizationalTrackerHost,
+                canonicalBufferPool);
 
         /// <summary>
         /// Parses and materializes an article with one captured size limit and Path tracker.
@@ -66,13 +74,18 @@ namespace VectorNNTPD.Common.Articles
         /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN.</param>
         /// <param name="maxArticleBytes">Article-size boundary captured for this operation.</param>
         /// <param name="organizationalTrackerHost">Path tracker captured with <paramref name="maxArticleBytes"/>.</param>
+        /// <param name="canonicalBufferPool">
+        /// Pool for the canonical array. Null allocates an exact-size array.
+        /// Article Work passes <see cref="ArrayPool{T}.Shared"/>.
+        /// </param>
         /// <returns>Accepted record, or a failure classification.</returns>
         internal static ArticleRecordCreateResult TryCreate(
             NntpArticleParser parser,
             ReadOnlyMemory<byte> destuffedArticle,
             ArticlePathMode pathMode,
             int maxArticleBytes,
-            ReadOnlySpan<byte> organizationalTrackerHost)
+            ReadOnlySpan<byte> organizationalTrackerHost,
+            ArrayPool<byte>? canonicalBufferPool = null)
         {
             ArgumentNullException.ThrowIfNull(parser);
 
@@ -86,27 +99,51 @@ namespace VectorNNTPD.Common.Articles
                 in parse,
                 pathMode,
                 maxArticleBytes,
-                organizationalTrackerHost);
+                organizationalTrackerHost,
+                canonicalBufferPool);
             if (!materialize.IsAccepted || materialize.ArticleBytes is null)
             {
                 return ArticleRecordCreateResult.RejectedMaterialize(materialize.FailureCode);
             }
 
             var artData = materialize.ArticleBytes;
-            var fields = ArticleFieldTable.Locate(artData, parse.SelectedDateHeaderName);
-            var artId = ArticleId.FromMessageId(fields.MessageId.Slice(artData));
-            var artHash = XxHash3.HashToUInt64(artData);
-            var artType = ArticleTypeClassifier.Classify(parse.HeaderBytes.Span, parse.BodyBytes.Span);
-            var record = new ArticleRecord(
-                artId,
-                artHash,
-                artType,
-                parse.BodyLineCount,
-                parse.CanonicalUtc,
-                ArticleParseStatus.CanonicalV1,
-                artData,
-                fields);
-            return ArticleRecordCreateResult.Accepted(record, parse.SelectedDateHeaderName);
+            var length = materialize.CanonicalLength;
+            CanonicalArticleBuffer? buffer = null;
+            try
+            {
+                var logical = artData.AsSpan(0, length);
+                var fields = ArticleFieldTable.Locate(logical, parse.SelectedDateHeaderName);
+                var artId = ArticleId.FromMessageId(fields.MessageId.Slice(logical));
+                var artHash = XxHash3.HashToUInt64(logical);
+                var artType = ArticleTypeClassifier.Classify(parse.HeaderBytes.Span, parse.BodyBytes.Span);
+                buffer = canonicalBufferPool is null
+                    ? CanonicalArticleBuffer.Exact(artData)
+                    : CanonicalArticleBuffer.Rented(artData, length, canonicalBufferPool);
+                var record = new ArticleRecord(
+                    artId,
+                    artHash,
+                    artType,
+                    parse.BodyLineCount,
+                    parse.CanonicalUtc,
+                    ArticleParseStatus.CanonicalV1,
+                    buffer,
+                    fields);
+                buffer = null;
+                return ArticleRecordCreateResult.Accepted(record, parse.SelectedDateHeaderName);
+            }
+            catch
+            {
+                if (buffer is not null)
+                {
+                    buffer.ReleaseCreator();
+                }
+                else if (canonicalBufferPool is not null)
+                {
+                    canonicalBufferPool.Return(artData, clearArray: true);
+                }
+
+                throw;
+            }
         }
 
         /// <summary>
