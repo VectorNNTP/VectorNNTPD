@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Listener;
+using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Retention;
@@ -549,6 +550,204 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             await ReadGreetingAsync(client.Stream);
         }
 
+        /// <summary>
+        /// Accepted sockets receive independent buffer limits and <see cref="Socket.NoDelay"/> before TLS.
+        /// The greeting still arrives, and the options remain after that write.
+        /// </summary>
+        [Fact]
+        public async Task Accepted_socket_is_configured_before_tls_and_remains_configured_after_the_greeting()
+        {
+            const int send = 256 * 1024;
+            const int receive = 128 * 1024;
+            var port = GetFreePort();
+            var runtime = CreateRuntime(port);
+            runtime = runtime with
+            {
+                Listener = runtime.Listener with
+                {
+                    SendBufferBytes = send,
+                    ReceiveBufferBytes = receive,
+                },
+            };
+            var logger = new CollectingLogger<CacheListenerService>();
+            var service = new CacheListenerService(
+                runtime,
+                TestListenerCertificates.CreatePublishedProvider(),
+                ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
+                logger);
+            Socket? accepted = null;
+            service.AfterAcceptedSocketConfigured = socket => accepted = socket;
+            await service.StartAsync(CancellationToken.None);
+            try
+            {
+                await using var client = await ConnectAsync(port);
+                Assert.NotNull(accepted);
+                AssertRequestedBuffers(accepted, send, receive);
+                await ReadGreetingAsync(client.Stream);
+                AssertRequestedBuffers(accepted, send, receive);
+                Assert.Contains(
+                    logger.Entries,
+                    entry => entry.EventId.Id == 5402
+                        && entry.Message.Contains(send.ToString(), StringComparison.Ordinal)
+                        && entry.Message.Contains(receive.ToString(), StringComparison.Ordinal));
+            }
+            finally
+            {
+                await service.DisposeAsync();
+            }
+        }
+
+        /// <summary>Two overlapping accepts each get the accepted-socket options, and both sessions stay usable.</summary>
+        [Fact]
+        public async Task Concurrent_accepts_each_configure_their_own_socket()
+        {
+            const int send = 256 * 1024;
+            const int receive = 128 * 1024;
+            var port = GetFreePort();
+            var runtime = CreateRuntime(port, maxConnections: 8);
+            runtime = runtime with
+            {
+                Listener = runtime.Listener with
+                {
+                    SendBufferBytes = send,
+                    ReceiveBufferBytes = receive,
+                },
+            };
+            var service = new CacheListenerService(
+                runtime,
+                TestListenerCertificates.CreatePublishedProvider(),
+                ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
+                NullLogger<CacheListenerService>.Instance);
+            var seen = new ConcurrentBag<Socket>();
+            service.AfterAcceptedSocketConfigured = seen.Add;
+            await service.StartAsync(CancellationToken.None);
+            try
+            {
+                var firstConnect = ConnectAsync(port);
+                var secondConnect = ConnectAsync(port);
+                await using var first = await firstConnect;
+                await using var second = await secondConnect;
+                Assert.Equal(2, seen.Count);
+                foreach (var socket in seen)
+                {
+                    AssertRequestedBuffers(socket, send, receive);
+                }
+
+                await ReadGreetingAsync(first.Stream);
+                await ReadGreetingAsync(second.Stream);
+            }
+            finally
+            {
+                await service.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// A socket-option failure releases the only admission slot, and the next connection still completes.
+        /// </summary>
+        [Fact]
+        public async Task Accepted_socket_option_failure_releases_admission_and_the_listener_stays_usable()
+        {
+            var port = GetFreePort();
+            var logger = new CollectingLogger<CacheListenerService>();
+            var service = new CacheListenerService(
+                CreateRuntime(port, maxConnections: 1),
+                TestListenerCertificates.CreatePublishedProvider(),
+                ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
+                logger);
+            var failed = 0;
+            service.BeforeAcceptedSocketOptions = _ =>
+            {
+                if (Interlocked.Increment(ref failed) == 1)
+                {
+                    throw new SocketException((int)SocketError.InvalidArgument);
+                }
+            };
+            await service.StartAsync(CancellationToken.None);
+            try
+            {
+                var error = await Record.ExceptionAsync(() => ConnectAsync(port));
+                Assert.True(error is IOException or AuthenticationException or SocketException);
+                await ArticleWorkTestDeliveries.WaitUntilAsync(
+                    () => service.ActiveConnections == 0,
+                    TimeSpan.FromSeconds(2));
+                Assert.Contains(
+                    logger.Entries,
+                    entry => entry.EventId.Id == 5415
+                        && entry.Message.Contains(nameof(SocketError.InvalidArgument), StringComparison.Ordinal));
+
+                await using var client = await ConnectAsync(port);
+                await ReadGreetingAsync(client.Stream);
+            }
+            finally
+            {
+                await service.DisposeAsync();
+            }
+        }
+
+        /// <summary>An IPv6 accepted socket gets the same options before the greeting when the platform can bind ::1.</summary>
+        [Fact]
+        public async Task Accepted_ipv6_socket_is_configured_before_the_greeting_when_supported()
+        {
+            if (!Socket.OSSupportsIPv6)
+            {
+                output.WriteLine("SKIP: Socket.OSSupportsIPv6 is false on this platform.");
+                return;
+            }
+
+            const int send = 256 * 1024;
+            const int receive = 128 * 1024;
+            var port = GetFreePort();
+            var runtime = CreateRuntime(port) with { BindAddressTokens = ["::1"] };
+            runtime = runtime with
+            {
+                Listener = runtime.Listener with
+                {
+                    SendBufferBytes = send,
+                    ReceiveBufferBytes = receive,
+                },
+            };
+            var service = new CacheListenerService(
+                runtime,
+                TestListenerCertificates.CreatePublishedProvider(),
+                ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
+                NullLogger<CacheListenerService>.Instance);
+            Socket? accepted = null;
+            service.AfterAcceptedSocketConfigured = socket => accepted = socket;
+            try
+            {
+                await service.StartAsync(CancellationToken.None);
+            }
+            catch (SocketException ex) when (ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.AddressNotAvailable)
+            {
+                output.WriteLine("SKIP: IPv6 loopback bind is not available: {0}", ex.SocketErrorCode);
+                await service.DisposeAsync();
+                return;
+            }
+
+            try
+            {
+                using var tcp = new TcpClient(AddressFamily.InterNetworkV6);
+                await tcp.ConnectAsync(IPAddress.IPv6Loopback, port);
+                await using var ssl = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false, static (_, _, _, _) => true);
+                await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = "localhost",
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+                });
+                Assert.NotNull(accepted);
+                Assert.Equal(AddressFamily.InterNetworkV6, accepted.AddressFamily);
+                AssertRequestedBuffers(accepted, send, receive);
+                await ReadGreetingAsync(ssl);
+                AssertRequestedBuffers(accepted, send, receive);
+            }
+            finally
+            {
+                await service.DisposeAsync();
+            }
+        }
+
         /// <summary>Reads exactly the 201 posting-prohibited greeting from the TLS stream.</summary>
         /// <param name="stream">Authenticated client-side SSL stream.</param>
         private static async Task ReadGreetingAsync(SslStream stream)
@@ -649,6 +848,20 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             {
                 Listener = runtime.Listener with { MaxActiveConnections = maxConnections },
             };
+        }
+
+        /// <summary>
+        /// Asserts Nagle is off and that the OS-reported buffers are at least the requested sizes and are not the same value.
+        /// </summary>
+        /// <param name="socket">Accepted socket under test.</param>
+        /// <param name="send">Requested send-buffer limit.</param>
+        /// <param name="receive">Requested receive-buffer limit. Must differ from <paramref name="send"/>.</param>
+        private static void AssertRequestedBuffers(Socket socket, int send, int receive)
+        {
+            Assert.True(socket.NoDelay);
+            Assert.True(socket.SendBufferSize >= send, $"send buffer {socket.SendBufferSize} is below {send}");
+            Assert.True(socket.ReceiveBufferSize >= receive, $"receive buffer {socket.ReceiveBufferSize} is below {receive}");
+            Assert.NotEqual(socket.SendBufferSize, socket.ReceiveBufferSize);
         }
 
         /// <summary>Allocates an ephemeral TCP port by binding loopback port zero.</summary>

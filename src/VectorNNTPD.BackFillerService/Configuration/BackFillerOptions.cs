@@ -315,8 +315,40 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <remarks>
         /// Default 1024. Validation requires 1 through <see cref="int.MaxValue"/>.
         /// The cache listener rejects further accepts at this count.
+        /// Larger TCP buffers do not raise this cap.
         /// </remarks>
         public int MaxActiveConnections { get; set; } = 1024;
+
+        /// <summary>Default TCP send-buffer limit for one accepted cache-listener socket, in bytes. Two MiB.</summary>
+        /// <remarks>
+        /// Article egress is the large direction on this socket. Two MiB is about 1.7 ms of 10 Gbps.
+        /// It is a kernel buffer limit, not a reserved managed allocation and not the congestion window.
+        /// </remarks>
+        internal const int DefaultSendBufferBytes = 2 * 1024 * 1024;
+
+        /// <summary>Default TCP receive-buffer limit for one accepted cache-listener socket, in bytes. One MiB.</summary>
+        /// <remarks>
+        /// Inbound listener traffic is short NNTP commands. One MiB is independent of <see cref="DefaultSendBufferBytes"/>.
+        /// </remarks>
+        internal const int DefaultReceiveBufferBytes = 1 * 1024 * 1024;
+
+        /// <summary>Requested TCP send-buffer limit, in bytes, applied to each accepted socket before TLS.</summary>
+        /// <remarks>
+        /// Default <see cref="DefaultSendBufferBytes"/>. Validation accepts
+        /// <see cref="Networking.TcpSocketOptions.MinimumBufferBytes"/> through
+        /// <see cref="Networking.TcpSocketOptions.MaximumBufferBytes"/>.
+        /// At the default <see cref="MaxActiveConnections"/> of 1024, the default send plus receive limits
+        /// are a 3 GiB kernel-buffer ceiling (1024 × 3 MiB), not memory reserved when the listener binds.
+        /// The operating system may round or double the stored limit.
+        /// </remarks>
+        public int SendBufferBytes { get; set; } = DefaultSendBufferBytes;
+
+        /// <summary>Requested TCP receive-buffer limit, in bytes, applied to each accepted socket before TLS.</summary>
+        /// <remarks>
+        /// Default <see cref="DefaultReceiveBufferBytes"/>. Same validated range as <see cref="SendBufferBytes"/>.
+        /// Not inherited from the listening socket.
+        /// </remarks>
+        public int ReceiveBufferBytes { get; set; } = DefaultReceiveBufferBytes;
     }
 
     /// <summary>Outbound NNTP provider session resource bounds.</summary>
@@ -343,6 +375,22 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <summary>Maximum accepted concurrent establishment limit.</summary>
         internal const int MaximumMaxConcurrentSessionEstablishments = 1024;
 
+        /// <summary>Default TCP send-buffer limit for one upstream provider socket, in bytes. One MiB.</summary>
+        /// <remarks>
+        /// Upstream sends are short commands. One MiB is independent of <see cref="DefaultReceiveBufferBytes"/>.
+        /// Nagle is disabled in code and is not a configuration setting.
+        /// </remarks>
+        internal const int DefaultSendBufferBytes = 1 * 1024 * 1024;
+
+        /// <summary>Default TCP receive-buffer limit for one upstream provider socket, in bytes. Two MiB.</summary>
+        /// <remarks>
+        /// Article bodies arrive on this socket. Two MiB is about 1.7 ms of 10 Gbps.
+        /// Steady-state session count remains per-provider <c>MaxSessions</c>. Each session requests
+        /// 3 MiB of kernel buffering at these defaults. That is not a managed allocation, and
+        /// <see cref="MaxConcurrentSessionEstablishments"/> still limits how many sessions may connect at once.
+        /// </remarks>
+        internal const int DefaultReceiveBufferBytes = 2 * 1024 * 1024;
+
         /// <summary>
         /// Gets or sets how many provider NNTP sessions may establish concurrently across all pools.
         /// </summary>
@@ -354,6 +402,22 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <c>MaxSessions</c> per provider.
         /// </remarks>
         public int MaxConcurrentSessionEstablishments { get; set; } = DefaultMaxConcurrentSessionEstablishments;
+
+        /// <summary>Requested TCP send-buffer limit, in bytes, for each upstream provider socket.</summary>
+        /// <remarks>
+        /// Default <see cref="DefaultSendBufferBytes"/>. Validation accepts
+        /// <see cref="Networking.TcpSocketOptions.MinimumBufferBytes"/> through
+        /// <see cref="Networking.TcpSocketOptions.MaximumBufferBytes"/>.
+        /// Applied before connect and again on the connected socket, before TLS or NNTP bytes.
+        /// </remarks>
+        public int SendBufferBytes { get; set; } = DefaultSendBufferBytes;
+
+        /// <summary>Requested TCP receive-buffer limit, in bytes, for each upstream provider socket.</summary>
+        /// <remarks>
+        /// Default <see cref="DefaultReceiveBufferBytes"/>. Independent of <see cref="SendBufferBytes"/>
+        /// and of the 64 KiB managed NNTP reader buffer.
+        /// </remarks>
+        public int ReceiveBufferBytes { get; set; } = DefaultReceiveBufferBytes;
     }
 
     /// <summary>In-memory article retention policy.</summary>

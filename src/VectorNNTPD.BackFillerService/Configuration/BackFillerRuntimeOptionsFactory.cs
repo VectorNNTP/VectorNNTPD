@@ -171,7 +171,9 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     TimeSpan.FromSeconds(listener.TlsHandshakeTimeoutSeconds),
                     TimeSpan.FromSeconds(listener.IoProgressTimeoutSeconds),
                     listener.MaxQueuedFoundPayloadBytes,
-                    listener.MaxActiveConnections),
+                    listener.MaxActiveConnections,
+                    listener.SendBufferBytes,
+                    listener.ReceiveBufferBytes),
                 ArticleRetention: new BackFillerArticleRetentionRuntimeOptions(
                     checked(retention.MaximumRetainedPayloadGigabytes * BackFillerArticleRetentionOptions.BytesPerGibibyte),
                     TimeSpan.FromSeconds(retention.RetentionTtlSeconds),
@@ -187,7 +189,10 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     nntpDbBuilder.Server ?? string.Empty,
                     nntpDbBuilder.Database ?? string.Empty),
                 AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds),
-                Nntp: new BackFillerNntpRuntimeOptions(nntp.MaxConcurrentSessionEstablishments));
+                Nntp: new BackFillerNntpRuntimeOptions(
+                    nntp.MaxConcurrentSessionEstablishments,
+                    nntp.SendBufferBytes,
+                    nntp.ReceiveBufferBytes));
         }
 
         /// <summary>Resolves the file-log directory, or returns empty when that directory is blank.</summary>

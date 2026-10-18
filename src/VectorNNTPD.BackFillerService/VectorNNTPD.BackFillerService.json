@@ -19,7 +19,14 @@
       "MaxActiveConnections": 1024,
       "MaxQueuedFoundPayloadBytes": 67108864,
       "ParserAccumulationMaxBytes": 262144,
+      "ReceiveBufferBytes": 1048576,
+      "SendBufferBytes": 2097152,
       "TlsHandshakeTimeoutSeconds": 30
+    },
+    "Nntp": {
+      "MaxConcurrentSessionEstablishments": 8,
+      "ReceiveBufferBytes": 2097152,
+      "SendBufferBytes": 1048576
     },
     "Logging": {
       "LogLevel": "Information",

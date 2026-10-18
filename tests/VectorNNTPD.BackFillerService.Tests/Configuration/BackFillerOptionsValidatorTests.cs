@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
+using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.Common.Configuration;
 using VectorNNTPD.Common.Hosting;
@@ -359,6 +360,90 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 options,
                 BackFillerTestOptions.CreateValidNntpDb());
             Assert.Equal(4, runtime.Nntp.MaxConcurrentSessionEstablishments);
+        }
+
+        /// <summary>Omitted buffer keys keep the directional defaults and still pass validation.</summary>
+        [Fact]
+        public void Validate_uses_independent_default_tcp_buffers_when_omitted()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            Assert.Equal(BackFillerNntpOptions.DefaultSendBufferBytes, options.Nntp.SendBufferBytes);
+            Assert.Equal(BackFillerNntpOptions.DefaultReceiveBufferBytes, options.Nntp.ReceiveBufferBytes);
+            Assert.NotEqual(options.Nntp.SendBufferBytes, options.Nntp.ReceiveBufferBytes);
+            Assert.Equal(BackFillerListenerOptions.DefaultSendBufferBytes, options.Listener.SendBufferBytes);
+            Assert.Equal(BackFillerListenerOptions.DefaultReceiveBufferBytes, options.Listener.ReceiveBufferBytes);
+            Assert.NotEqual(options.Listener.SendBufferBytes, options.Listener.ReceiveBufferBytes);
+            Assert.Equal(64 * 1024, NntpSessionOptions.Default.ReceiveBufferBytes);
+
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        /// <summary>Runtime snapshot copies each buffer without coupling send to receive or upstream to the listener.</summary>
+        [Fact]
+        public void Runtime_options_project_independent_tcp_buffers()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.Nntp.SendBufferBytes = 32 * 1024;
+            options.Nntp.ReceiveBufferBytes = 64 * 1024;
+            options.Listener.SendBufferBytes = 128 * 1024;
+            options.Listener.ReceiveBufferBytes = 256 * 1024;
+            options.Nntp.MaxConcurrentSessionEstablishments = BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments;
+            options.Listener.MaxActiveConnections = 1024;
+
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidNntpDb());
+
+            Assert.Equal(32 * 1024, runtime.Nntp.SendBufferBytes);
+            Assert.Equal(64 * 1024, runtime.Nntp.ReceiveBufferBytes);
+            Assert.Equal(128 * 1024, runtime.Listener.SendBufferBytes);
+            Assert.Equal(256 * 1024, runtime.Listener.ReceiveBufferBytes);
+            Assert.Equal(1024, runtime.Listener.MaxActiveConnections);
+            Assert.Equal(
+                BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments,
+                runtime.Nntp.MaxConcurrentSessionEstablishments);
+        }
+
+        /// <summary>Buffer sizes outside 16 KiB through 16 MiB fail independently for each socket direction.</summary>
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(16 * 1024 - 1)]
+        [InlineData(16 * 1024 * 1024 + 1)]
+        public void Validate_fails_for_invalid_tcp_buffer_sizes(int value)
+        {
+            AssertBufferRejected(options => options.Nntp.SendBufferBytes = value, "BackFiller:Nntp:SendBufferBytes");
+            AssertBufferRejected(options => options.Nntp.ReceiveBufferBytes = value, "BackFiller:Nntp:ReceiveBufferBytes");
+            AssertBufferRejected(options => options.Listener.SendBufferBytes = value, "BackFiller:Listener:SendBufferBytes");
+            AssertBufferRejected(options => options.Listener.ReceiveBufferBytes = value, "BackFiller:Listener:ReceiveBufferBytes");
+        }
+
+        /// <summary>The inclusive buffer bounds are accepted and do not change the session cap.</summary>
+        [Theory]
+        [InlineData(16 * 1024)]
+        [InlineData(16 * 1024 * 1024)]
+        public void Validate_accepts_tcp_buffer_bounds(int value)
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.Nntp.SendBufferBytes = value;
+            options.Nntp.ReceiveBufferBytes = value == 16 * 1024 ? 16 * 1024 * 1024 : 16 * 1024;
+            options.Listener.SendBufferBytes = options.Nntp.ReceiveBufferBytes;
+            options.Listener.ReceiveBufferBytes = value;
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        /// <summary>Sets one buffer and expects that key in the validation failure.</summary>
+        /// <param name="assign">Assignment of the invalid size.</param>
+        /// <param name="key">Configuration key that must appear in the failure.</param>
+        private static void AssertBufferRejected(Action<BackFillerOptions> assign, string key)
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            assign(options);
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(result.Failures!, failure => failure.Contains(key, StringComparison.Ordinal));
         }
 
         /// <summary>
