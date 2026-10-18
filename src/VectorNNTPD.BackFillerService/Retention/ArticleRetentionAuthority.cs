@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.Common.Articles;
+using CanonicalBufferLease = VectorNNTPD.Common.Articles.CanonicalArticleBuffer.CanonicalBufferLease;
 using VectorNNTPD.Common.Articles.Parsing;
 using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
 
@@ -279,6 +280,10 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// <see cref="ArticleRetentionKind.ArticleIdCollision"/>.
         /// An expired ArticleId collision is removed so the new Message-ID can be indexed.
         /// FIFO reclaim then runs only for a new entry. The incoming array is not copied.
+        /// Byte accounting uses <see cref="ArticleRecord.ArtSize"/>, which is the logical article length.
+        /// A rented array may be longer. Storing a new entry adds one buffer consumer. Expiry, FIFO
+        /// reclaim, capacity eviction, and a committed delivery each release that consumer once.
+        /// A delivery claim holds a separate consumer until the claim settles.
         /// </remarks>
         public ArticleRetentionResult RetainCanonical(
             string messageId,
@@ -300,7 +305,7 @@ namespace VectorNNTPD.BackFillerService.Retention
 
             if (record.ParseStatus != ArticleParseStatus.CanonicalV1
                 || record.ArtSize <= 0
-                || !TryGetOwnedArtData(in record, out var artData))
+                || !TryGetOwnedArtData(in record, out _))
             {
                 ArticleRetentionLogMessages.Rejected(
                     _logger,
@@ -317,13 +322,13 @@ namespace VectorNNTPD.BackFillerService.Retention
                     0);
             }
 
-            if (artData.Length > _maximumBytes)
+            if (record.ArtSize > _maximumBytes)
             {
                 ArticleRetentionLogMessages.Rejected(
                     _logger,
                     ArticleRetentionKind.PayloadExceedsCapacity,
                     null,
-                    artData.Length,
+                    record.ArtSize,
                     RetainedPayloadBytes);
                 return new ArticleRetentionResult(
                     ArticleRetentionKind.PayloadExceedsCapacity,
@@ -336,18 +341,19 @@ namespace VectorNNTPD.BackFillerService.Retention
 
             var identity = ArticleIdentity.From(messageId, record.ArtId);
             var now = _time.GetUtcNow();
+            using var pooledReturns = CanonicalArticleBuffer.ReturnScope.Enter();
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 if (_admissionClosed)
                 {
-                    return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, artData.Length, 0);
+                    return RejectLocked(ArticleRetentionKind.ShuttingDown, identity, record.ArtSize, 0);
                 }
 
                 if (_byRequestId.TryGetValue(requestId, out var requestOwner)
                     && !string.Equals(requestOwner.Identity.MessageId, messageId, StringComparison.Ordinal))
                 {
-                    return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, artData.Length, 0);
+                    return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, record.ArtSize, 0);
                 }
 
                 if (_byMessageId.TryGetValue(messageId, out var existing))
@@ -365,7 +371,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                             return RejectLocked(
                                 ArticleRetentionKind.OpenableRequestIdLimitExceeded,
                                 existing.Identity,
-                                artData.Length,
+                                record.ArtSize,
                                 0);
                         }
 
@@ -388,37 +394,94 @@ namespace VectorNNTPD.BackFillerService.Retention
                     }
                     else
                     {
-                        return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, artData.Length, 0);
+                        return RejectLocked(ArticleRetentionKind.ArticleIdCollision, identity, record.ArtSize, 0);
                     }
                 }
 
-                var released = ReclaimForAdmissionLocked(artData.Length, now);
-                if (_retainedBytes + artData.Length > _maximumBytes)
+                var released = ReclaimForAdmissionLocked(record.ArtSize, now);
+                if (_retainedBytes + record.ArtSize > _maximumBytes)
                 {
-                    return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, artData.Length, released);
+                    return RejectLocked(ArticleRetentionKind.CapacityUnavailable, identity, record.ArtSize, released);
                 }
 
-                var entry = new RetainedEntry(
-                    identity,
-                    admittedFqdn,
-                    _bindPort,
-                    record,
-                    selectedDateHeaderName,
-                    now + _ttl);
-                entry.Node = _insertionOrder.AddLast(entry);
-                _byMessageId[messageId] = entry;
-                _messageIdByArticleId[identity.ArticleIdHex] = messageId;
-                AttachRequestIdLocked(entry, requestId);
-                AddBytesLocked(artData.Length);
-                _physicalCount++;
-                ArticleRetentionLogMessages.Retained(_logger, identity.ArticleIdHex, artData.Length, _retainedBytes);
-                return new ArticleRetentionResult(
-                    ArticleRetentionKind.Retained,
-                    identity,
-                    entry.Fqdn,
-                    entry.ListenerPort,
-                    _retainedBytes,
-                    released);
+                RetainedEntry? entry = null;
+                var messageIndexed = false;
+                var articleIndexed = false;
+                var requestAttached = false;
+                var accounted = false;
+                CanonicalBufferLease? lease = null;
+                try
+                {
+                    entry = new RetainedEntry(
+                        identity,
+                        admittedFqdn,
+                        _bindPort,
+                        record,
+                        selectedDateHeaderName,
+                        now + _ttl);
+                    entry.Node = _insertionOrder.AddLast(entry);
+                    ThrowPublicationFault(PublicationFaultAfterLink);
+                    _byMessageId.Add(messageId, entry);
+                    messageIndexed = true;
+                    ThrowPublicationFault(PublicationFaultAfterMessageId);
+                    _messageIdByArticleId.Add(identity.ArticleIdHex, messageId);
+                    articleIndexed = true;
+                    ThrowPublicationFault(PublicationFaultAfterArticleId);
+                    requestAttached = AttachRequestIdLocked(entry, requestId);
+                    AddBytesLocked(record.ArtSize);
+                    _physicalCount++;
+                    accounted = true;
+                    ThrowPublicationFault(PublicationFaultAfterAccounting);
+                    if (!record.TryCreateBufferLease(out lease))
+                    {
+                        RollbackPublication(
+                            entry,
+                            messageId,
+                            identity.ArticleIdHex,
+                            requestId,
+                            messageIndexed,
+                            articleIndexed,
+                            requestAttached,
+                            accounted,
+                            lease);
+                        return RejectLocked(ArticleRetentionKind.InvalidPayload, identity, record.ArtSize, released);
+                    }
+
+                    entry.HoldBuffer(lease);
+                    lease = null;
+                    ThrowPublicationFault(PublicationFaultAfterLease);
+                    var result = new ArticleRetentionResult(
+                        ArticleRetentionKind.Retained,
+                        identity,
+                        entry.Fqdn,
+                        entry.ListenerPort,
+                        _retainedBytes,
+                        released);
+                    ArticleRetentionLogMessages.Retained(_logger, identity.ArticleIdHex, record.ArtSize, _retainedBytes);
+                    return result;
+                }
+                catch
+                {
+                    if (entry is not null)
+                    {
+                        RollbackPublication(
+                            entry,
+                            messageId,
+                            identity.ArticleIdHex,
+                            requestId,
+                            messageIndexed,
+                            articleIndexed,
+                            requestAttached,
+                            accounted,
+                            lease);
+                    }
+                    else
+                    {
+                        lease?.Dispose();
+                    }
+
+                    throw;
+                }
             }
         }
 
@@ -473,6 +536,7 @@ namespace VectorNNTPD.BackFillerService.Retention
         public ArticleDeliveryClaimResult TryClaimForDelivery(ReadOnlySpan<byte> messageIdOctets)
         {
             var key = messageIdOctets.IsEmpty ? null : CreateDeliveryKey(messageIdOctets);
+            using var pooledReturns = CanonicalArticleBuffer.ReturnScope.Enter();
             using var pending = new UnpublishedDeliveryClaim();
             lock (_gate)
             {
@@ -513,10 +577,19 @@ namespace VectorNNTPD.BackFillerService.Retention
                     return ArticleDeliveryClaimResult.NotFound();
                 }
 
-                pending.Adopt(new ArticleDeliveryClaim(this, record.ArtData, entry.Identity.MessageId));
+                CanonicalBufferLease? lease = null;
+                var adopted = false;
                 var added = false;
                 try
                 {
+                    if (!record.TryCreateBufferLease(out lease))
+                    {
+                        return ArticleDeliveryClaimResult.NotFound();
+                    }
+
+                    pending.Adopt(new ArticleDeliveryClaim(this, record, entry.Identity.MessageId, lease));
+                    adopted = true;
+                    lease = null;
                     _deliveryClaims.Add(pending.Claim, entry);
                     added = true;
                 }
@@ -525,6 +598,11 @@ namespace VectorNNTPD.BackFillerService.Retention
                     if (!added)
                     {
                         ReleaseDeliveryHoldLocked(entry);
+                    }
+
+                    if (!adopted)
+                    {
+                        lease?.Dispose();
                     }
                 }
             }
@@ -651,6 +729,7 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// </remarks>
         public long SweepExpired()
         {
+            using var pooledReturns = CanonicalArticleBuffer.ReturnScope.Enter();
             lock (_gate)
             {
                 if (_disposed)
@@ -695,6 +774,7 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// </remarks>
         public ValueTask DisposeAsync()
         {
+            using var pooledReturns = CanonicalArticleBuffer.ReturnScope.Enter();
             lock (_gate)
             {
                 if (_disposed)
@@ -919,14 +999,15 @@ namespace VectorNNTPD.BackFillerService.Retention
         }
 
         /// <summary>
-        /// Accepts ArtData only when it is the record's single backing array, starting at offset zero,
+        /// Accepts ArtData only when it is a prefix of one backing array, starting at offset zero,
         /// with length equal to <see cref="ArticleRecord.ArtSize"/> and greater than zero.
+        /// A rented array may be longer than that prefix. A non-zero offset is rejected.
         /// </summary>
         /// <param name="record">Candidate record. Not copied.</param>
         /// <param name="payload">The backing array when the method returns <see langword="true"/>; otherwise <see langword="null"/>.</param>
         /// <returns>
         /// <see langword="true"/> when retention can take that array by reference.
-        /// A slice, a short view, or an empty buffer returns <see langword="false"/>.
+        /// A non-zero offset, a length other than <see cref="ArticleRecord.ArtSize"/>, or an empty buffer returns <see langword="false"/>.
         /// </returns>
         private static bool TryGetOwnedArtData(in ArticleRecord record, out byte[] payload)
         {
@@ -1003,6 +1084,98 @@ namespace VectorNNTPD.BackFillerService.Retention
                 or AccessViolationException
                 or AppDomainUnloadedException
                 or SEHException;
+
+        /// <summary>Test stage that throws after the entry is linked and before any index insert.</summary>
+        internal const string PublicationFaultAfterLink = "after-link";
+
+        /// <summary>Test stage that throws after the Message-ID index insert.</summary>
+        internal const string PublicationFaultAfterMessageId = "after-message-id";
+
+        /// <summary>Test stage that throws after the ArticleId index insert.</summary>
+        internal const string PublicationFaultAfterArticleId = "after-article-id";
+
+        /// <summary>Test stage that throws after retained-byte accounting.</summary>
+        internal const string PublicationFaultAfterAccounting = "after-accounting";
+
+        /// <summary>Test stage that throws after the retention buffer lease is stored on the entry.</summary>
+        internal const string PublicationFaultAfterLease = "after-lease";
+
+        /// <summary>
+        /// Test hook for <see cref="RetainCanonical"/> publication. Null unless a test sets one stage name.
+        /// Async-local so the handler's await still observes the stage, and one test does not inject it into another.
+        /// </summary>
+        private static readonly AsyncLocal<string?> PublicationFault = new();
+
+        /// <summary>Gets or sets the publication stage that should throw. Tests clear it in a finally.</summary>
+        internal static string? PublicationFaultStage
+        {
+            get => PublicationFault.Value;
+            set => PublicationFault.Value = value;
+        }
+
+        /// <summary>Throws when <see cref="PublicationFaultStage"/> equals <paramref name="stage"/>.</summary>
+        /// <param name="stage">Stage the insert has just completed.</param>
+        private static void ThrowPublicationFault(string stage)
+        {
+            if (PublicationFault.Value == stage)
+            {
+                throw new InvalidOperationException("Injected publication fault: " + stage);
+            }
+        }
+
+        /// <summary>
+        /// Removes a partial insert and drops a lease that was acquired for it.
+        /// Called under <see cref="_gate"/> before that lock is released.
+        /// </summary>
+        /// <param name="entry">Entry that may be linked, indexed, or holding a buffer lease.</param>
+        /// <param name="messageId">Message-ID key passed to the failed insert.</param>
+        /// <param name="articleIdHex">ArticleId hex key passed to the failed insert.</param>
+        /// <param name="requestId">RequestId passed to the failed insert.</param>
+        /// <param name="messageIndexed">Whether <paramref name="messageId"/> was inserted.</param>
+        /// <param name="articleIndexed">Whether <paramref name="articleIdHex"/> was inserted.</param>
+        /// <param name="requestAttached">Whether <paramref name="requestId"/> was attached.</param>
+        /// <param name="accounted">Whether retained bytes and the physical count include this entry.</param>
+        /// <param name="unstoredLease">Lease acquired but not yet stored on <paramref name="entry"/>.</param>
+        private void RollbackPublication(
+            RetainedEntry entry,
+            string messageId,
+            string articleIdHex,
+            Guid requestId,
+            bool messageIndexed,
+            bool articleIndexed,
+            bool requestAttached,
+            bool accounted,
+            CanonicalBufferLease? unstoredLease)
+        {
+            if (accounted)
+            {
+                SubtractBytesLocked(entry.PayloadBytes);
+                _physicalCount = Math.Max(0, _physicalCount - 1);
+            }
+
+            entry.ReleaseBufferLease();
+            unstoredLease?.Dispose();
+            if (requestAttached)
+            {
+                _ = DetachRequestIdLocked(entry, requestId);
+            }
+
+            if (articleIndexed)
+            {
+                _messageIdByArticleId.Remove(articleIdHex);
+            }
+
+            if (messageIndexed)
+            {
+                _byMessageId.Remove(messageId);
+            }
+
+            if (entry.Node is not null)
+            {
+                _insertionOrder.Remove(entry.Node);
+                entry.Node = null;
+            }
+        }
 
         /// <summary>Adds <paramref name="bytes"/> to <see cref="_retainedBytes"/>. Called under <see cref="_gate"/>.</summary>
         /// <param name="bytes">ArtData length of an entry just indexed. Not checked against <see cref="_maximumBytes"/> here.</param>
@@ -1088,33 +1261,53 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// Exclusive NNTP delivery hold. Disposing before <see cref="Commit"/> rolls the claim back.
         /// </summary>
         /// <remarks>
-        /// <see cref="ArticleBytes"/> is the authority's existing buffer, not a copy. It stays reachable
-        /// for the life of this object even if TTL or <see cref="DisposeAsync"/> drops the authority's reference.
-        /// Commit and dispose are idempotent and safe to call together: only the first settles the entry.
+        /// <see cref="ArticleBytes"/> is the authority's existing buffer, not a copy. The caller acquires one
+        /// buffer lease before publishing the claim, and settlement disposes that lease. A rented array stays
+        /// out of its pool until this claim settles even if TTL or <see cref="DisposeAsync"/> already dropped
+        /// the authority's lease. The owner's last read of <see cref="ArticleBytes"/> happens before commit or
+        /// dispose on that same thread; the reference count does not wait for a different thread that is still
+        /// reading. Commit and dispose are idempotent and safe to call together: only the first settles the
+        /// entry, and only the first disposes the lease.
         /// </remarks>
         internal sealed class ArticleDeliveryClaim : IDisposable
         {
             /// <summary>Authority that owns the indexes. Settlement calls back into it under its gate.</summary>
             private readonly ArticleRetentionAuthority _authority;
 
+            /// <summary>Record whose buffer consumer this claim releases on settlement.</summary>
+            private readonly ArticleRecord _record;
+
             /// <summary>0 until the first commit or rollback wins.</summary>
             private int _settled;
 
+            /// <summary>0 until the first commit or dispose releases the buffer consumer.</summary>
+            private int _bufferReleased;
+
+            /// <summary>Lease acquired for this claim. Disposed once when the claim settles.</summary>
+            private readonly CanonicalBufferLease _lease;
+
             /// <summary>Binds a claimed entry's bytes to the authority that settles the claim.</summary>
             /// <param name="authority">Authority that will commit or roll back this claim.</param>
-            /// <param name="articleBytes">Existing ArtData memory. Not copied.</param>
+            /// <param name="record">Retained record. Its bytes are snapshotted while <paramref name="lease"/> is held.</param>
             /// <param name="messageId">Stored Message-ID key. Not normalized.</param>
+            /// <param name="lease">Consumer acquired before this claim is published. This claim disposes it.</param>
             internal ArticleDeliveryClaim(
                 ArticleRetentionAuthority authority,
-                ReadOnlyMemory<byte> articleBytes,
-                string messageId)
+                ArticleRecord record,
+                string messageId,
+                CanonicalBufferLease lease)
             {
                 _authority = authority;
-                ArticleBytes = articleBytes;
+                _record = record;
+                _lease = lease;
+                ArticleBytes = record.ArtData;
                 MessageId = messageId;
             }
 
-            /// <summary>Existing retained article bytes. Valid until this object is no longer referenced.</summary>
+            /// <summary>
+            /// Existing retained article bytes. Read before <see cref="Commit"/> or <see cref="Dispose"/>.
+            /// A rented buffer may be returned to its pool when settlement drops the last consumer.
+            /// </summary>
             internal ReadOnlyMemory<byte> ArticleBytes { get; }
 
             /// <summary>Exact stored Message-ID. Not rewritten from ArtData.</summary>
@@ -1127,16 +1320,53 @@ namespace VectorNNTPD.BackFillerService.Retention
             /// A later <see cref="Dispose"/> does not roll the removal back. An entry already removed by TTL or
             /// <see cref="DisposeAsync"/> is not reindexed. An entry that expired before this call is removed
             /// by the expiry path instead of being consumed as a live article.
+            /// Settlement then releases this claim's buffer consumer.
             /// </remarks>
-            internal void Commit() => _authority.CompleteDelivery(this, commit: true);
+            internal void Commit()
+            {
+                try
+                {
+                    _authority.CompleteDelivery(this, commit: true);
+                }
+                finally
+                {
+                    ReleaseBuffer();
+                }
+            }
 
             /// <summary>Rolls the claim back unless <see cref="Commit"/> already settled it.</summary>
-            /// <remarks>A second call does nothing. An indexed, unexpired entry becomes claimable again.</remarks>
-            public void Dispose() => _authority.CompleteDelivery(this, commit: false);
+            /// <remarks>
+            /// A second call does not settle the entry again and does not release the buffer consumer again.
+            /// An indexed, unexpired entry becomes claimable again.
+            /// </remarks>
+            public void Dispose()
+            {
+                try
+                {
+                    _authority.CompleteDelivery(this, commit: false);
+                }
+                finally
+                {
+                    ReleaseBuffer();
+                }
+            }
 
             /// <summary>Wins settlement once.</summary>
             /// <returns><see langword="false"/> when commit or rollback already ran.</returns>
             internal bool TryMarkSettled() => Interlocked.CompareExchange(ref _settled, 1, 0) == 0;
+
+            /// <summary>
+            /// Releases this claim's buffer lease once, after <see cref="CompleteDelivery"/> returns.
+            /// The caller's last read of <see cref="ArticleBytes"/> must already have finished on this thread.
+            /// Another thread must not read <see cref="ArticleBytes"/> concurrently with this release.
+            /// </summary>
+            private void ReleaseBuffer()
+            {
+                if (Interlocked.Exchange(ref _bufferReleased, 1) == 0)
+                {
+                    _lease.Dispose();
+                }
+            }
         }
 
         /// <summary>
@@ -1261,8 +1491,23 @@ namespace VectorNNTPD.BackFillerService.Retention
             /// <summary>Clears the NNTP delivery claim. A second call is a no-op.</summary>
             internal void EndDeliveryClaim() => _deliveryClaim = 0;
 
+            /// <summary>Consumer held until physical disposal. Null before publication and after detach.</summary>
+            private CanonicalBufferLease? _bufferLease;
+
             /// <summary>Retained record, or <see langword="null"/> after physical disposal.</summary>
             internal ArticleRecord? Record => _record;
+
+            /// <summary>Stores the retention consumer. Called once, under <see cref="_gate"/>, after indexes match accounting.</summary>
+            /// <param name="lease">Lease acquired for this entry. Not disposed by the caller after this returns.</param>
+            internal void HoldBuffer(CanonicalBufferLease lease) => _bufferLease = lease;
+
+            /// <summary>Releases the retention consumer once. A second call does nothing.</summary>
+            internal void ReleaseBufferLease()
+            {
+                var lease = _bufferLease;
+                _bufferLease = null;
+                lease?.Dispose();
+            }
 
             /// <summary>Volatile read of logical removal. Indexes no longer contain the entry when this is <see langword="true"/>.</summary>
             internal bool IsLogicallyRemoved => Volatile.Read(ref _logicallyRemoved) == 1;
@@ -1368,6 +1613,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                     return false;
                 }
 
+                ReleaseBufferLease();
                 _record = null;
                 _selectedDateHeaderName = null;
                 return true;

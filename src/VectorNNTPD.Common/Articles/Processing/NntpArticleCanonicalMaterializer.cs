@@ -309,6 +309,7 @@ namespace VectorNNTPD.Common.Articles.Processing
             byte[] destination = rentFrom is null
                 ? GC.AllocateUninitializedArray<byte>(finalLength)
                 : rentFrom.Rent(finalLength);
+            var returned = false;
             try
             {
                 var written = 0;
@@ -320,7 +321,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                     if (!TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEdit, canonicalPath)
                         || !TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate))
                     {
-                        ReturnRented(rentFrom, destination);
+                        ReturnRented(rentFrom, destination, ref returned);
                         return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                     }
                 }
@@ -329,7 +330,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                     if (!TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate) || pathEdit is HeaderEdit resolvedPathEditAfter
                         && !TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEditAfter, canonicalPath))
                     {
-                        ReturnRented(rentFrom, destination);
+                        ReturnRented(rentFrom, destination, ref returned);
                         return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                     }
                 }
@@ -337,7 +338,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                 if (pathInsert is HeaderInsert insert
                     && !TryApplyInsert(source, dest, ref consumed, ref written, insert, canonicalPath) || consumed > bodyStart)
                 {
-                    ReturnRented(rentFrom, destination);
+                    ReturnRented(rentFrom, destination, ref returned);
                     return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                 }
 
@@ -360,7 +361,7 @@ namespace VectorNNTPD.Common.Articles.Processing
 
                 if (written != finalLength)
                 {
-                    ReturnRented(rentFrom, destination);
+                    ReturnRented(rentFrom, destination, ref returned);
                     return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                 }
 
@@ -370,17 +371,27 @@ namespace VectorNNTPD.Common.Articles.Processing
             }
             catch
             {
-                ReturnRented(rentFrom, destination);
+                ReturnRented(rentFrom, destination, ref returned);
                 throw;
             }
         }
 
-        /// <summary>Returns a rented materialization buffer. Exact allocations are left for the garbage collector.</summary>
+        /// <summary>
+        /// Returns a rented materialization buffer once. Exact allocations are left for the garbage collector.
+        /// The whole array is cleared because a later renter of the same pool must not observe article bytes.
+        /// </summary>
         /// <param name="rentFrom">Pool that produced <paramref name="buffer"/>, or null for an exact allocation.</param>
-        /// <param name="buffer">Buffer to return. Not cleared.</param>
-        private static void ReturnRented(ArrayPool<byte>? rentFrom, byte[] buffer)
+        /// <param name="buffer">Buffer to return.</param>
+        /// <param name="returned">Set when this call returns the buffer, including a second attempt that must not return it again.</param>
+        private static void ReturnRented(ArrayPool<byte>? rentFrom, byte[] buffer, ref bool returned)
         {
-            rentFrom?.Return(buffer);
+            if (rentFrom is null || returned)
+            {
+                return;
+            }
+
+            returned = true;
+            rentFrom.Return(buffer, clearArray: true);
         }
 
         /// <summary>

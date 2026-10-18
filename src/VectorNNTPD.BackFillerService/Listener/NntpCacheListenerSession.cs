@@ -179,6 +179,12 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <param name="line">Command line without its CRLF.</param>
         /// <param name="cancellationToken">Cancels the response writes.</param>
         /// <returns>A task that completes when the response has been written or the claim has been rolled back.</returns>
+        /// <remarks>
+        /// <see cref="WriteFullyAsync"/> returns only after the transport write has completed or thrown, so the
+        /// claim lease is still held while <see cref="ICacheListenerTransport.WriteAsync"/> reads
+        /// <see cref="ArticleRetentionAuthority.ArticleDeliveryClaim.ArticleBytes"/>. Commit and dispose run after
+        /// that await, on this call. This session is the only owner of the claim, so settlement does not overlap the write.
+        /// </remarks>
         private async Task HandleArticleAsync(ReadOnlyMemory<byte> line, CancellationToken cancellationToken)
         {
             if (!TryReadSingleArgument(line.Span, out var argument))

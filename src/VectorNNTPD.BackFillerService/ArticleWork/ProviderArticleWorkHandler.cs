@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
@@ -42,6 +43,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>Logger for the single article-processing Information event.</summary>
         private readonly ILogger<ProviderArticleWorkHandler> _logger;
+
+        /// <summary>
+        /// Pool for canonical article arrays. Production uses <see cref="ArrayPool{T}.Shared"/>.
+        /// </summary>
+        private readonly ArrayPool<byte> _canonicalBufferPool;
 
         /// <summary>Log outcome when the article was retrieved and accepted.</summary>
         private const string OutcomeFound = "Found";
@@ -105,13 +111,17 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
         /// <param name="serverId">BackFiller server id combined with <c>dnssuffix</c> for the Path hop and retained endpoint.</param>
         /// <param name="logger">Article-processing logger. Null uses <see cref="NullLogger{T}.Instance"/>.</param>
+        /// <param name="canonicalBufferPool">
+        /// Pool for the canonical article array. Null uses <see cref="ArrayPool{T}.Shared"/>.
+        /// </param>
         internal ProviderArticleWorkHandler(
             INntpArticleRetriever retriever,
             IArticleRetentionAuthority retention,
             NntpArticleParser parser,
             INntpSharedConfigurationCatalogue? sharedConfiguration,
             int serverId,
-            ILogger<ProviderArticleWorkHandler>? logger = null)
+            ILogger<ProviderArticleWorkHandler>? logger = null,
+            ArrayPool<byte>? canonicalBufferPool = null)
         {
             ArgumentNullException.ThrowIfNull(retriever);
             ArgumentNullException.ThrowIfNull(retention);
@@ -122,6 +132,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             _sharedConfiguration = sharedConfiguration;
             _serverId = serverId;
             _logger = logger ?? NullLogger<ProviderArticleWorkHandler>.Instance;
+            _canonicalBufferPool = canonicalBufferPool ?? ArrayPool<byte>.Shared;
         }
 
         /// <summary>Last <see cref="INntpArticleRetriever"/> outcome written by <see cref="HandleAsync"/> without synchronization (tests).</summary>
@@ -156,11 +167,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Success routing fields are null unless retention made the article available.
         /// <see cref="ArticleWorkHandlerResult.Article"/> is always null. The production success path does not allocate
         /// a <see cref="RetrievedArticle"/>; the canonical array is the one produced by
-        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode)"/>.
+        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode, ArrayPool{byte})"/>.
         /// </returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="item"/> is null.</exception>
         /// <remarks>
-        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode)"/> runs
+        /// <see cref="ArticleRecordFactory.TryCreate(NntpArticleParser, ReadOnlyMemory{byte}, ArticlePathMode, ArrayPool{byte})"/> runs
         /// inside the retriever callback, before that call returns. The callback memory is not used after it returns.
         /// An <see cref="OperationCanceledException"/> whose token is not <paramref name="cancellationToken"/> propagates.
         /// Other exceptions from retrieval, parsing, or retention also propagate. The caller maps those to
@@ -205,137 +216,152 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             try
             {
-                retrieval = await _retriever.RetrieveAsync(
-                        item,
-                        maxArticleBytes,
-                        memory =>
-                        {
-                            created = siteNameUtf8 is null
-                                ? ArticleRecordFactory.TryCreate(parser, memory, ArticlePathMode.Traverse)
-                                : ArticleRecordFactory.TryCreate(
-                                    parser,
-                                    memory,
-                                    ArticlePathMode.Traverse,
-                                    maxArticleBytes,
-                                    siteNameUtf8);
-                            consumed = true;
-                            return created;
-                        },
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                LogArticleProcessed(item, OutcomeFailed, string.Empty, CommandTimestamp(ex));
-                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                try
                 {
-                    LastKind = ArticleRetrievalKind.Cancelled;
-                    return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
+                    retrieval = await _retriever.RetrieveAsync(
+                            item,
+                            maxArticleBytes,
+                            memory =>
+                            {
+                                created = siteNameUtf8 is null
+                                    ? ArticleRecordFactory.TryCreate(
+                                        parser,
+                                        memory,
+                                        ArticlePathMode.Traverse,
+                                        _canonicalBufferPool)
+                                    : ArticleRecordFactory.TryCreate(
+                                        parser,
+                                        memory,
+                                        ArticlePathMode.Traverse,
+                                        maxArticleBytes,
+                                        siteNameUtf8,
+                                        _canonicalBufferPool);
+                                consumed = true;
+                                return created;
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogArticleProcessed(item, OutcomeFailed, string.Empty, CommandTimestamp(ex));
+                    if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                    {
+                        LastKind = ArticleRetrievalKind.Cancelled;
+                        return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
+                    }
+
+                    throw;
                 }
 
-                throw;
-            }
-
-            using (retrieval)
-            {
-                LastKind = retrieval.Kind;
-                if (retrieval.Kind != ArticleRetrievalKind.ArticleRetrieved)
+                using (retrieval)
                 {
-                    var mapped = MapRetrieval(retrieval);
-                    var (outcome, reason) = RetrievalLog(retrieval);
-                    LogArticleProcessed(item, outcome, reason, retrieval.CommandStartedTimestamp);
-                    return mapped;
-                }
+                    LastKind = retrieval.Kind;
+                    if (retrieval.Kind != ArticleRetrievalKind.ArticleRetrieved)
+                    {
+                        var mapped = MapRetrieval(retrieval);
+                        var (outcome, reason) = RetrievalLog(retrieval);
+                        LogArticleProcessed(item, outcome, reason, retrieval.CommandStartedTimestamp);
+                        return mapped;
+                    }
 
-                if (!consumed)
-                {
-                    LastRetentionKind = ArticleRetentionKind.InvalidPayload;
-                    LogArticleProcessed(item, OutcomeFailed, string.Empty, retrieval.CommandStartedTimestamp);
-                    return new ArticleWorkHandlerResult(
-                        ArticleWorkOutcome.RetentionRejected,
-                        "Retrieved article payload could not be transferred into retention.");
-                }
+                    if (!consumed)
+                    {
+                        LastRetentionKind = ArticleRetentionKind.InvalidPayload;
+                        LogArticleProcessed(item, OutcomeFailed, string.Empty, retrieval.CommandStartedTimestamp);
+                        return new ArticleWorkHandlerResult(
+                            ArticleWorkOutcome.RetentionRejected,
+                            "Retrieved article payload could not be transferred into retention.");
+                    }
 
-                if (!created.IsAccepted)
-                {
-                    var rejected = created.ParseFailure != NntpArticleParseFailureCode.None
-                        ? MapParseFailure(created.ParseFailure)
-                        : new ArticleWorkHandlerResult(
+                    if (!created.IsAccepted)
+                    {
+                        var rejected = created.ParseFailure != NntpArticleParseFailureCode.None
+                            ? MapParseFailure(created.ParseFailure)
+                            : new ArticleWorkHandlerResult(
+                                ArticleWorkOutcome.InvalidArticle,
+                                created.MaterializeFailure.ToString());
+                        LogArticleProcessed(
+                            item,
+                            OutcomeValidationFailed,
+                            rejected.Error ?? string.Empty,
+                            retrieval.CommandStartedTimestamp);
+                        return rejected;
+                    }
+
+                    var record = created.Record;
+                    if (!NntpArticleIdentity.MatchesRequest(record.MessageId, item.Request.MessageId))
+                    {
+                        LogArticleProcessed(
+                            item,
+                            OutcomeValidationFailed,
+                            "MessageIdMismatch",
+                            retrieval.CommandStartedTimestamp);
+                        return new ArticleWorkHandlerResult(
                             ArticleWorkOutcome.InvalidArticle,
-                            created.MaterializeFailure.ToString());
-                    LogArticleProcessed(
-                        item,
-                        OutcomeValidationFailed,
-                        rejected.Error ?? string.Empty,
-                        retrieval.CommandStartedTimestamp);
-                    return rejected;
-                }
+                            "MessageIdMismatch");
+                    }
 
-                var record = created.Record;
-                if (!NntpArticleIdentity.MatchesRequest(record.MessageId, item.Request.MessageId))
-                {
-                    LogArticleProcessed(
-                        item,
-                        OutcomeValidationFailed,
-                        "MessageIdMismatch",
-                        retrieval.CommandStartedTimestamp);
-                    return new ArticleWorkHandlerResult(
-                        ArticleWorkOutcome.InvalidArticle,
-                        "MessageIdMismatch");
-                }
+                    if (!ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
+                    {
+                        LogArticleProcessed(
+                            item,
+                            OutcomeValidationFailed,
+                            "NotFrameable",
+                            retrieval.CommandStartedTimestamp);
+                        return new ArticleWorkHandlerResult(
+                            ArticleWorkOutcome.InvalidArticle,
+                            "NotFrameable");
+                    }
 
-                if (!ArticleWorkDeliveryFraming.IsFrameable(record.ArtData.Span))
-                {
-                    LogArticleProcessed(
-                        item,
-                        OutcomeValidationFailed,
-                        "NotFrameable",
-                        retrieval.CommandStartedTimestamp);
-                    return new ArticleWorkHandlerResult(
-                        ArticleWorkOutcome.InvalidArticle,
-                        "NotFrameable");
-                }
+                    LogArticleProcessed(item, OutcomeFound, string.Empty, retrieval.CommandStartedTimestamp);
 
-                LogArticleProcessed(item, OutcomeFound, string.Empty, retrieval.CommandStartedTimestamp);
+                    if (!System.Runtime.InteropServices.MemoryMarshal.TryGetArray(record.ArtData, out var segment)
+                        || segment.Array is null
+                        || segment.Offset != 0
+                        || segment.Count != record.ArtSize)
+                    {
+                        LastRetentionKind = ArticleRetentionKind.InvalidPayload;
+                        return new ArticleWorkHandlerResult(
+                            ArticleWorkOutcome.RetentionRejected,
+                            "Canonical ArtData is not an owned contiguous buffer.");
+                    }
 
-                if (!System.Runtime.InteropServices.MemoryMarshal.TryGetArray(record.ArtData, out var segment)
-                    || segment.Array is null
-                    || segment.Offset != 0
-                    || segment.Count != record.ArtSize)
-                {
-                    LastRetentionKind = ArticleRetentionKind.InvalidPayload;
+                    var retained = _retention.RetainCanonical(
+                        item.Request.MessageId,
+                        item.Request.RequestId,
+                        record,
+                        created.SelectedDateHeaderName,
+                        endpointFqdn);
+                    LastRetentionKind = retained.Kind;
+                    LastFqdn = retained.Fqdn;
+                    LastListenerPort = retained.ListenerPort;
+                    if (retained.IsAvailable)
+                    {
+                        return new ArticleWorkHandlerResult(
+                            ArticleWorkOutcome.Success,
+                            null,
+                            Article: null,
+                            Fqdn: retained.Fqdn,
+                            ListenerPort: retained.ListenerPort,
+                            ArticleId: record.ArtId);
+                    }
+
                     return new ArticleWorkHandlerResult(
                         ArticleWorkOutcome.RetentionRejected,
-                        "Canonical ArtData is not an owned contiguous buffer.");
-                }
-
-                var retained = _retention.RetainCanonical(
-                    item.Request.MessageId,
-                    item.Request.RequestId,
-                    record,
-                    created.SelectedDateHeaderName,
-                    endpointFqdn);
-                LastRetentionKind = retained.Kind;
-                LastFqdn = retained.Fqdn;
-                LastListenerPort = retained.ListenerPort;
-                if (retained.IsAvailable)
-                {
-                    return new ArticleWorkHandlerResult(
-                        ArticleWorkOutcome.Success,
-                        null,
+                        retained.Kind.ToString(),
                         Article: null,
-                        Fqdn: retained.Fqdn,
-                        ListenerPort: retained.ListenerPort,
-                        ArticleId: record.ArtId);
+                        Fqdn: null,
+                        ListenerPort: null,
+                        ArticleId: null);
                 }
-
-                return new ArticleWorkHandlerResult(
-                    ArticleWorkOutcome.RetentionRejected,
-                    retained.Kind.ToString(),
-                    Article: null,
-                    Fqdn: null,
-                    ListenerPort: null,
-                    ArticleId: null);
+            }
+            finally
+            {
+                if (created.IsAccepted)
+                {
+                    created.Record.ReleaseUnusedCanonicalBuffer();
+                }
             }
         }
 
