@@ -400,26 +400,23 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         /// <summary>Reads the numeric <c>Elapsed</c> property from the source-generated logger state.</summary>
         /// <param name="entry">Completion entry captured from <see cref="CollectingLogger{T}"/>.</param>
         /// <returns>Elapsed seconds stored on the event.</returns>
+        /// <exception cref="Xunit.Sdk.XunitException">The state has no numeric <c>Elapsed</c> property, or that property is not a <see cref="double"/>.</exception>
         private static double ElapsedValue(CollectedLog entry)
         {
-            double? elapsed = null;
             foreach (var item in Assert.IsAssignableFrom<System.Collections.IEnumerable>(entry.State))
             {
                 if (item is KeyValuePair<string, object?> nullable && nullable.Key == "Elapsed")
                 {
-                    elapsed = Assert.IsType<double>(nullable.Value);
-                    break;
+                    return Assert.IsType<double>(nullable.Value);
                 }
 
                 if (item is KeyValuePair<string, object> pair && pair.Key == "Elapsed")
                 {
-                    elapsed = Assert.IsType<double>(pair.Value);
-                    break;
+                    return Assert.IsType<double>(pair.Value);
                 }
             }
 
-            Assert.NotNull(elapsed);
-            return elapsed.Value;
+            throw new Xunit.Sdk.XunitException("ArticleProcessed logger state has no numeric Elapsed property.");
         }
 
         /// <summary>
