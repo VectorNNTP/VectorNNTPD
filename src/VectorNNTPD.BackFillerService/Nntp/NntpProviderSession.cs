@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Runtime.ExceptionServices;
 using System.Net.Security;
 using VectorNNTPD.Common.Articles;
@@ -103,6 +104,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </summary>
         private Func<Task>? _beforeArticleBusyWait;
 
+        /// <summary>
+        /// Pool for <see cref="WritePrefixedAsync"/> command buffers.
+        /// Production uses <see cref="ArrayPool{T}.Shared"/>.
+        /// </summary>
+        private ArrayPool<byte> _prefixedCommandPool = ArrayPool<byte>.Shared;
+
         /// <summary>Set when a command failure must keep the session out of the idle pool. Sticky for the session lifetime.</summary>
         private bool _unhealthy;
 
@@ -178,6 +185,25 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             get => _beforeArticleBusyWait;
             set => _beforeArticleBusyWait = value;
+        }
+
+        /// <summary>
+        /// Pool that rents the buffer for <c>AUTHINFO USER</c> and <c>AUTHINFO PASS</c>.
+        /// Production leaves <see cref="ArrayPool{T}.Shared"/>.
+        /// </summary>
+        /// <remarks>
+        /// A test replaces this before connect so it can observe the buffer that <see cref="WritePrefixedAsync"/> returns.
+        /// The shared pool stays the default. The argument bytes are credential material and are not logged.
+        /// </remarks>
+        /// <exception cref="ArgumentNullException">The assigned pool is null.</exception>
+        internal ArrayPool<byte> PrefixedCommandPool
+        {
+            get => _prefixedCommandPool;
+            set
+            {
+                ArgumentNullException.ThrowIfNull(value);
+                _prefixedCommandPool = value;
+            }
         }
 
         /// <summary>
@@ -1453,9 +1479,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
         /// <summary>Writes <paramref name="prefix"/>, <paramref name="argument"/>, and CRLF, logging <paramref name="wireCommand"/> instead of the argument.</summary>
         /// <param name="prefix">Command prefix, such as <see cref="NntpProtocolIo.AuthInfoUserPrefix"/>.</param>
-        /// <param name="argument">ASCII field. Not written to the log.</param>
+        /// <param name="argument">ASCII credential field. Cleared after it is copied into the rented command. Not written to the log.</param>
         /// <param name="wireCommand">Debug TX text. Callers pass a redacted command for credentials.</param>
         /// <param name="cancellationToken">Forwarded to <see cref="WriteCommandAsync"/>.</param>
+        /// <remarks>
+        /// The rented buffer stays alive until <see cref="WriteCommandAsync"/> completes, faults, or is cancelled.
+        /// The populated prefix, argument, and CRLF are then cleared, and the whole rental is returned with clearing enabled.
+        /// A pool that honors <c>clearArray</c> therefore cannot retain the credential in the slack past that prefix.
+        /// </remarks>
         private async Task WritePrefixedAsync(
             byte[] prefix,
             byte[] argument,
@@ -1463,17 +1494,19 @@ namespace VectorNNTPD.BackFillerService.Nntp
             CancellationToken cancellationToken)
         {
             var length = prefix.Length + argument.Length + NntpProtocolIo.Crlf.Length;
-            var rented = ArrayPool<byte>.Shared.Rent(length);
+            var rented = _prefixedCommandPool.Rent(length);
             try
             {
                 prefix.CopyTo(rented.AsSpan());
                 argument.CopyTo(rented.AsSpan(prefix.Length));
                 NntpProtocolIo.Crlf.CopyTo(rented.AsSpan(prefix.Length + argument.Length));
+                CryptographicOperations.ZeroMemory(argument);
                 await WriteCommandAsync(wireCommand, rented.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(rented);
+                CryptographicOperations.ZeroMemory(rented.AsSpan(0, length));
+                _prefixedCommandPool.Return(rented, clearArray: true);
             }
         }
 

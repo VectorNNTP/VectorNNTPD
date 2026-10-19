@@ -251,6 +251,24 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         public bool FaultClientDateWrite { get; set; }
 
         /// <summary>
+        /// When set, the client stream throws <see cref="IOException"/> on <c>AUTHINFO PASS</c> before any of those bytes are written.
+        /// The exception message does not include the password.
+        /// </summary>
+        public bool FaultClientAuthInfoPassWrite { get; set; }
+
+        /// <summary>
+        /// When set, the first <c>AUTHINFO PASS</c> write waits here after the command bytes are still only in the caller buffer.
+        /// The wait observes the write cancellation token.
+        /// </summary>
+        public TaskCompletionSource? HoldAuthInfoPassWrite { get; set; }
+
+        /// <summary>Set when an <c>AUTHINFO PASS</c> write has entered <see cref="HoldAuthInfoPassWrite"/>.</summary>
+        public TaskCompletionSource? AuthInfoPassWriteEntered { get; set; }
+
+        /// <summary>Zero until <see cref="TryBeginAuthInfoPassWriteHold"/> accepts the first <c>AUTHINFO PASS</c> write.</summary>
+        private int _authInfoPassWriteHoldStarted;
+
+        /// <summary>
         /// When set, the client stream throws <see cref="SocketException"/> on a QUIT write.
         /// Connect and other commands are unaffected.
         /// </summary>
@@ -333,6 +351,20 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         internal bool TryConsumeDisposeFault()
         {
             return FaultClientDispose && Interlocked.Exchange(ref _disposeFaultUsed, 1) == 0;
+        }
+
+        /// <summary>
+        /// Accepts the first <c>AUTHINFO PASS</c> write while <see cref="HoldAuthInfoPassWrite"/> is set.
+        /// </summary>
+        /// <returns><see langword="true"/> when this write must wait before copying bytes to the server pipe.</returns>
+        internal bool TryBeginAuthInfoPassWriteHold()
+        {
+            if (HoldAuthInfoPassWrite is null)
+            {
+                return false;
+            }
+
+            return Interlocked.Exchange(ref _authInfoPassWriteHoldStarted, 1) == 0;
         }
 
         /// <summary>
@@ -696,7 +728,8 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 
         /// <inheritdoc />
         /// <remarks>
-        /// Honors <see cref="ScriptedNntpServer.HoldQuitWrite"/>, <see cref="ScriptedNntpServer.FaultClientDateWrite"/>, and
+        /// Honors <see cref="ScriptedNntpServer.HoldQuitWrite"/>, <see cref="ScriptedNntpServer.HoldAuthInfoPassWrite"/>,
+        /// <see cref="ScriptedNntpServer.FaultClientDateWrite"/>, <see cref="ScriptedNntpServer.FaultClientAuthInfoPassWrite"/>, and
         /// <see cref="ScriptedNntpServer.FaultClientQuitWrite"/> on the optional owner.
         /// A held QUIT waits on that gate and on <paramref name="cancellationToken"/> before any bytes are written.
         /// A QUIT fault throws <see cref="SocketException"/> before any bytes are written.
@@ -720,6 +753,20 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 && buffer.Span.IndexOf("DATE"u8) >= 0)
             {
                 throw new NotSupportedException("DATE write fault");
+            }
+
+            if (owner is not null
+                && buffer.Span.StartsWith("AUTHINFO PASS "u8)
+                && owner.TryBeginAuthInfoPassWriteHold())
+            {
+                owner.AuthInfoPassWriteEntered?.TrySetResult();
+                await owner.HoldAuthInfoPassWrite!.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (owner?.FaultClientAuthInfoPassWrite == true
+                && buffer.Span.StartsWith("AUTHINFO PASS "u8))
+            {
+                throw new IOException("AUTHINFO PASS write fault");
             }
 
             writer.Write(buffer.Span);
