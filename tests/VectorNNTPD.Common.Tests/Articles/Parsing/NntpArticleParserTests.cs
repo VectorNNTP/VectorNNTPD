@@ -1,8 +1,10 @@
 using System.Text;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Articles.DateParser;
+using VectorNNTPD.Common.Articles.OverviewDb;
 using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.Common.Articles.YEnc;
+using VectorNNTPD.Common.Transport.ArticleTransfer;
 
 namespace VectorNNTPD.Common.Tests.Articles.Parsing
 {
@@ -256,6 +258,145 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
 
             Assert.False(result.IsAccepted);
             Assert.Equal(NntpArticleParseFailureCode.DuplicateMessageId, result.FailureCode);
+        }
+
+        /// <summary>
+        /// Two parsable <c>Date</c> headers are rejected before a canonical instant is published.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenTwoValidDateHeadersDiffer_RejectsDuplicateBeforeCanonicalUtc()
+        {
+            AssertDuplicateDateRejected(
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                "Date: Sat, 24 Aug 2024 08:00:00 +0000");
+        }
+
+        /// <summary>
+        /// An unparsable first <c>Date</c> does not fall through to a later <c>Date</c>.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenFirstDateIsInvalidAndSecondIsValid_RejectsDuplicate()
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: not-a-date",
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <dup-date-invalid-first@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                ],
+                body: "body\r\n");
+
+            NntpArticleParseResult result = parser.Parse(article);
+            ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
+
+            Assert.False(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.DuplicateDate, result.FailureCode);
+            Assert.Equal(default, result.CanonicalUtc);
+            Assert.Equal(NntpArticleHeaderName.Unknown, result.SelectedDateHeaderName);
+            Assert.False(created.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.DuplicateDate, created.ParseFailure);
+            Assert.Equal(default, created.Record.CanonicalUtc);
+            Assert.Equal(0, created.Record.ArtSize);
+        }
+
+        /// <summary>
+        /// A valid first <c>Date</c> followed by an unparsable second <c>Date</c> is still a duplicate.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenFirstDateIsValidAndSecondIsInvalid_RejectsDuplicate()
+        {
+            AssertDuplicateDateRejected(
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                "Date: not-a-date");
+        }
+
+        /// <summary>
+        /// Equivalent instants with different date text are still two <c>Date</c> headers.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenDuplicateDatesAreEquivalentInstants_RejectsDuplicate()
+        {
+            AssertDuplicateDateRejected(
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                "Date: Fri, 23 Aug 2024 07:30:10 GMT");
+        }
+
+        /// <summary>
+        /// <c>date</c> and <c>Date</c> are the same header name.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenDateHeaderCaseDiffers_RejectsDuplicate()
+        {
+            AssertDuplicateDateRejected(
+                "date: Fri, 23 Aug 2024 07:30:10 +0000",
+                "DATE: Sat, 24 Aug 2024 08:00:00 +0000");
+        }
+
+        /// <summary>
+        /// A folded continuation stays one <c>Date</c>. A later <c>Date</c> line is the duplicate.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenFoldedDateIsFollowedByAnotherDate_RejectsDuplicate()
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = Encoding.ASCII.GetBytes(
+                "Date: Fri, 23 Aug 2024\r\n" +
+                "\t07:30:10 +0000\r\n" +
+                "Date: Sat, 24 Aug 2024 08:00:00 +0000\r\n" +
+                "Message-ID: <dup-date-folded@example.test>\r\n" +
+                "Newsgroups: alt.test\r\n" +
+                "From: user@example.test\r\n" +
+                "\r\n" +
+                "body\r\n");
+
+            NntpArticleParseResult result = parser.Parse(article);
+
+            Assert.False(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.DuplicateDate, result.FailureCode);
+            Assert.Equal(default, result.CanonicalUtc);
+        }
+
+        /// <summary>
+        /// One <c>Date</c> still canonicalizes, and overview and transfer re-read that same stored value.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenSingleDateHeader_KeepsCanonicalUtcOverviewAndTransferOnTheSameValue()
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0200",
+                    "Message-ID: <single-date@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                    "Subject: one date",
+                ],
+                body: "body\r\n");
+
+            ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
+
+            Assert.True(created.IsAccepted);
+            Assert.Equal(NntpArticleHeaderName.Date, created.SelectedDateHeaderName);
+            ArticleRecord record = created.Record;
+            Assert.True(NewsDateParser.TryGetCanonicalUtc(record.Date, out DateTime storedUtc, out DateParseFailureReason storedFailure));
+            Assert.Equal(DateParseFailureReason.None, storedFailure);
+            Assert.Equal(record.CanonicalUtc, storedUtc);
+            Assert.Equal("Fri, 23 Aug 2024 05:30:10 +0000", Encoding.ASCII.GetString(record.Date));
+
+            OverviewArticleV1 overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
+            Assert.Equal(Encoding.ASCII.GetString(record.Date), overview.Date);
+
+            byte[] artData = record.ArtData.Span[..record.ArtSize].ToArray();
+            ArticleCanonicalTransferMeta meta = ArticleCanonicalTransferMeta.FromRecord(record, created.SelectedDateHeaderName);
+            ArticleRecordCreateResult transferred = ArticleRecordFactory.TryCreateFromCanonicalTransfer(artData, in meta, record.ArtId);
+
+            Assert.True(transferred.IsAccepted);
+            Assert.Equal(record.CanonicalUtc, transferred.Record.CanonicalUtc);
+            Assert.True(record.Date.SequenceEqual(transferred.Record.Date));
         }
 
         /// <summary>
@@ -2132,6 +2273,34 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
             }
 
             throw new InvalidOperationException($"Header '{knownName}' was not found in parse output.");
+        }
+
+        /// <summary>
+        /// Parses two <c>Date</c> lines and asserts the article is rejected with no canonical instant.
+        /// </summary>
+        /// <param name="firstDate">First Date header line, without CRLF.</param>
+        /// <param name="secondDate">Second Date header line, without CRLF.</param>
+        private static void AssertDuplicateDateRejected(string firstDate, string secondDate)
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    firstDate,
+                    secondDate,
+                    "Message-ID: <dup-date@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                ],
+                body: "body\r\n");
+
+            NntpArticleParseResult result = parser.Parse(article);
+
+            Assert.False(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.DuplicateDate, result.FailureCode);
+            Assert.Equal(default, result.CanonicalUtc);
+            Assert.Equal(NntpArticleHeaderName.Unknown, result.SelectedDateHeaderName);
+            Assert.True(result.OriginalDateValue.IsEmpty);
         }
 
         /// <summary>
