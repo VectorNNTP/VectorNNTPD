@@ -507,7 +507,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Stream stream = chunk == int.MaxValue
                 ? new MemoryStream(wire, writable: false)
                 : new ChunkStream(wire, chunk);
-            var reader = new NntpStreamReader(stream, 1024);
+            using var reader = new NntpStreamReader(stream, 1024);
             return await reader.ReadArticlePayloadAsync(maxBytes, TimeSpan.FromSeconds(5), cancellationToken);
         }
 
