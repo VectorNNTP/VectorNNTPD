@@ -3,6 +3,10 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Extensions.Logging;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
@@ -206,6 +210,107 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
+        /// A non-invariant culture still renders elapsed seconds with a dot and three fractional digits, and the structured value stays a number.
+        /// </summary>
+        [Fact]
+        public async Task Elapsed_stays_invariant_three_decimal_seconds_for_success_and_failure()
+        {
+            var originalCulture = CultureInfo.CurrentCulture;
+            var originalUiCulture = CultureInfo.CurrentUICulture;
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            CultureInfo.CurrentUICulture = CultureInfo.CurrentCulture;
+            try
+            {
+                var foundLogger = new CollectingLogger<ProviderArticleWorkHandler>();
+                await using var retention = CreateRetention();
+                var started = Stopwatch.GetTimestamp() - (long)Math.Round(1.25 * Stopwatch.Frequency);
+                var found = CreateHandler(
+                    foundLogger,
+                    retention,
+                    new ScriptedRetriever(ArticleWorkTestArticles.Valid(), ArticleRetrievalResult.Retrieved(220, "follows"), started));
+                var foundResult = await found.HandleAsync(Item(ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews"), CancellationToken.None);
+                Assert.Equal(ArticleWorkOutcome.Success, foundResult.Outcome);
+                var foundEntry = AssertSingleCompletion(foundLogger);
+                AssertCompletion(foundEntry, ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews", "Found");
+
+                var failedLogger = new CollectingLogger<ProviderArticleWorkHandler>();
+                var failed = CreateHandler(
+                    failedLogger,
+                    retention,
+                    new ScriptedRetriever(
+                        payload: null,
+                        ArticleRetrievalResult.Failed(ArticleRetrievalKind.ProviderFailure, null, "down", sessionReusable: false),
+                        commandStartedTimestamp: 0));
+                var failedResult = await failed.HandleAsync(Item(ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews"), CancellationToken.None);
+                Assert.Equal(ArticleWorkOutcome.ProviderFailure, failedResult.Outcome);
+                var failedEntry = AssertSingleCompletion(failedLogger);
+                AssertCompletion(failedEntry, ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews", "Failed");
+                Assert.Equal(0d, ElapsedValue(failedEntry));
+                Assert.Contains("elapsed=0.000 ", failedEntry.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = originalCulture;
+                CultureInfo.CurrentUICulture = originalUiCulture;
+            }
+        }
+
+        /// <summary>
+        /// Serilog renders the Information completion event with the same three-decimal elapsed text and a numeric Elapsed property.
+        /// </summary>
+        [Fact]
+        public async Task Serilog_renders_information_completion_with_numeric_elapsed_seconds()
+        {
+            var sink = new ListSink();
+            using var serilog = new LoggerConfiguration().MinimumLevel.Verbose().WriteTo.Sink(sink).CreateLogger();
+            using var factory = new SerilogLoggerFactory(serilog, dispose: false);
+            var logger = factory.CreateLogger<ProviderArticleWorkHandler>();
+            await using var retention = CreateRetention();
+            var started = Stopwatch.GetTimestamp() - (long)Math.Round(1.5 * Stopwatch.Frequency);
+            var handler = new ProviderArticleWorkHandler(
+                new ScriptedRetriever(
+                    payload: null,
+                    ArticleRetrievalResult.Failed(ArticleRetrievalKind.ArticleNotFound, 430, "no such article", sessionReusable: true),
+                    started),
+                retention,
+                new NntpArticleParser("backfiller.test"),
+                sharedConfiguration: null,
+                serverId: 0,
+                logger);
+
+            var result = await handler.HandleAsync(Item(ArticleWorkTestDeliveries.CanonicalMessageId, "Eweka"), CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.ArticleNotFound, result.Outcome);
+            var entry = Assert.Single(sink.Events);
+            Assert.Equal(LogEventLevel.Information, entry.Level);
+            var rendered = entry.RenderMessage(CultureInfo.InvariantCulture);
+            Assert.Contains("Article processed", rendered, StringComparison.Ordinal);
+            Assert.Contains("NotFound", rendered, StringComparison.Ordinal);
+            Assert.Matches(ElapsedPattern(), rendered);
+            Assert.True(entry.Properties.TryGetValue("Elapsed", out var elapsedProperty));
+            var scalar = Assert.IsType<ScalarValue>(elapsedProperty);
+            Assert.InRange(Assert.IsType<double>(scalar.Value), 1.5d, 5d);
+
+            sink.Events.Clear();
+            var found = new ProviderArticleWorkHandler(
+                new ScriptedRetriever(ArticleWorkTestArticles.Valid(), ArticleRetrievalResult.Retrieved(220, "follows"), started),
+                retention,
+                new NntpArticleParser("backfiller.test"),
+                sharedConfiguration: null,
+                serverId: 0,
+                logger);
+            var foundResult = await found.HandleAsync(Item(ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews"), CancellationToken.None);
+            Assert.Equal(ArticleWorkOutcome.Success, foundResult.Outcome);
+            var foundEntry = Assert.Single(sink.Events);
+            Assert.Equal(LogEventLevel.Information, foundEntry.Level);
+            var foundRendered = foundEntry.RenderMessage(CultureInfo.InvariantCulture);
+            Assert.Contains("outcome=\"Found\"", foundRendered, StringComparison.Ordinal);
+            Assert.Matches(ElapsedPattern(), foundRendered);
+            Assert.True(foundEntry.Properties.TryGetValue("Elapsed", out var foundElapsed));
+            Assert.InRange(Assert.IsType<double>(Assert.IsType<ScalarValue>(foundElapsed).Value), 1.5d, 5d);
+        }
+
+        /// <summary>
         /// Builds a handler with a fixed local parser identity and the supplied retriever/retention for logging assertions.
         /// </summary>
         /// <param name="logger">Collects completion logs from the handler under test.</param>
@@ -283,6 +388,38 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Contains($"backbone={backbone}", entry.Message, StringComparison.Ordinal);
             Assert.Contains($"outcome={outcome}", entry.Message, StringComparison.Ordinal);
             Assert.Matches(ElapsedPattern(), entry.Message);
+            var elapsed = ElapsedValue(entry);
+            Assert.True(elapsed >= 0d);
+            Assert.False(double.IsNaN(elapsed));
+            Assert.Contains(
+                $"elapsed={elapsed.ToString("0.000", CultureInfo.InvariantCulture)} ",
+                entry.Message,
+                StringComparison.Ordinal);
+        }
+
+        /// <summary>Reads the numeric <c>Elapsed</c> property from the source-generated logger state.</summary>
+        /// <param name="entry">Completion entry captured from <see cref="CollectingLogger{T}"/>.</param>
+        /// <returns>Elapsed seconds stored on the event.</returns>
+        private static double ElapsedValue(CollectedLog entry)
+        {
+            double? elapsed = null;
+            foreach (var item in Assert.IsAssignableFrom<System.Collections.IEnumerable>(entry.State))
+            {
+                if (item is KeyValuePair<string, object?> nullable && nullable.Key == "Elapsed")
+                {
+                    elapsed = Assert.IsType<double>(nullable.Value);
+                    break;
+                }
+
+                if (item is KeyValuePair<string, object> pair && pair.Key == "Elapsed")
+                {
+                    elapsed = Assert.IsType<double>(pair.Value);
+                    break;
+                }
+            }
+
+            Assert.NotNull(elapsed);
+            return elapsed.Value;
         }
 
         /// <summary>
@@ -302,6 +439,20 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         /// </summary>
         /// <returns>A culture-invariant pattern for elapsed extraction and assertion.</returns>
         private static Regex ElapsedPattern() => new(@"elapsed=(\d+\.\d{3}) (?:s|seconds)", RegexOptions.CultureInvariant);
+
+        /// <summary>In-memory Serilog sink for one completion-event assertion.</summary>
+        private sealed class ListSink : ILogEventSink
+        {
+            /// <summary>Events passed to <see cref="Emit"/>.</summary>
+            internal List<LogEvent> Events { get; } = [];
+
+            /// <inheritdoc />
+            public void Emit(LogEvent logEvent)
+            {
+                ArgumentNullException.ThrowIfNull(logEvent);
+                Events.Add(logEvent);
+            }
+        }
 
         /// <summary>
         /// Fake retriever that optionally invokes the payload callback once, then returns a fixed <see cref="ArticleRetrievalResult"/>.

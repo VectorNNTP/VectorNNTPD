@@ -327,18 +327,21 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="backbone">Request backbone, or <c>(none)</c> when it was not resolved.</param>
         /// <param name="outcome"><c>Found</c>, <c>NotFound</c>, <c>ValidationFailed</c>, or <c>Failed</c>.</param>
         /// <param name="reason">Validation failure reason. Empty when <paramref name="outcome"/> is not <c>ValidationFailed</c>.</param>
-        /// <param name="elapsed">Elapsed seconds from the ARTICLE send, formatted <c>0.000</c>. <c>0.000</c> when ARTICLE was not sent.</param>
+        /// <param name="elapsed">
+        /// Elapsed seconds from the ARTICLE send. Zero when ARTICLE was not sent.
+        /// The message renders this value with three fractional digits (<c>0.000</c>).
+        /// </param>
         [LoggerMessage(
             EventId = 5321,
             Level = LogLevel.Information,
-            Message = "Article processed messageId={MessageId} backbone={Backbone} outcome={Outcome} reason={Reason} elapsed={Elapsed} s")]
+            Message = "Article processed messageId={MessageId} backbone={Backbone} outcome={Outcome} reason={Reason} elapsed={Elapsed:0.000} s")]
         internal static partial void ArticleProcessed(
             ILogger logger,
             string messageId,
             string backbone,
             string outcome,
             string reason,
-            string elapsed);
+            double elapsed);
 
         /// <summary>
         /// Writes an Error event when the periodic reconcile loop will retry after backoff.

@@ -2,11 +2,12 @@ using Microsoft.Extensions.Logging;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {
-    /// <summary>One captured log line with level, event id, and formatted message text.</summary>
+    /// <summary>One captured log line with level, event id, formatted message text, and logger state.</summary>
     /// <param name="Level">Log level passed to <see cref="ILogger.Log{TState}"/>.</param>
     /// <param name="EventId">Event id passed to the log call.</param>
     /// <param name="Message">Formatted message; a second entry may be added for <see cref="Exception.Message"/>.</param>
-    internal readonly record struct CollectedLog(LogLevel Level, EventId EventId, string Message);
+    /// <param name="State">Logger state passed to <see cref="ILogger.Log{TState}"/>. Null on the extra exception-message entry.</param>
+    internal readonly record struct CollectedLog(LogLevel Level, EventId EventId, string Message, object? State = null);
 
     /// <summary>
     /// <see cref="ILogger{T}"/> double that records formatted messages (and exception messages) for assertions.
@@ -60,7 +61,7 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             var message = formatter(state, exception);
             lock (_entries)
             {
-                _entries.Add(new CollectedLog(logLevel, eventId, message));
+                _entries.Add(new CollectedLog(logLevel, eventId, message, state));
                 if (exception is not null)
                 {
                     _entries.Add(new CollectedLog(logLevel, eventId, exception.Message));

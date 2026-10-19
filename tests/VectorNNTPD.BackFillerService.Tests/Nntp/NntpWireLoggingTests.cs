@@ -1,7 +1,8 @@
+using System.Runtime.CompilerServices;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
-using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {
@@ -157,6 +158,84 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
+        /// Debug disabled skips the ARTICLE message-id string. The socket command is still the exact ARTICLE line.
+        /// </summary>
+        [Fact]
+        public async Task Article_command_bytes_stay_exact_when_debug_text_is_not_built()
+        {
+            var logger = new DebugDisabledLogger();
+            const string messageId = "<debug-off@example.invalid>";
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.RespondBytes(static command =>
+                command.StartsWith("ARTICLE ", StringComparison.Ordinal)
+                    ? "220 0 <debug-off@example.invalid> article follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n"u8.ToArray()
+                    : "500 unknown\r\n"u8.ToArray());
+            factory.Enqueue(server);
+            var session = new NntpProviderSession(
+                new BackFillerProviderDefinition("Giganews", "127.0.0.1", 119, false, null, null, 0, 1),
+                NntpSessionOptions.Default with
+                {
+                    ConnectTimeout = TimeSpan.FromSeconds(2),
+                    CommandTimeout = TimeSpan.FromSeconds(2),
+                    ReceiveTimeout = TimeSpan.FromSeconds(2),
+                },
+                logger);
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+            using var result = await session.DownloadArticleAsync(messageId, CancellationToken.None);
+
+            Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
+            Assert.Equal($"ARTICLE {messageId}", server.Commands[^1]);
+            Assert.True(server.LastCommandUsedCrlf);
+            Assert.DoesNotContain(logger.Messages, message => message.Contains(messageId, StringComparison.Ordinal));
+            Assert.DoesNotContain(logger.Messages, message => message.Contains("TX:", StringComparison.Ordinal));
+            await session.DisposeAsync();
+        }
+
+        /// <summary>
+        /// After warmup, one Debug-disabled ARTICLE text call allocates nothing. Debug enabled still includes the message id.
+        /// </summary>
+        [Fact]
+        public void Article_debug_text_allocates_only_when_debug_is_enabled()
+        {
+            var messageId = "<alloc-probe@example.invalid>";
+            var disabled = new DebugDisabledLogger();
+            var enabled = new CollectingLogger<NntpProviderSession>();
+            Assert.Equal("ARTICLE " + messageId, NntpProviderSession.FormatArticleDebugCommand(enabled, messageId));
+            WarmDisabledDebugText(disabled, messageId);
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var text = ReadDisabledDebugText(disabled, messageId);
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            Assert.Equal("ARTICLE", text);
+        }
+
+        /// <summary>
+        /// Compiles <see cref="ReadDisabledDebugText"/> before the allocation window.
+        /// </summary>
+        /// <param name="logger">Logger whose Debug level is disabled.</param>
+        /// <param name="messageId">ARTICLE argument that must not be concatenated.</param>
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+        private static void WarmDisabledDebugText(ILogger logger, string messageId)
+        {
+            for (var i = 0; i < 2_000; i++)
+            {
+                _ = ReadDisabledDebugText(logger, messageId);
+            }
+        }
+
+        /// <summary>
+        /// One production debug-text call. The allocation test measures this method after <see cref="WarmDisabledDebugText"/>.
+        /// </summary>
+        /// <param name="logger">Logger whose Debug level is disabled.</param>
+        /// <param name="messageId">ARTICLE argument that must not be concatenated.</param>
+        /// <returns>The helper result.</returns>
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+        private static string ReadDisabledDebugText(ILogger logger, string messageId) =>
+            NntpProviderSession.FormatArticleDebugCommand(logger, messageId);
+
+        /// <summary>
         /// Two pool sessions produce distinct WireLogIdentity values in log prefixes.
         /// </summary>
 
@@ -214,5 +293,59 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 },
                 logger,
                 connectionNumber);
+
+        /// <summary>Logger that accepts Information and above and records formatted messages. Debug and Trace are disabled.</summary>
+        private sealed class DebugDisabledLogger : ILogger
+        {
+            /// <summary>Formatted messages passed to <see cref="Log{TState}"/>.</summary>
+            private readonly List<string> _messages = [];
+
+            /// <summary>Messages recorded because a log call actually ran.</summary>
+            internal IReadOnlyList<string> Messages
+            {
+                get
+                {
+                    lock (_messages)
+                    {
+                        return [.. _messages];
+                    }
+                }
+            }
+
+            /// <inheritdoc />
+            public IDisposable BeginScope<TState>(TState state)
+                where TState : notnull => NullScope.Instance;
+
+            /// <inheritdoc />
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+
+            /// <inheritdoc />
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                ArgumentNullException.ThrowIfNull(formatter);
+                var message = formatter(state, exception);
+                lock (_messages)
+                {
+                    _messages.Add(message);
+                }
+            }
+
+            /// <summary>No-op scope.</summary>
+            private sealed class NullScope : IDisposable
+            {
+                /// <summary>Shared no-op scope.</summary>
+                public static NullScope Instance { get; } = new();
+
+                /// <inheritdoc />
+                public void Dispose()
+                {
+                }
+            }
+        }
     }
 }

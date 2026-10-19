@@ -22,6 +22,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             MeasureStatusParse();
             await MeasureStatusLineAsync();
             await MeasureArticleAsync();
+            MeasureArticleDebugText();
             await MeasureLeaseAsync();
         }
 
@@ -143,6 +144,34 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             {
                 await session.DisposeAsync();
             }
+        }
+
+        /// <summary>
+        /// Prints allocations for the ARTICLE debug text when Debug is disabled.
+        /// The count is evidence. It is not a pass/fail budget.
+        /// </summary>
+        private static void MeasureArticleDebugText()
+        {
+            var messageId = "<id@example.invalid>";
+            var disabled = NullLogger.Instance;
+            for (var i = 0; i < 1000; i++)
+            {
+                Assert.Equal("ARTICLE", NntpProviderSession.FormatArticleDebugCommand(disabled, messageId));
+            }
+
+            const int iterations = 4000;
+            long allocated = 0;
+            var g0 = GC.CollectionCount(0);
+            for (var i = 0; i < iterations; i++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                var text = NntpProviderSession.FormatArticleDebugCommand(disabled, messageId);
+                allocated += GC.GetAllocatedBytesForCurrentThread() - before;
+                Assert.Equal("ARTICLE", text);
+            }
+
+            Console.WriteLine(
+                $"after article-debug-text-disabled n={iterations} alloc/op={allocated / iterations} gen0={GC.CollectionCount(0) - g0}");
         }
 
         private static async Task MeasureLeaseAsync()

@@ -10,7 +10,6 @@ using VectorNNTPD.Common.Articles;
 using System.Text;
 using VectorNNTPD.Common.Configuration;
 using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
-using System.Globalization;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -35,7 +34,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Parser used to build the CanonicalV1 record from the retrieved article bytes.</summary>
         private readonly NntpArticleParser _parser;
 
-        /// <summary>Published shared configuration. Null in tests that do not load <c>nntpsharedconfig</c>.</summary>
+        /// <summary>Published shared configuration. Null when the handler keeps the injected parser and a zero article limit.</summary>
         private readonly INntpSharedConfigurationCatalogue? _sharedConfiguration;
 
         /// <summary>Server id used with <see cref="NntpSharedConfiguration.DnsSuffix"/> for this article's FQDN. Zero keeps the injected parser.</summary>
@@ -48,6 +47,25 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Pool for canonical article arrays. Production uses <see cref="ArrayPool{T}.Shared"/>.
         /// </summary>
         private readonly ArrayPool<byte> _canonicalBufferPool;
+
+        /// <summary>
+        /// Parser, UTF-8 site name, article limit, and endpoint FQDN taken from one shared snapshot.
+        /// Null until the first article that has a catalogue.
+        /// </summary>
+        /// <remarks>
+        /// <c>nntpsharedconfig</c> has no generation. The snapshot identity is
+        /// <see cref="NntpSharedConfiguration.MaxArticleBytes"/>, <see cref="NntpSharedConfiguration.SiteName"/>,
+        /// and <see cref="NntpSharedConfiguration.DnsSuffix"/> read together from one
+        /// <see cref="INntpSharedConfigurationCatalogue.Current"/>.
+        /// Replaced by a volatile write. The fast path does not take <see cref="_sharedArticleGate"/>.
+        /// </remarks>
+        private SharedArticlePreparation? _sharedArticleState;
+
+        /// <summary>
+        /// Serializes a rebuild of <see cref="_sharedArticleState"/>.
+        /// Not taken when the published preparation already matches the snapshot just read.
+        /// </summary>
+        private readonly Lock _sharedArticleGate = new();
 
         /// <summary>Log outcome when the article was retrieved and accepted.</summary>
         private const string OutcomeFound = "Found";
@@ -94,7 +112,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
         /// <param name="retention">Canonical retention authority.</param>
         /// <param name="parser">CanonicalV1 parser used when <paramref name="sharedConfiguration"/> is null.</param>
-        /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
+        /// <param name="sharedConfiguration">
+        /// Published <c>nntpsharedconfig</c>. Read on each article. Derived parser state is reused until that snapshot's
+        /// article limit, site name, or DNS suffix changes.
+        /// </param>
         private ProviderArticleWorkHandler(
             INntpArticleRetriever retriever,
             IArticleRetentionAuthority retention,
@@ -108,7 +129,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
         /// <param name="retention">Canonical retention authority.</param>
         /// <param name="parser">CanonicalV1 parser used when <paramref name="serverId"/> is outside the accepted range.</param>
-        /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
+        /// <param name="sharedConfiguration">
+        /// Published <c>nntpsharedconfig</c>. Read on each article. Derived parser state is reused until that snapshot's
+        /// article limit, site name, or DNS suffix changes.
+        /// </param>
         /// <param name="serverId">BackFiller server id combined with <c>dnssuffix</c> for the Path hop and retained endpoint.</param>
         /// <param name="logger">Article-processing logger. Null uses <see cref="NullLogger{T}.Instance"/>.</param>
         /// <param name="canonicalBufferPool">
@@ -147,6 +171,28 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Last Success TLS listener port returned by retention (tests).</summary>
         internal int? LastListenerPort { get; private set; }
 
+        /// <summary>Parser from the cached shared-configuration preparation, or null when none has been published (tests).</summary>
+        internal NntpArticleParser? CachedParser => Volatile.Read(ref _sharedArticleState)?.Parser;
+
+        /// <summary>UTF-8 site name from that same preparation, or null when none has been published (tests).</summary>
+        internal byte[]? CachedSiteNameUtf8 => Volatile.Read(ref _sharedArticleState)?.SiteNameUtf8;
+
+        /// <summary>
+        /// Endpoint FQDN from that same preparation.
+        /// Null when none has been published or <see cref="ServerIdRules.IsInRange"/> rejected the server id (tests).
+        /// </summary>
+        internal string? CachedEndpointFqdn => Volatile.Read(ref _sharedArticleState)?.EndpointFqdn;
+
+        /// <summary>Article byte limit from that same preparation. Null when none has been published (tests).</summary>
+        internal int? CachedMaxArticleBytes
+        {
+            get
+            {
+                var state = Volatile.Read(ref _sharedArticleState);
+                return state is null ? null : state.MaxArticleBytes;
+            }
+        }
+
         /// <summary>
         /// Retrieves the requested article, accepts a CanonicalV1 record, and retains it for NNTP delivery.
         /// </summary>
@@ -177,8 +223,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Other exceptions from retrieval, parsing, or retention also propagate. The caller maps those to
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
         /// When no shared-configuration catalogue was supplied, retrieval is called with a zero article limit so the
-        /// session's <c>NntpSessionOptions.MaxArticleBytes</c> remains in force. A supplied catalogue passes that
-        /// snapshot's <c>MaxArticleBytes</c>.
+        /// session's <c>NntpSessionOptions.MaxArticleBytes</c> remains in force, and the injected parser is used.
+        /// A supplied catalogue passes one snapshot's <c>MaxArticleBytes</c>, UTF-8 site name, and, when
+        /// <see cref="ServerIdRules.IsInRange"/> accepts the server id, the FQDN and parser built from that same snapshot.
+        /// Those derived objects are reused until the snapshot's article limit, site name, or DNS suffix changes.
         /// </remarks>
         public async ValueTask<ArticleWorkHandlerResult> HandleAsync(
             ArticleWorkItem item,
@@ -204,14 +252,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             string? endpointFqdn = null;
             if (_sharedConfiguration is not null)
             {
-                var shared = _sharedConfiguration.Current;
-                maxArticleBytes = shared.MaxArticleBytes;
-                siteNameUtf8 = Encoding.UTF8.GetBytes(shared.SiteName);
-                if (ServerIdRules.IsInRange(_serverId))
-                {
-                    endpointFqdn = ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, _serverId, shared.DnsSuffix);
-                    parser = new NntpArticleParser(endpointFqdn);
-                }
+                var prepared = ResolveSharedArticlePreparation();
+                maxArticleBytes = prepared.MaxArticleBytes;
+                siteNameUtf8 = prepared.SiteNameUtf8;
+                parser = prepared.Parser;
+                endpointFqdn = prepared.EndpointFqdn;
             }
 
             try
@@ -384,7 +429,42 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 DisplayIdentity(item.Request.Backbone),
                 outcome,
                 reason,
-                FormatElapsed(commandStartedTimestamp));
+                ElapsedSeconds(commandStartedTimestamp));
+        }
+
+        /// <summary>
+        /// Returns the preparation for <see cref="INntpSharedConfigurationCatalogue.Current"/>, rebuilding it when that snapshot's
+        /// article limit, site name, or DNS suffix differs from the published preparation.
+        /// </summary>
+        /// <returns>One immutable preparation. Every field comes from the snapshot read for that rebuild.</returns>
+        /// <exception cref="InvalidOperationException"><see cref="INntpSharedConfigurationCatalogue.Current"/> has not been published.</exception>
+        /// <remarks>
+        /// The fast path reads the catalogue and the published reference without <see cref="_sharedArticleGate"/>.
+        /// A miss takes the gate, reads the catalogue again, and publishes only a preparation built from that second read.
+        /// An exception from FQDN construction or parser construction leaves the previous preparation in place and propagates.
+        /// </remarks>
+        private SharedArticlePreparation ResolveSharedArticlePreparation()
+        {
+            var shared = _sharedConfiguration!.Current;
+            var current = Volatile.Read(ref _sharedArticleState);
+            if (current is not null && current.Matches(shared))
+            {
+                return current;
+            }
+
+            lock (_sharedArticleGate)
+            {
+                shared = _sharedConfiguration.Current;
+                current = Volatile.Read(ref _sharedArticleState);
+                if (current is not null && current.Matches(shared))
+                {
+                    return current;
+                }
+
+                var built = SharedArticlePreparation.Create(shared, _serverId, _parser);
+                Volatile.Write(ref _sharedArticleState, built);
+                return built;
+            }
         }
 
         /// <summary>Maps a non-retrieved download to the article-processing outcome and validation reason.</summary>
@@ -413,23 +493,23 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 : 0L;
         }
 
-        /// <summary>Formats elapsed seconds from an ARTICLE send timestamp as <c>0.000</c>.</summary>
-        /// <param name="commandStartedTimestamp">Timestamp from <see cref="Stopwatch.GetTimestamp"/>. Zero formats as <c>0.000</c>.</param>
-        /// <returns>Invariant three-decimal seconds.</returns>
-        private static string FormatElapsed(long commandStartedTimestamp)
+        /// <summary>Returns elapsed seconds from an ARTICLE send timestamp.</summary>
+        /// <param name="commandStartedTimestamp">Timestamp from <see cref="Stopwatch.GetTimestamp"/>. Zero returns zero.</param>
+        /// <returns>Non-negative seconds. Not formatted.</returns>
+        private static double ElapsedSeconds(long commandStartedTimestamp)
         {
             if (commandStartedTimestamp == 0)
             {
-                return "0.000";
+                return 0d;
             }
 
             var seconds = Stopwatch.GetElapsedTime(commandStartedTimestamp).TotalSeconds;
             if (double.IsNaN(seconds) || seconds < 0)
             {
-                seconds = 0;
+                return 0d;
             }
 
-            return seconds.ToString("0.000", CultureInfo.InvariantCulture);
+            return seconds;
         }
 
         /// <summary>Uses the request identity, or the Article Work <c>(none)</c> placeholder when it is missing.</summary>
@@ -474,6 +554,98 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     null),
                 _ => new ArticleWorkHandlerResult(ArticleWorkOutcome.ProviderFailure, retrieval.Reason),
             };
+        }
+
+        /// <summary>
+        /// Immutable parser inputs derived from one <see cref="NntpSharedConfiguration"/> value.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Matches"/> compares the three fields that feed this instance. A later snapshot that differs in any
+        /// of them causes a new instance. The parser, site-name bytes, limit, and endpoint on one instance are not updated.
+        /// </remarks>
+        private sealed class SharedArticlePreparation
+        {
+            /// <summary>Stores derived fields that were built together from one snapshot.</summary>
+            /// <param name="maxArticleBytes">Article limit from that snapshot.</param>
+            /// <param name="siteName">Site name from that snapshot.</param>
+            /// <param name="dnsSuffix">DNS suffix from that snapshot.</param>
+            /// <param name="siteNameUtf8">UTF-8 encoding of <paramref name="siteName"/>.</param>
+            /// <param name="endpointFqdn">FQDN built from that snapshot, or null when the server id is outside <see cref="ServerIdRules"/>.</param>
+            /// <param name="parser">Parser for <paramref name="endpointFqdn"/>, or the injected parser when the endpoint is null.</param>
+            private SharedArticlePreparation(
+                int maxArticleBytes,
+                string siteName,
+                string dnsSuffix,
+                byte[] siteNameUtf8,
+                string? endpointFqdn,
+                NntpArticleParser parser)
+            {
+                MaxArticleBytes = maxArticleBytes;
+                SiteName = siteName;
+                DnsSuffix = dnsSuffix;
+                SiteNameUtf8 = siteNameUtf8;
+                EndpointFqdn = endpointFqdn;
+                Parser = parser;
+            }
+
+            /// <summary>Article limit copied from the snapshot.</summary>
+            internal int MaxArticleBytes { get; }
+
+            /// <summary>Site name copied from the snapshot. Compared ordinally by <see cref="Matches"/>.</summary>
+            private string SiteName { get; }
+
+            /// <summary>DNS suffix copied from the snapshot. Compared ordinally by <see cref="Matches"/>.</summary>
+            private string DnsSuffix { get; }
+
+            /// <summary>UTF-8 encoding of <see cref="SiteName"/> from the same snapshot.</summary>
+            internal byte[] SiteNameUtf8 { get; }
+
+            /// <summary>Application FQDN for the same snapshot. Null when the server id is outside <see cref="ServerIdRules"/>.</summary>
+            internal string? EndpointFqdn { get; }
+
+            /// <summary>Parser for <see cref="EndpointFqdn"/>, or the injected parser when the server id is outside <see cref="ServerIdRules"/>.</summary>
+            internal NntpArticleParser Parser { get; }
+
+            /// <summary>Builds site-name bytes, and the FQDN and parser when <paramref name="serverId"/> is in range, from one snapshot.</summary>
+            /// <param name="shared">Snapshot that supplies the limit, site name, and DNS suffix.</param>
+            /// <param name="serverId">Handler server id. Outside <see cref="ServerIdRules"/> keeps <paramref name="fallbackParser"/> and a null endpoint.</param>
+            /// <param name="fallbackParser">Injected parser used when <paramref name="serverId"/> is outside the accepted range.</param>
+            /// <returns>A preparation whose fields belong to <paramref name="shared"/>.</returns>
+            /// <exception cref="ArgumentException"><paramref name="serverId"/> is in range and <see cref="NntpSharedConfiguration.DnsSuffix"/> is not a usable suffix.</exception>
+            /// <exception cref="ArgumentNullException"><paramref name="shared"/> has a null site name, or <paramref name="fallbackParser"/> is null.</exception>
+            internal static SharedArticlePreparation Create(
+                in NntpSharedConfiguration shared,
+                int serverId,
+                NntpArticleParser fallbackParser)
+            {
+                ArgumentNullException.ThrowIfNull(fallbackParser);
+                var siteNameUtf8 = Encoding.UTF8.GetBytes(shared.SiteName);
+                string? endpointFqdn = null;
+                var parser = fallbackParser;
+                if (ServerIdRules.IsInRange(serverId))
+                {
+                    endpointFqdn = ApplicationFqdn.Build(BackFillerOptions.ApplicationPrefix, serverId, shared.DnsSuffix);
+                    parser = new NntpArticleParser(endpointFqdn);
+                }
+
+                return new SharedArticlePreparation(
+                    shared.MaxArticleBytes,
+                    shared.SiteName,
+                    shared.DnsSuffix,
+                    siteNameUtf8,
+                    endpointFqdn,
+                    parser);
+            }
+
+            /// <summary>Returns whether <paramref name="shared"/> has the same article limit, site name, and DNS suffix as this instance.</summary>
+            /// <param name="shared">Snapshot to compare. Other fields are not part of the derived state.</param>
+            /// <returns><see langword="true"/> when a rebuild would produce the same derived inputs.</returns>
+            internal bool Matches(in NntpSharedConfiguration shared)
+            {
+                return MaxArticleBytes == shared.MaxArticleBytes
+                    && string.Equals(SiteName, shared.SiteName, StringComparison.Ordinal)
+                    && string.Equals(DnsSuffix, shared.DnsSuffix, StringComparison.Ordinal);
+            }
         }
     }
 }
