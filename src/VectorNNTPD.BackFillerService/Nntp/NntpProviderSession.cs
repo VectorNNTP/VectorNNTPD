@@ -258,20 +258,21 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         sessionReusable: false);
                 }
 
-                var greeting = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+                var greeting = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
                 if (greeting is null)
                 {
                     return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "NNTP greeting was empty.", reusable: false);
                 }
 
-                if (!NntpProtocolIo.TryParseStatus(greeting, out var code, out var text))
+                var parsedGreeting = ConsumedStatus.Parse(greeting.ConsumedLine.Span, StatusTextNeed.UnlessGreeting);
+                if (parsedGreeting.IsMalformed)
                 {
                     return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "NNTP greeting was malformed.", reusable: false);
                 }
 
-                if (!NntpStatusCode.IsServiceReadyGreeting(code))
+                if (!NntpStatusCode.IsServiceReadyGreeting(parsedGreeting.Code))
                 {
-                    return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+                    return FailClosed(ArticleRetrievalKind.ProviderFailure, parsedGreeting.Code, parsedGreeting.Text, reusable: false);
                 }
 
                 var startTls = await NegotiateCapabilitiesAndStartTlsAsync(cancellationToken).ConfigureAwait(false);
@@ -336,7 +337,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// A closed or retiring session, or one whose reader or stream is missing, returns a non-reusable provider failure without taking the lock and without setting <see cref="_unhealthy"/>.
         /// After <see cref="_busy"/> is acquired, <see cref="IsReusable"/> is checked again before <see cref="State"/> becomes <see cref="NntpSessionState.Busy"/> and before ARTICLE is written.
         /// A DATE failure that marked the session unhealthy while this call waited returns that same non-reusable provider failure and does not write ARTICLE.
-        /// A status-line timeout becomes <see cref="TimeoutException"/> inside <see cref="ReadStatusAsync"/> and is then classified as provider failure whose reason is that exception's type name.
+        /// A status-line timeout becomes <see cref="TimeoutException"/> inside <see cref="ReadStatusLineAsync"/> and is then classified as provider failure whose reason is that exception's type name.
         /// A payload timeout is classified as provider failure with the reason <c>ARTICLE timed out.</c>
         /// Disposal during the command clears the session fields and aborts the transport. It does not dispose <see cref="_busy"/>. The in-flight call keeps the reader it already captured and releases the gate after the attempt ends.
         /// </remarks>
@@ -400,8 +401,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     messageIdBytes.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length));
                     NntpProtocolIo.Crlf.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length));
                     ArticleCommandStartedTimestamp = Stopwatch.GetTimestamp();
+                    var wireCommand = _logger.IsEnabled(LogLevel.Debug)
+                        ? "ARTICLE " + messageId
+                        : "ARTICLE";
                     await WriteCommandAsync(
-                            "ARTICLE " + messageId,
+                            wireCommand,
                             command.AsMemory(0, commandLength),
                             cancellationToken)
                         .ConfigureAwait(false);
@@ -411,16 +415,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     ArrayPool<byte>.Shared.Return(command);
                 }
 
-                var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-                if (status is null)
+                var statusLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+                if (statusLine is null)
                 {
                     return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP ARTICLE status was empty.");
                 }
 
-                if (!NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+                var status = ConsumedStatus.Parse(statusLine.ConsumedLine.Span, StatusTextNeed.UnlessArticleFollows);
+                if (status.IsMalformed)
                 {
                     return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP ARTICLE status was malformed.");
                 }
+
+                var code = status.Code;
+                var text = status.Text;
 
                 if (code == NntpStatusCode.ArticleFollows)
                 {
@@ -657,18 +665,22 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 await WriteCommandAsync("DATE", NntpProtocolIo.DateCommand, cancellationToken)
                     .ConfigureAwait(false);
                 wrote = true;
-                var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-                if (status is null)
+                var statusLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+                if (statusLine is null)
                 {
                     _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP DATE status was empty.");
                     return false;
                 }
 
-                if (!NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+                var status = ConsumedStatus.Parse(statusLine.ConsumedLine.Span, StatusTextNeed.UnlessDateFollows);
+                if (status.IsMalformed)
                 {
                     _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP DATE status was malformed.");
                     return false;
                 }
+
+                var code = status.Code;
+                var text = status.Text;
 
                 if (code != NntpStatusCode.DateFollows)
                 {
@@ -906,8 +918,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             await WriteCommandAsync("CAPABILITIES", NntpProtocolIo.CapabilitiesCommand, cancellationToken)
                 .ConfigureAwait(false);
-            var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-            if (status is null || !NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+            var statusLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (statusLine is null)
             {
                 return FailClosed(
                     ArticleRetrievalKind.ProviderFailure,
@@ -916,16 +928,27 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     reusable: false);
             }
 
+            var status = ConsumedStatus.Parse(statusLine.ConsumedLine.Span, StatusTextNeed.UnlessCapabilities);
+            if (status.IsMalformed)
+            {
+                return FailClosed(
+                    ArticleRetrievalKind.ProviderFailure,
+                    null,
+                    "NNTP CAPABILITIES status was empty or malformed.",
+                    reusable: false);
+            }
+
+            var code = status.Code;
             if (code != NntpStatusCode.CapabilityListFollows)
             {
-                return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+                return FailClosed(ArticleRetrievalKind.ProviderFailure, code, status.Text, reusable: false);
             }
 
             var startTlsAdvertised = false;
             for (var i = 0; i < NntpProtocolIo.MaxCapabilityLines; i++)
             {
-                var line = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-                if (line is null)
+                var lineReader = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+                if (lineReader is null)
                 {
                     return FailClosed(
                         ArticleRetrievalKind.ProviderFailure,
@@ -934,15 +957,19 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         reusable: false);
                 }
 
-                if (NntpProtocolIo.IsMultilineTerminator(line))
+                var terminator = NntpProtocolIo.IsMultilineTerminator(lineReader.ConsumedLine.Span);
+                var advertised = !terminator
+                    && NntpProtocolIo.CapabilityLabelEquals(
+                        NntpProtocolIo.DestuffDotLine(lineReader.ConsumedLine.Span),
+                        NntpProtocolIo.StartTlsCapability);
+                if (terminator)
                 {
                     return startTlsAdvertised && !_provider.UseTls
                         ? await IssueStartTlsAndUpgradeAsync(cancellationToken).ConfigureAwait(false)
                         : null;
                 }
 
-                var capability = NntpProtocolIo.DestuffDotLine(line);
-                if (NntpProtocolIo.CapabilityLabelEquals(capability, NntpProtocolIo.StartTlsCapability))
+                if (advertised)
                 {
                     startTlsAdvertised = true;
                 }
@@ -968,8 +995,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             await WriteCommandAsync("STARTTLS", NntpProtocolIo.StartTlsCommand, cancellationToken)
                 .ConfigureAwait(false);
-            var status = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-            if (status is null || !NntpProtocolIo.TryParseStatus(status, out var code, out var text))
+            var statusLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (statusLine is null)
             {
                 return FailClosed(
                     ArticleRetrievalKind.ProviderFailure,
@@ -978,16 +1005,26 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     reusable: false);
             }
 
-            if (code != NntpStatusCode.ContinueWithTlsNegotiation)
+            var status = ConsumedStatus.Parse(statusLine.ConsumedLine.Span, StatusTextNeed.UnlessStartTls);
+            if (status.IsMalformed)
             {
-                return FailClosed(ArticleRetrievalKind.ProviderFailure, code, text, reusable: false);
+                return FailClosed(
+                    ArticleRetrievalKind.ProviderFailure,
+                    null,
+                    "NNTP STARTTLS status was empty or malformed.",
+                    reusable: false);
+            }
+
+            if (status.Code != NntpStatusCode.ContinueWithTlsNegotiation)
+            {
+                return FailClosed(ArticleRetrievalKind.ProviderFailure, status.Code, status.Text, reusable: false);
             }
 
             if (_reader is { } buffered && buffered.BufferedByteCount != 0)
             {
                 return FailClosed(
                     ArticleRetrievalKind.ProviderFailure,
-                    code,
+                    status.Code,
                     "NNTP STARTTLS left unread bytes before TLS negotiation.",
                     reusable: false);
             }
@@ -1279,11 +1316,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     "AUTHINFO USER ***",
                     cancellationToken)
                 .ConfigureAwait(false);
-            var userLine = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-            if (userLine is null || !NntpProtocolIo.TryParseStatus(userLine, out var userCode, out var userText))
+            var userLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (userLine is null)
             {
                 return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "Malformed AUTHINFO USER status line.", reusable: false);
             }
+
+            var userStatus = ConsumedStatus.Parse(userLine.ConsumedLine.Span, StatusTextNeed.UnlessAuthAcceptedOrPassword);
+            if (userStatus.IsMalformed)
+            {
+                return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "Malformed AUTHINFO USER status line.", reusable: false);
+            }
+
+            var userCode = userStatus.Code;
+            var userText = userStatus.Text;
 
             if (userCode == NntpStatusCode.AuthenticationAccepted)
             {
@@ -1301,11 +1347,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     "AUTHINFO PASS ***",
                     cancellationToken)
                 .ConfigureAwait(false);
-            var passLine = await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
-            if (passLine is null || !NntpProtocolIo.TryParseStatus(passLine, out var passCode, out var passText))
+            var passLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (passLine is null)
             {
                 return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "Malformed AUTHINFO PASS status line.", reusable: false);
             }
+
+            var passStatus = ConsumedStatus.Parse(passLine.ConsumedLine.Span, StatusTextNeed.UnlessAuthAccepted);
+            if (passStatus.IsMalformed)
+            {
+                return FailClosed(ArticleRetrievalKind.ProviderFailure, null, "Malformed AUTHINFO PASS status line.", reusable: false);
+            }
+
+            var passCode = passStatus.Code;
+            var passText = passStatus.Text;
 
             return passCode == NntpStatusCode.AuthenticationAccepted ? null : ClassifyAuthFailure(passCode, passText);
         }
@@ -1331,13 +1386,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Reads one status line with <see cref="NntpSessionOptions.MaxStatusLineBytes"/> and <see cref="NntpSessionOptions.CommandTimeout"/>, then logs the ASCII text at Debug.
         /// </summary>
         /// <param name="cancellationToken">Caller cancellation. Distinguished from the command timeout.</param>
-        /// <returns>The line without its delimiter, or <see langword="null"/> when <see cref="_reader"/> is missing or the peer closes before any byte.</returns>
+        /// <returns>
+        /// The reader whose <see cref="NntpStreamReader.ConsumedLine"/> holds the line, or <see langword="null"/> when
+        /// <see cref="_reader"/> is missing or the peer closes before any byte.
+        /// </returns>
         /// <exception cref="TimeoutException">The command timeout elapses while <paramref name="cancellationToken"/> is not cancelled.</exception>
         /// <remarks>
-        /// Caller cancellation propagates as <see cref="OperationCanceledException"/>.
+        /// <see cref="NntpStreamReader.ConsumedLine"/> is valid only until the next line read on the returned reader.
+        /// Callers parse or classify it before awaiting another read. Debug logging copies the line before this method returns.
+        /// That copy is skipped when Debug is disabled. Caller cancellation propagates as <see cref="OperationCanceledException"/>.
         /// <see cref="EndOfStreamException"/> and an over-long line propagate to the caller.
+        /// The line read has its own <see cref="NntpSessionOptions.CommandTimeout"/>, starting when the reader arms it.
+        /// It does not continue the write timeout from <see cref="WriteAsync"/>.
         /// </remarks>
-        private async Task<byte[]?> ReadStatusAsync(CancellationToken cancellationToken)
+        private async Task<NntpStreamReader?> ReadStatusLineAsync(CancellationToken cancellationToken)
         {
             var reader = _reader;
             if (reader is null)
@@ -1347,17 +1409,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
             try
             {
-                var line = await reader
+                var length = await reader
                     .ReadLineAsync(_options.MaxStatusLineBytes, _options.CommandTimeout, cancellationToken)
                     .ConfigureAwait(false);
-                if (line is null || !_logger.IsEnabled(LogLevel.Debug))
+                if (length < 0)
                 {
-                    return line;
+                    return null;
                 }
 
-                var response = Encoding.ASCII.GetString(line);
-                NntpLogMessages.WireRx(_logger, _wireIdentity, response);
-                return line;
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    NntpLogMessages.WireRx(_logger, _wireIdentity, Encoding.ASCII.GetString(reader.ConsumedLine.Span));
+                }
+
+                return reader;
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -1410,7 +1475,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <param name="timeout">Linked budget. Not converted into <see cref="TimeoutException"/> here.</param>
         /// <param name="cancellationToken">Caller cancellation, linked with <paramref name="timeout"/>.</param>
         /// <exception cref="InvalidOperationException"><see cref="_stream"/> is null.</exception>
-        /// <remarks>Both the timeout and caller cancellation surface as <see cref="OperationCanceledException"/>.</remarks>
+        /// <remarks>
+        /// Both the timeout and caller cancellation surface as <see cref="OperationCanceledException"/>.
+        /// The linked source covers the write and the flush together and is disposed after both complete.
+        /// A following status read creates its own source and its own <see cref="NntpSessionOptions.CommandTimeout"/>.
+        /// Reusing this source for that read would let a late timer from the write cancel the read, or would turn two budgets into one.
+        /// </remarks>
         private async Task WriteAsync(ReadOnlyMemory<byte> bytes, TimeSpan timeout, CancellationToken cancellationToken)
         {
             var stream = _stream;
@@ -1536,6 +1606,78 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </summary>
         private sealed class PayloadConsumerException : Exception
         {
+        }
+
+        /// <summary>Chooses which well-formed status codes need <see cref="NntpProtocolIo.DecodeStatusText"/>.</summary>
+        /// <remarks>Success codes used only for control flow stay undecoded. Unexpected codes are decoded for the result reason.</remarks>
+        private enum StatusTextNeed
+        {
+            /// <summary>Decode text unless the code is <see cref="NntpStatusCode.ArticleFollows"/>.</summary>
+            UnlessArticleFollows,
+
+            /// <summary>Decode text unless the code is <see cref="NntpStatusCode.DateFollows"/>.</summary>
+            UnlessDateFollows,
+
+            /// <summary>Decode text unless the code is a service-ready greeting.</summary>
+            UnlessGreeting,
+
+            /// <summary>Decode text unless the code is <see cref="NntpStatusCode.CapabilityListFollows"/>.</summary>
+            UnlessCapabilities,
+
+            /// <summary>Decode text unless the code is <see cref="NntpStatusCode.ContinueWithTlsNegotiation"/>.</summary>
+            UnlessStartTls,
+
+            /// <summary>Decode text unless the code is 281 or 381.</summary>
+            UnlessAuthAcceptedOrPassword,
+
+            /// <summary>Decode text unless the code is <see cref="NntpStatusCode.AuthenticationAccepted"/>.</summary>
+            UnlessAuthAccepted,
+        }
+
+        /// <summary>Status code and, when needed, the decoded text from one consumed line.</summary>
+        /// <remarks>Text is <see cref="string.Empty"/> when the line is malformed or the code does not need a diagnostic string.</remarks>
+        private readonly struct ConsumedStatus
+        {
+            /// <summary>Gets whether the line did not begin with three ASCII digits.</summary>
+            public bool IsMalformed { get; private init; }
+
+            /// <summary>Gets the parsed code. Zero when <see cref="IsMalformed"/> is true.</summary>
+            public int Code { get; private init; }
+
+            /// <summary>Gets the diagnostic text. Empty when the caller did not need it.</summary>
+            public string Text { get; private init; }
+
+            /// <summary>Parses <paramref name="line"/> and decodes text only when <paramref name="need"/> says this code needs it.</summary>
+            /// <param name="line">Line bytes that remain valid for this call.</param>
+            /// <param name="need">Which codes store diagnostic text.</param>
+            /// <returns>A malformed result, or a code with text allocated only when required.</returns>
+            public static ConsumedStatus Parse(ReadOnlySpan<byte> line, StatusTextNeed need)
+            {
+                if (!NntpProtocolIo.TryParseStatus(line, out var code, out var text))
+                {
+                    return new ConsumedStatus { IsMalformed = true, Text = string.Empty };
+                }
+
+                var decoded = NeedsText(need, code) ? NntpProtocolIo.DecodeStatusText(text) : string.Empty;
+                return new ConsumedStatus { Code = code, Text = decoded };
+            }
+
+            /// <summary>Returns whether <paramref name="code"/> should be turned into a string for <paramref name="need"/>.</summary>
+            /// <param name="need">Caller policy.</param>
+            /// <param name="code">Parsed status code.</param>
+            /// <returns><see langword="true"/> when the result reason must carry the status text.</returns>
+            private static bool NeedsText(StatusTextNeed need, int code) => need switch
+            {
+                StatusTextNeed.UnlessArticleFollows => code != NntpStatusCode.ArticleFollows,
+                StatusTextNeed.UnlessDateFollows => code != NntpStatusCode.DateFollows,
+                StatusTextNeed.UnlessGreeting => !NntpStatusCode.IsServiceReadyGreeting(code),
+                StatusTextNeed.UnlessCapabilities => code != NntpStatusCode.CapabilityListFollows,
+                StatusTextNeed.UnlessStartTls => code != NntpStatusCode.ContinueWithTlsNegotiation,
+                StatusTextNeed.UnlessAuthAcceptedOrPassword =>
+                    code is not (NntpStatusCode.AuthenticationAccepted or NntpStatusCode.PasswordRequired),
+                StatusTextNeed.UnlessAuthAccepted => code != NntpStatusCode.AuthenticationAccepted,
+                _ => true,
+            };
         }
     }
 }

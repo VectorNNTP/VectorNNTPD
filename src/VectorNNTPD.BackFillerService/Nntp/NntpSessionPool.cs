@@ -501,6 +501,30 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
         }
 
+        /// <summary>Callers blocked inside <see cref="AcquirePermitAsync"/>. Read under <see cref="_permitGate"/>.</summary>
+        internal int PermitWaiterCount
+        {
+            get
+            {
+                lock (_permitGate)
+                {
+                    return _permitWaiters;
+                }
+            }
+        }
+
+        /// <summary>Reservations held by acquires that have not called <see cref="ReleasePermit"/>. Read under <see cref="_permitGate"/>.</summary>
+        internal int PermitReservationCount
+        {
+            get
+            {
+                lock (_permitGate)
+                {
+                    return _permitReservations;
+                }
+            }
+        }
+
         /// <summary>
         /// Pauses a DATE loop after its cancellation check and before <see cref="NntpProviderSession.IsReusable"/>.
         /// Null unless a test is holding that window. Not used by production callers.
@@ -614,59 +638,39 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// A session taken from <see cref="_idle"/> is issued or retired before the permit is released.
         /// Cancellation while that session is still busy retires it, because the DATE loop will not retire a session that has already left the idle list.
         /// A publication failure inside <see cref="CreateReadySessionAsync"/> retires the new session before this method returns, so the caller does not receive a lease.
+        /// The caller token is linked with <see cref="_shutdown"/> only when a wait can block.
+        /// An immediate permit and a ready idle session do not create that source.
+        /// When the caller token cannot be cancelled, or it is already <see cref="_shutdown"/>'s token, the wait uses <see cref="_shutdown"/> directly.
+        /// Production article retrieval passes a distinct work token, so a blocked acquire still links the two.
         /// </remarks>
         internal async Task<NntpSessionLease> AcquireAsync(CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-            while (true)
+            CancellationTokenSource? linked = null;
+            try
             {
-                await AcquirePermitAsync(linked.Token).ConfigureAwait(false);
-                var permitHeld = true;
-                NntpProviderSession? taken = null;
-                try
+                while (true)
                 {
-                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-                    var retryWithoutPermit = false;
-                    while (TryTakeIdleSession(out var keepalive) is { } idle)
+                    if (!TryTakeAvailablePermit())
                     {
-                        taken = idle;
-                        CancelKeepAliveRegistration(keepalive);
-                        if (idle.State == NntpSessionState.Busy)
-                        {
-                            await WaitUntilNotBusyAsync(idle, linked.Token).ConfigureAwait(false);
-                        }
-
-                        var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
-                        if (issued.Lease is not null)
-                        {
-                            return issued.Lease;
-                        }
-
-                        if (issued.RejectedForCapacity)
-                        {
-                            permitHeld = false;
-                            taken = null;
-                            retryWithoutPermit = true;
-                            break;
-                        }
-
-                        await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
-                        taken = null;
+                        await AcquirePermitAsync(WaitToken()).ConfigureAwait(false);
                     }
 
-                    if (retryWithoutPermit)
-                    {
-                        continue;
-                    }
-
-                    await _fillGate.WaitAsync(linked.Token).ConfigureAwait(false);
+                    var permitHeld = true;
+                    NntpProviderSession? taken = null;
                     try
                     {
+                        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                        var retryWithoutPermit = false;
                         while (TryTakeIdleSession(out var keepalive) is { } idle)
                         {
                             taken = idle;
                             CancelKeepAliveRegistration(keepalive);
+                            if (idle.State == NntpSessionState.Busy)
+                            {
+                                await WaitUntilNotBusyAsync(idle, WaitToken()).ConfigureAwait(false);
+                            }
+
                             var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
                             if (issued.Lease is not null)
                             {
@@ -685,86 +689,132 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             taken = null;
                         }
 
-                        if (!retryWithoutPermit)
+                        if (retryWithoutPermit)
                         {
-                            if (Volatile.Read(ref _created) >= _provider.MaxSessions)
-                            {
-                                throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
-                            }
+                            continue;
+                        }
 
-                            var created = await CreateReadySessionAsync(linked.Token).ConfigureAwait(false);
-                            taken = created;
-                            if (_beforeCreatedSessionIssue is { } beforeIssue)
+                        await _fillGate.WaitAsync(WaitToken()).ConfigureAwait(false);
+                        try
+                        {
+                            while (TryTakeIdleSession(out var keepalive) is { } idle)
                             {
-                                await beforeIssue().ConfigureAwait(false);
-                            }
+                                taken = idle;
+                                CancelKeepAliveRegistration(keepalive);
+                                var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
+                                if (issued.Lease is not null)
+                                {
+                                    return issued.Lease;
+                                }
 
-                            var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
-                            if (issued.Lease is not null)
-                            {
-                                return issued.Lease;
-                            }
+                                if (issued.RejectedForCapacity)
+                                {
+                                    permitHeld = false;
+                                    taken = null;
+                                    retryWithoutPermit = true;
+                                    break;
+                                }
 
-                            if (issued.RejectedForCapacity)
-                            {
-                                permitHeld = false;
+                                await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
                                 taken = null;
-                                retryWithoutPermit = true;
                             }
-                            else
+
+                            if (!retryWithoutPermit)
                             {
-                                await RetireSessionAsync(created, "created session was not reusable").ConfigureAwait(false);
-                                taken = null;
-                                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-                                throw new InvalidOperationException("NNTP session was retired before it could be issued.");
+                                if (Volatile.Read(ref _created) >= _provider.MaxSessions)
+                                {
+                                    throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
+                                }
+
+                                var created = await CreateReadySessionAsync(WaitToken()).ConfigureAwait(false);
+                                taken = created;
+                                if (_beforeCreatedSessionIssue is { } beforeIssue)
+                                {
+                                    await beforeIssue().ConfigureAwait(false);
+                                }
+
+                                var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
+                                if (issued.Lease is not null)
+                                {
+                                    return issued.Lease;
+                                }
+
+                                if (issued.RejectedForCapacity)
+                                {
+                                    permitHeld = false;
+                                    taken = null;
+                                    retryWithoutPermit = true;
+                                }
+                                else
+                                {
+                                    await RetireSessionAsync(created, "created session was not reusable").ConfigureAwait(false);
+                                    taken = null;
+                                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                                    throw new InvalidOperationException("NNTP session was retired before it could be issued.");
+                                }
                             }
                         }
+                        finally
+                        {
+                            try
+                            {
+                                _fillGate.Release();
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                ShutdownObservations.AlreadyDisposed(_logger, "fill gate release");
+                            }
+                        }
+
+                        if (retryWithoutPermit)
+                        {
+                            continue;
+                        }
                     }
-                    finally
+                    catch (Exception)
                     {
                         try
                         {
-                            _fillGate.Release();
+                            if (taken is not null)
+                            {
+                                var connectionNumber = taken.ConnectionNumber;
+                                try
+                                {
+                                    // The DATE loop retires only a session that is still idle. This one was already removed.
+                                    await RetireSessionAsync(taken, "idle session was not reusable").ConfigureAwait(false);
+                                }
+                                catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
+                                {
+                                    TryLogSessionEstablishmentFailed(connectionNumber, cleanup.GetType().Name);
+                                }
+                            }
                         }
-                        catch (ObjectDisposedException)
+                        finally
                         {
-                            ShutdownObservations.AlreadyDisposed(_logger, "fill gate release");
+                            if (permitHeld)
+                            {
+                                ReleasePermit();
+                            }
                         }
-                    }
 
-                    if (retryWithoutPermit)
-                    {
-                        continue;
+                        throw;
                     }
                 }
-                catch (Exception)
+            }
+            finally
+            {
+                linked?.Dispose();
+            }
+
+            CancellationToken WaitToken()
+            {
+                if (!cancellationToken.CanBeCanceled || cancellationToken == _shutdown.Token)
                 {
-                    try
-                    {
-                        if (taken is not null)
-                        {
-                            var connectionNumber = taken.ConnectionNumber;
-                            try
-                            {
-                                // The DATE loop retires only a session that is still idle. This one was already removed.
-                                await RetireSessionAsync(taken, "idle session was not reusable").ConfigureAwait(false);
-                            }
-                            catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
-                            {
-                                TryLogSessionEstablishmentFailed(connectionNumber, cleanup.GetType().Name);
-                            }
-                        }
-                    }
-                    finally
-                    {
-                        if (permitHeld)
-                        {
-                            ReleasePermit();
-                        }
-                    }
-
-                    throw;
+                    return _shutdown.Token;
                 }
+
+                linked ??= CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+                return linked.Token;
             }
         }
 
@@ -1106,6 +1156,30 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <param name="session">Ready session the lease will own.</param>
         /// <returns>A lease whose disposal calls <see cref="ReturnAsync"/>.</returns>
         private NntpSessionLease Issue(NntpProviderSession session) => new(this, session);
+
+        /// <summary>
+        /// Takes one immediately available permit. Does not wait and does not observe cancellation.
+        /// </summary>
+        /// <returns><see langword="true"/> when a reservation was taken.</returns>
+        /// <exception cref="ObjectDisposedException">The pool is disposed.</exception>
+        /// <remarks>
+        /// Matches the fast path of <see cref="AcquirePermitAsync"/>. A miss leaves the counts unchanged so the waiting path can increment <see cref="_permitWaiters"/> under the same lock as its decision to wait.
+        /// </remarks>
+        private bool TryTakeAvailablePermit()
+        {
+            lock (_permitGate)
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                if (_availablePermits <= 0)
+                {
+                    return false;
+                }
+
+                _availablePermits--;
+                _permitReservations++;
+                return true;
+            }
+        }
 
         /// <summary>
         /// Grants one acquire reservation from <see cref="_availablePermits"/>, or waits until <see cref="ReleasePermit"/> wakes this caller.
