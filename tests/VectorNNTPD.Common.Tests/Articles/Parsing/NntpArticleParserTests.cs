@@ -425,6 +425,61 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         }
 
         /// <summary>
+        /// A Path fold immediately before <c>!</c> is accepted, left unchanged in the source buffer, and canonicalized without the fold.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenPathIsFoldedBeforeDelimiter_AcceptsAndCanonicalizes()
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <folded-path@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                    "Path: news.example.org\r\n !feed2",
+                ],
+                body: "body\r\n");
+            byte[] before = [.. article];
+
+            NntpArticleParseResult result = parser.Parse(article);
+            ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
+
+            Assert.True(result.IsAccepted);
+            Assert.Equal(before, article);
+            Assert.Equal("news.usenet.ninja!bf01.usenet.ninja!news.example.org!feed2", FormatCanonicalPath(result));
+            Assert.True(created.IsAccepted);
+            Assert.Equal("news.usenet.ninja!bf01.usenet.ninja!news.example.org!feed2", Encoding.ASCII.GetString(created.Record.Path));
+        }
+
+        /// <summary>
+        /// A Path fold after <c>!</c> is rejected. The source buffer is left unchanged.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenPathFoldFollowsDelimiter_RejectsInvalidPath()
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <folded-path-after@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                    "Path: news.example.org!\r\n feed2",
+                ],
+                body: "body\r\n");
+            byte[] before = [.. article];
+
+            NntpArticleParseResult result = parser.Parse(article);
+
+            Assert.False(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.InvalidPath, result.FailureCode);
+            Assert.Equal(before, article);
+        }
+
+        /// <summary>
         /// Verifies a traverse prepends the local host again when it is already leftmost.
         /// </summary>
         [Fact]
@@ -1095,10 +1150,10 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         }
 
         /// <summary>
-        /// Verifies malformed Path separators are normalized by dropping empty path components while preserving deterministic local prepend behavior.
+        /// A leading <c>!</c> and a run of three <c>!</c> separators are not a single verification marker.
         /// </summary>
         [Fact]
-        public void Parse_WhenPathContainsRepeatedSeparators_NormalizesAndPrependsLocalHostOnce()
+        public void Parse_WhenPathContainsRepeatedSeparators_RejectsInvalidPath()
         {
             NntpArticleParser parser = new(LocalFqdn);
             byte[] article = BuildArticle(
@@ -1114,8 +1169,8 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
 
             NntpArticleParseResult result = parser.Parse(article);
 
-            Assert.True(result.IsAccepted);
-            Assert.Equal("news.usenet.ninja!bf01.usenet.ninja!feed1!feed2", FormatCanonicalPath(result));
+            Assert.False(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.InvalidPath, result.FailureCode);
         }
 
         /// <summary>
