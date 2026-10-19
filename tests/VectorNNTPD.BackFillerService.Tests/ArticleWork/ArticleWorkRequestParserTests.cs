@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using System.Text;
+using System.Text.Json;
 
 namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 {
@@ -544,6 +545,457 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.False(parsed.IsValid);
             Assert.Contains("not valid JSON", parsed.Failure!.Reason, StringComparison.Ordinal);
             Assert.DoesNotContain("WorkRequestMaxPayloadBytes", parsed.Failure.Reason, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Content type and the AMQP request-id header are optional. The JSON identities still come from the body.
+        /// </summary>
+        [Fact]
+        public void Optional_content_type_and_request_id_header_may_be_omitted()
+        {
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    ArticleWorkTestDeliveries.CanonicalRequestJson,
+                    contentType: null,
+                    requestIdHeader: null),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(parsed.IsValid);
+            Assert.Equal(1, parsed.Request!.Version);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), parsed.Request.RequestId);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, parsed.Request.MessageId);
+            Assert.Equal("Giganews", parsed.Request.Backbone);
+        }
+
+        /// <summary>
+        /// A <c>requestId</c> longer than the stack buffer is accepted when <see cref="Guid.TryParse(string, out Guid)"/> accepts it.
+        /// Whitespace-only text and other long non-GUID strings stay invalid.
+        /// </summary>
+        [Fact]
+        public void Long_request_ids_follow_guid_try_parse()
+        {
+            const string canonical = ArticleWorkTestDeliveries.CanonicalRequestId;
+            var padded = new string(' ', 100) + canonical + new string(' ', 100);
+            var expandedX = "{0x" + new string('0', 80) + "7c1cb8a0,0x95f9,0x4c13,{0x8e,0x53,0x33,0x97,0x73,0xe3,0xaf,0xaa}}";
+            var spacedX = "{0x7c1cb8a0," + new string(' ', 80) + "0x95f9,0x4c13,{0x8e,0x53,0x33,0x97,0x73,0xe3,0xaf,0xaa}}";
+            var invalid = new string('z', 160);
+
+            AssertAcceptedRequestId(padded);
+            AssertAcceptedRequestId(expandedX);
+            AssertAcceptedRequestId(spacedX);
+            AssertRejectedRequestId(invalid);
+            AssertRejectedRequestId(" \t");
+        }
+
+        /// <summary>
+        /// Duplicate <c>version</c>, <c>requestId</c>, and <c>backbone</c> keep the last value.
+        /// Duplicate <c>messageId</c> keeps the first value.
+        /// </summary>
+        [Fact]
+        public void Duplicate_properties_keep_last_value_except_message_id()
+        {
+            var lastVersion = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":9,"version":1,"requestId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<first@example.invalid>","messageId":"<second@example.invalid>","backbone":"Other","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+            var clearedVersion = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"version":"1","requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+            var clearedRequest = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","requestId":"not-a-guid","messageId":"<12345@example.invalid>","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(lastVersion.IsValid);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), lastVersion.Request!.RequestId);
+            Assert.Equal("<first@example.invalid>", lastVersion.Request.MessageId);
+            Assert.Equal("Giganews", lastVersion.Request.Backbone);
+
+            Assert.False(clearedVersion.IsValid);
+            Assert.Contains("missing required integer property 'version'", clearedVersion.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), clearedVersion.Failure.Identities.RequestId);
+
+            Assert.False(clearedRequest.IsValid);
+            Assert.Contains("missing or invalid 'requestId'", clearedRequest.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(clearedRequest.Failure.Identities.RequestId);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, clearedRequest.Failure.Identities.MessageId);
+        }
+
+        /// <summary>
+        /// A JSON null <c>messageId</c> is absent, including when a later duplicate would have been valid.
+        /// A non-string value is present and invalid.
+        /// </summary>
+        [Fact]
+        public void Null_message_id_is_absent_and_non_string_message_id_is_not_canonical()
+        {
+            var absent = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":null,"messageId":"<12345@example.invalid>","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+            var nonString = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":false,"backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(absent.IsValid);
+            Assert.Contains("missing or invalid 'messageId'", absent.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(absent.Failure.Identities.MessageId);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), absent.Failure.Identities.RequestId);
+
+            Assert.False(nonString.IsValid);
+            Assert.Contains("not a canonical NNTP Message-ID", nonString.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(nonString.Failure.Identities.MessageId);
+        }
+
+        /// <summary>
+        /// Nested objects and arrays are not root fields, including when their names match required properties.
+        /// </summary>
+        [Fact]
+        public void Nested_objects_and_arrays_do_not_supply_root_properties()
+        {
+            var json =
+                """{"extra":{"version":2,"requestId":"not-a-guid","messageId":"nested","backbone":"Other"},"items":[1,{"version":9}],"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews"}""";
+
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(parsed.IsValid);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, parsed.Request!.MessageId);
+            Assert.Equal("Giganews", parsed.Request.Backbone);
+        }
+
+        /// <summary>
+        /// A complete non-object root is a schema error. Trailing content after any complete value is invalid JSON.
+        /// </summary>
+        [Theory]
+        [InlineData("[]", "must be a JSON object")]
+        [InlineData("null", "must be a JSON object")]
+        [InlineData("1", "must be a JSON object")]
+        [InlineData("\"text\"", "must be a JSON object")]
+        [InlineData("[][]", "not valid JSON")]
+        [InlineData("1 2", "not valid JSON")]
+        [InlineData("{\"version\":1} {\"version\":1}", "not valid JSON")]
+        public void Wrong_roots_and_trailing_values_are_classified(string json, string reason)
+        {
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains(reason, parsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(parsed.Failure.Identities.RequestId);
+            Assert.Null(parsed.Failure.Identities.MessageId);
+            Assert.Null(parsed.Failure.Identities.Backbone);
+        }
+
+        /// <summary>
+        /// Truncated objects and arrays are invalid even when every required field appeared before the cut.
+        /// </summary>
+        [Theory]
+        [InlineData("{\"version\":1")]
+        [InlineData("{\"version\":")]
+        [InlineData("[")]
+        [InlineData("{\"version\":1,\"requestId\":\"7c1cb8a0-95f9-4c13-8e53-339773e3afaa\",\"messageId\":\"<12345@example.invalid>\",\"backbone\":\"Giganews\"")]
+        public void Truncated_json_is_not_a_valid_request(string json)
+        {
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains("not valid JSON", parsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(parsed.Failure.Identities.RequestId);
+        }
+
+        /// <summary>
+        /// Wrong JSON types for required properties use the same reasons as a missing property of that type.
+        /// </summary>
+        [Fact]
+        public void Wrong_property_types_are_rejected()
+        {
+            var version = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1.5,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+            var requestId = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":1,"messageId":"<12345@example.invalid>","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+            var backbone = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":["Giganews"]}"""),
+                "Giganews",
+                MaxPayload);
+            var emptyMessage = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(
+                    """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"","backbone":"Giganews"}"""),
+                "Giganews",
+                MaxPayload);
+
+            Assert.Contains("missing required integer property 'version'", version.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Contains("missing or invalid 'requestId'", requestId.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Contains("missing or invalid 'backbone'", backbone.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Contains("not a canonical NNTP Message-ID", emptyMessage.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), version.Failure.Identities.RequestId);
+            Assert.Null(requestId.Failure.Identities.RequestId);
+            Assert.Null(backbone.Failure.Identities.Backbone);
+        }
+
+        /// <summary>
+        /// JSON string escapes are unescaped before validation. Property-name escapes use the same names.
+        /// </summary>
+        [Fact]
+        public void Escaped_strings_and_property_names_are_unescaped()
+        {
+            var json =
+                """{"\u0076ersion":1,"requestId":"\u0037c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"\u003c12345@example.invalid\u003e","backbone":"\u0047iganews"}""";
+
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(parsed.IsValid);
+            Assert.Equal(Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), parsed.Request!.RequestId);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, parsed.Request.MessageId);
+            Assert.Equal("Giganews", parsed.Request.Backbone);
+        }
+
+        /// <summary>
+        /// Non-ASCII backbone text is preserved as the unescaped JSON string and still participates in matching.
+        /// </summary>
+        [Fact]
+        public void Unicode_backbone_is_preserved()
+        {
+            var json =
+                """{"version":1,"requestId":"7c1cb8a0-95f9-4c13-8e53-339773e3afaa","messageId":"<12345@example.invalid>","backbone":"b\u00e4ck"}""";
+
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "bäck",
+                MaxPayload);
+
+            Assert.True(parsed.IsValid);
+            Assert.Equal("bäck", parsed.Request!.Backbone);
+        }
+
+        /// <summary>
+        /// Comments and trailing commas are rejected as invalid JSON.
+        /// </summary>
+        [Theory]
+        [InlineData("""{"version":1,}""")]
+        [InlineData("""{"version":1 /* note */}""")]
+        [InlineData("   \n\t")]
+        public void Comments_trailing_commas_and_whitespace_only_payloads_are_invalid_json(string json)
+        {
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains("not valid JSON", parsed.Failure!.Reason, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// A payload of exactly the configured maximum is parsed. One byte over that maximum is rejected before JSON is read.
+        /// </summary>
+        [Fact]
+        public void Exact_maximum_payload_is_parsed_and_oversized_malformed_json_is_not()
+        {
+            var canonical = Encoding.UTF8.GetBytes(ArticleWorkTestDeliveries.CanonicalRequestJson);
+            var exact = new byte[MaxPayload];
+            canonical.CopyTo(exact, 0);
+            exact.AsSpan(canonical.Length).Fill((byte)' ');
+            var exactParsed = ArticleWorkRequestParser.Parse(Delivery(exact), "Giganews", MaxPayload);
+
+            var oversized = new byte[MaxPayload + 1];
+            oversized[0] = (byte)'{';
+            var oversizedParsed = ArticleWorkRequestParser.Parse(Delivery(oversized), "Giganews", MaxPayload);
+
+            Assert.True(exactParsed.IsValid);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, exactParsed.Request!.MessageId);
+            Assert.False(oversizedParsed.IsValid);
+            Assert.Contains("WorkRequestMaxPayloadBytes", oversizedParsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("not valid JSON", oversizedParsed.Failure.Reason, StringComparison.Ordinal);
+            Assert.Null(oversizedParsed.Failure.Identities.RequestId);
+            Assert.Null(oversizedParsed.Failure.Identities.MessageId);
+            Assert.Null(oversizedParsed.Failure.Identities.Backbone);
+        }
+
+        /// <summary>
+        /// A UTF-8 BOM is not JSON. <see cref="JsonDocument"/> rejects it, and the parser reports the same invalid-JSON result.
+        /// </summary>
+        [Fact]
+        public void Utf8_bom_is_not_valid_json()
+        {
+            var canonical = Encoding.UTF8.GetBytes(ArticleWorkTestDeliveries.CanonicalRequestJson);
+            var body = new byte[canonical.Length + 3];
+            body[0] = 0xEF;
+            body[1] = 0xBB;
+            body[2] = 0xBF;
+            canonical.CopyTo(body.AsSpan(3));
+
+            var documentRejected = false;
+            try
+            {
+                using var document = JsonDocument.Parse(body);
+            }
+            catch (JsonException)
+            {
+                documentRejected = true;
+            }
+
+            Assert.True(documentRejected);
+
+            var parsed = ArticleWorkRequestParser.Parse(Delivery(body), "Giganews", MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains("not valid JSON", parsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(parsed.Failure.Identities.RequestId);
+        }
+
+        /// <summary>
+        /// Nesting beyond the JSON maximum of 64 is invalid JSON. The root object counts, so 63 nested objects are the deepest accepted extra value.
+        /// </summary>
+        [Fact]
+        public void Excessive_nesting_is_invalid_json()
+        {
+            var accepted = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(NestedExtra(63) + CanonicalFields),
+                "Giganews",
+                MaxPayload);
+            var rejected = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(NestedExtra(64) + CanonicalFields),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(accepted.IsValid);
+            Assert.False(rejected.IsValid);
+            Assert.Contains("not valid JSON", rejected.Failure!.Reason, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Builds a delivery whose body is the given bytes and whose other properties are the canonical fixture values.
+        /// </summary>
+        /// <param name="body">Application payload bytes.</param>
+        /// <returns>A synthetic manual-ack delivery.</returns>
+        private static VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery Delivery(byte[] body)
+        {
+            return new VectorNNTPD.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery(
+                1,
+                body,
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                ArticleWorkRequestParser.JsonContentType,
+                ArticleWorkTestDeliveries.CanonicalRequestId,
+                false,
+                "backfiller.giganews",
+                "backfiller.giganews",
+                "ctag",
+                1);
+        }
+
+        /// <summary>Required canonical fields, without a leading comma, used after an extra property.</summary>
+        private const string CanonicalFields =
+            "\"version\":1,\"requestId\":\"7c1cb8a0-95f9-4c13-8e53-339773e3afaa\",\"messageId\":\"<12345@example.invalid>\",\"backbone\":\"Giganews\"}";
+
+        /// <summary>Builds <c>{"extra":</c> followed by <paramref name="depth"/> nested objects.</summary>
+        /// <param name="depth">Number of nested objects, including the outermost extra value.</param>
+        /// <returns>A JSON prefix that is not yet closed.</returns>
+        private static string NestedExtra(int depth)
+        {
+            var json = new StringBuilder("{\"extra\":");
+            for (var i = 0; i < depth; i++)
+            {
+                json.Append("{\"a\":");
+            }
+
+            json.Append('1');
+            for (var i = 0; i < depth; i++)
+            {
+                json.Append('}');
+            }
+
+            json.Append(',');
+            return json.ToString();
+        }
+
+        /// <summary>
+        /// Accepts <paramref name="requestId"/> when the original string predicate accepts it, and requires the payload to stay under the size cap.
+        /// </summary>
+        /// <param name="requestId">JSON string value whose UTF-8 form is longer than the stack buffer.</param>
+        private static void AssertAcceptedRequestId(string requestId)
+        {
+            Assert.True(Encoding.UTF8.GetByteCount(requestId) > 128);
+            Assert.False(IsRejectedRequestId(requestId));
+            Assert.True(Guid.TryParse(requestId, out var expected));
+
+            var json = RequestJson(requestId);
+            Assert.True(Encoding.UTF8.GetByteCount(json) < MaxPayload);
+
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.True(parsed.IsValid);
+            Assert.Equal(expected, parsed.Request!.RequestId);
+        }
+
+        /// <summary>
+        /// Rejects <paramref name="requestId"/> when the original string predicate rejects it.
+        /// </summary>
+        /// <param name="requestId">JSON string value that is blank or not a non-empty GUID.</param>
+        private static void AssertRejectedRequestId(string requestId)
+        {
+            Assert.True(IsRejectedRequestId(requestId));
+
+            var json = RequestJson(requestId);
+            Assert.True(Encoding.UTF8.GetByteCount(json) < MaxPayload);
+
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains("missing or invalid 'requestId'", parsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.Null(parsed.Failure.Identities.RequestId);
+            Assert.Equal(ArticleWorkTestDeliveries.CanonicalMessageId, parsed.Failure.Identities.MessageId);
+            Assert.Equal("Giganews", parsed.Failure.Identities.Backbone);
+        }
+
+        /// <summary>Original <c>requestId</c> rejection predicate.</summary>
+        /// <param name="requestId">Decoded JSON string.</param>
+        /// <returns><see langword="true"/> when the original parser rejected the text.</returns>
+        private static bool IsRejectedRequestId(string requestId)
+        {
+            return string.IsNullOrWhiteSpace(requestId)
+                || !Guid.TryParse(requestId, out var guid)
+                || guid == Guid.Empty;
+        }
+
+        /// <summary>Builds a v1 payload whose only varying field is <paramref name="requestId"/>.</summary>
+        /// <param name="requestId">Decoded request id inserted as a JSON string.</param>
+        /// <returns>UTF-16 JSON text.</returns>
+        private static string RequestJson(string requestId)
+        {
+            return "{\"version\":1,\"requestId\":" + JsonSerializer.Serialize(requestId)
+                + ",\"messageId\":\"<12345@example.invalid>\",\"backbone\":\"Giganews\"}";
         }
 
         /// <summary>

@@ -13,11 +13,18 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
     /// never synthesized. AMQP <c>RequestId</c> is not a JSON field: when present, it must
     /// match JSON <c>requestId</c>; when absent, the protocol still accepts the delivery
     /// (required AMQP fields are only <c>CorrelationId</c> and <c>ReplyTo</c>).
+    /// The body is read once with <see cref="Utf8JsonReader"/>. Duplicate top-level
+    /// <c>version</c>, <c>requestId</c>, and <c>backbone</c> properties keep the last value.
+    /// Duplicate <c>messageId</c> properties keep the first value. A JSON null <c>messageId</c>
+    /// is treated as absent.
     /// </remarks>
     internal static class ArticleWorkRequestParser
     {
         /// <summary>Supported application protocol versions.</summary>
         private const int CurrentVersion = 1;
+
+        /// <summary>Stack buffer for an ordinary <c>requestId</c>. Longer values use <see cref="Utf8JsonReader.GetString"/>.</summary>
+        private const int RequestIdStackBytes = 128;
 
         /// <summary>Required AMQP content type when the property is present.</summary>
         internal const string JsonContentType = "application/json";
@@ -59,194 +66,174 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return ArticleWorkParseResult.Invalid("RabbitMQ article-work payload was empty.", default);
             }
 
-            JsonDocument document;
+            PayloadFields fields;
             try
             {
-                document = JsonDocument.Parse(delivery.Body);
+                fields = ReadPayload(delivery.Body.Span);
             }
             catch (JsonException)
             {
                 return ArticleWorkParseResult.Invalid("RabbitMQ article-work payload was not valid JSON.", default);
             }
 
-            using (document)
+            if (!fields.IsObject)
             {
-                var root = document.RootElement;
-                if (root.ValueKind != JsonValueKind.Object)
-                {
-                    return ArticleWorkParseResult.Invalid("RabbitMQ article-work payload must be a JSON object.", default);
-                }
+                return ArticleWorkParseResult.Invalid("RabbitMQ article-work payload must be a JSON object.", default);
+            }
 
-                _ = TryReadGuid(root, "requestId", out var requestId);
-                var messageIdRead = TryReadValidatedMessageId(delivery.Body.Span);
-                var messageId = messageIdRead.MessageId;
-                var rawMessageId = messageIdRead.PropertySeen ? messageId ?? "\u0001" : null;
-                _ = TryReadString(root, "backbone", out var rawBackbone);
-                var backbone = !string.IsNullOrWhiteSpace(rawBackbone) ? rawBackbone : null;
-                var identities = new ArticleWorkParsedIdentities(requestId, messageId, backbone);
+            var requestId = fields.RequestId;
+            var messageId = fields.MessageId;
+            var rawMessageId = fields.MessageIdPropertySeen ? messageId ?? "\u0001" : null;
+            var backbone = fields.Backbone;
+            var identities = new ArticleWorkParsedIdentities(requestId, messageId, backbone);
 
-                if (!TryReadInt32(root, "version", out var version))
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload is missing required integer property 'version'.",
-                        identities);
-                }
+            if (!fields.HasVersion)
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload is missing required integer property 'version'.",
+                    identities);
+            }
 
-                if (version != CurrentVersion)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        $"RabbitMQ article-work payload uses unsupported version '{version}'.",
-                        identities);
-                }
+            if (fields.Version != CurrentVersion)
+            {
+                return ArticleWorkParseResult.Invalid(
+                    $"RabbitMQ article-work payload uses unsupported version '{fields.Version}'.",
+                    identities);
+            }
 
-                if (requestId is null)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload contains missing or invalid 'requestId'.",
-                        identities);
-                }
+            if (requestId is null)
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload contains missing or invalid 'requestId'.",
+                    identities);
+            }
 
-                if (string.IsNullOrWhiteSpace(rawMessageId))
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload contains missing or invalid 'messageId'.",
-                        identities with { MessageId = null });
-                }
+            if (string.IsNullOrWhiteSpace(rawMessageId))
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload contains missing or invalid 'messageId'.",
+                    identities with { MessageId = null });
+            }
 
-                if (messageId is null)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload 'messageId' is not a canonical NNTP Message-ID.",
-                        identities with { MessageId = null });
-                }
+            if (messageId is null)
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload 'messageId' is not a canonical NNTP Message-ID.",
+                    identities with { MessageId = null });
+            }
 
-                if (backbone is null)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload contains missing or invalid 'backbone'.",
-                        identities);
-                }
+            if (backbone is null)
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload contains missing or invalid 'backbone'.",
+                    identities);
+            }
 
-                if (!string.Equals(backbone, consumingBackbone, StringComparison.OrdinalIgnoreCase))
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ article-work payload backbone does not match the consuming queue backbone context.",
-                        identities);
-                }
+            if (!string.Equals(backbone, consumingBackbone, StringComparison.OrdinalIgnoreCase))
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ article-work payload backbone does not match the consuming queue backbone context.",
+                    identities);
+            }
 
-                if (string.IsNullOrWhiteSpace(delivery.CorrelationId))
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ delivery is missing required AMQP CorrelationId property.",
-                        identities);
-                }
+            if (string.IsNullOrWhiteSpace(delivery.CorrelationId))
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ delivery is missing required AMQP CorrelationId property.",
+                    identities);
+            }
 
-                if (string.IsNullOrWhiteSpace(delivery.ReplyTo))
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ delivery is missing required AMQP ReplyTo property.",
-                        identities);
-                }
+            if (string.IsNullOrWhiteSpace(delivery.ReplyTo))
+            {
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ delivery is missing required AMQP ReplyTo property.",
+                    identities);
+            }
 
-                if (string.IsNullOrWhiteSpace(delivery.RequestIdHeader))
-                    return ArticleWorkParseResult.Valid(new ArticleWorkRequest(
-                        CurrentVersion,
-                        requestId.Value,
-                        messageId,
-                        backbone));
-                if (!Guid.TryParse(delivery.RequestIdHeader, out var headerId)
-                    || headerId == Guid.Empty
-                    || headerId != requestId.Value)
-                {
-                    return ArticleWorkParseResult.Invalid(
-                        "RabbitMQ AMQP RequestId header does not match JSON requestId.",
-                        identities);
-                }
-
+            if (string.IsNullOrWhiteSpace(delivery.RequestIdHeader))
+            {
                 return ArticleWorkParseResult.Valid(new ArticleWorkRequest(
                     CurrentVersion,
                     requestId.Value,
                     messageId,
                     backbone));
             }
-        }
 
-        /// <summary>
-        /// Validates the top-level <c>messageId</c> JSON string from the original payload bytes.
-        /// </summary>
-        /// <param name="json">Article-work request body.</param>
-        /// <returns>The accepted ASCII Message-ID when the property is a valid token.</returns>
-        private static MessageIdRead TryReadValidatedMessageId(ReadOnlySpan<byte> json)
-        {
-            Span<byte> buffer = stackalloc byte[NntpMessageIdValidation.MaxMessageIdLength];
-            switch (TryCopyTopLevelJsonString(json, "messageId"u8, buffer, out var length))
+            if (!Guid.TryParse(delivery.RequestIdHeader, out var headerId)
+                || headerId == Guid.Empty
+                || headerId != requestId.Value)
             {
-                case TopLevelJsonString.Copied:
-                    var token = buffer[..length];
-                    return NntpMessageIdValidation.IsValidMessageId(token)
-                        ? new MessageIdRead(true, Encoding.ASCII.GetString(token))
-                        : new MessageIdRead(true, null);
-                case TopLevelJsonString.NotString:
-                case TopLevelJsonString.TooLong:
-                    return new MessageIdRead(true, null);
-                default:
-                    return new MessageIdRead(false, null);
+                return ArticleWorkParseResult.Invalid(
+                    "RabbitMQ AMQP RequestId header does not match JSON requestId.",
+                    identities);
             }
+
+            return ArticleWorkParseResult.Valid(new ArticleWorkRequest(
+                CurrentVersion,
+                requestId.Value,
+                messageId,
+                backbone));
         }
 
-        /// <summary>Outcome of reading the top-level <c>messageId</c> string.</summary>
-        /// <param name="PropertySeen">
-        /// <see langword="true"/> when a top-level <c>messageId</c> property was present, including null, non-string, and overlong values.
-        /// <see langword="false"/> when the property was absent.
+        /// <summary>Fields taken from one complete JSON value.</summary>
+        /// <param name="IsObject"><see langword="true"/> when the root value is a JSON object.</param>
+        /// <param name="HasVersion"><see langword="true"/> when the last top-level <c>version</c> is an integer.</param>
+        /// <param name="Version">That integer when <paramref name="HasVersion"/> is <see langword="true"/>; otherwise zero.</param>
+        /// <param name="RequestId">The last top-level <c>requestId</c> when it is a non-empty GUID.</param>
+        /// <param name="MessageIdPropertySeen">
+        /// <see langword="true"/> when the first top-level <c>messageId</c> was present and was not JSON null.
         /// </param>
-        /// <param name="MessageId">
-        /// The accepted ASCII Message-ID when the property was a valid token; otherwise <see langword="null"/>.
-        /// </param>
-        private readonly record struct MessageIdRead(bool PropertySeen, string? MessageId);
+        /// <param name="MessageId">The accepted ASCII Message-ID from that first property; otherwise <see langword="null"/>.</param>
+        /// <param name="Backbone">The last top-level <c>backbone</c> string when it is not blank.</param>
+        private readonly record struct PayloadFields(
+            bool IsObject,
+            bool HasVersion,
+            int Version,
+            Guid? RequestId,
+            bool MessageIdPropertySeen,
+            string? MessageId,
+            string? Backbone);
 
-        /// <summary>How a top-level JSON string copy finished. Callers treat only <see cref="Copied"/> as a candidate token.</summary>
-        private enum TopLevelJsonString
+        /// <summary>Reads one JSON value. Malformed, truncated, or trailing JSON throws <see cref="JsonException"/>.</summary>
+        /// <param name="json">UTF-8 payload bytes. The span is not retained.</param>
+        /// <returns>Root-object fields, or a default result when the complete value is not an object.</returns>
+        private static PayloadFields ReadPayload(ReadOnlySpan<byte> json)
         {
-            /// <summary>The property was absent, or the payload was not a JSON object.</summary>
-            Missing,
-
-            /// <summary>The property was present and JSON null.</summary>
-            Null,
-
-            /// <summary>The property was present and was not a JSON string.</summary>
-            NotString,
-
-            /// <summary>The property was a string longer than the destination buffer.</summary>
-            TooLong,
-
-            /// <summary>The unescaped string bytes were copied into the destination.</summary>
-            Copied,
-        }
-
-        /// <summary>Copies one top-level JSON string property into <paramref name="destination"/> without a heap allocation.</summary>
-        /// <param name="json">UTF-8 JSON object. A payload that is not an object is <see cref="TopLevelJsonString.Missing"/>.</param>
-        /// <param name="propertyName">Exact top-level property name. Nested properties are skipped.</param>
-        /// <param name="destination">Buffer that receives the unescaped string bytes.</param>
-        /// <param name="written">Bytes copied when the result is <see cref="TopLevelJsonString.Copied"/>; otherwise zero.</param>
-        /// <returns>Why the copy stopped. <see cref="TopLevelJsonString.TooLong"/> means the string did not fit <paramref name="destination"/>.</returns>
-        private static TopLevelJsonString TryCopyTopLevelJsonString(
-            ReadOnlySpan<byte> json,
-            ReadOnlySpan<byte> propertyName,
-            Span<byte> destination,
-            out int written)
-        {
-            written = 0;
             var reader = new Utf8JsonReader(json);
-            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            if (!reader.Read())
             {
-                return TopLevelJsonString.Missing;
+                throw new JsonException();
             }
+
+            if (reader.TokenType != JsonTokenType.StartObject)
+            {
+                SkipValueIfContainer(ref reader);
+                if (reader.Read())
+                {
+                    throw new JsonException();
+                }
+
+                return default;
+            }
+
+            var hasVersion = false;
+            var version = 0;
+            Guid? requestId = null;
+            var messageIdLocked = false;
+            var messageIdSeen = false;
+            string? messageId = null;
+            string? backbone = null;
 
             while (reader.Read())
             {
                 if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == 0)
                 {
-                    return TopLevelJsonString.Missing;
+                    if (reader.Read())
+                    {
+                        throw new JsonException();
+                    }
+
+                    return new PayloadFields(true, hasVersion, version, requestId, messageIdSeen, messageId, backbone);
                 }
 
                 if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
@@ -254,116 +241,195 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     continue;
                 }
 
-                var match = reader.ValueTextEquals(propertyName);
+                var versionName = reader.ValueTextEquals("version"u8);
+                var requestName = reader.ValueTextEquals("requestId"u8);
+                var messageName = reader.ValueTextEquals("messageId"u8);
+                var backboneName = reader.ValueTextEquals("backbone"u8);
                 if (!reader.Read())
                 {
-                    return TopLevelJsonString.Missing;
+                    throw new JsonException();
                 }
 
-                if (!match)
+                if (versionName)
                 {
-                    if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                    ApplyVersion(ref reader, ref hasVersion, ref version);
+                }
+                else if (requestName)
+                {
+                    requestId = ReadRequestId(ref reader);
+                }
+                else if (messageName)
+                {
+                    if (messageIdLocked)
                     {
-                        reader.Skip();
+                        SkipValueIfContainer(ref reader);
                     }
-
-                    continue;
+                    else
+                    {
+                        messageIdLocked = true;
+                        ApplyMessageId(ref reader, ref messageIdSeen, ref messageId);
+                    }
                 }
-
-                if (reader.TokenType == JsonTokenType.Null)
+                else if (backboneName)
                 {
-                    return TopLevelJsonString.Null;
+                    backbone = ReadBackbone(ref reader);
                 }
-
-                if (reader.TokenType != JsonTokenType.String)
+                else
                 {
-                    return TopLevelJsonString.NotString;
+                    SkipValueIfContainer(ref reader);
                 }
+            }
 
+            throw new JsonException();
+        }
+
+        /// <summary>Applies the current top-level <c>version</c> value. A non-integer clears any earlier integer.</summary>
+        /// <param name="reader">Reader positioned on the property value.</param>
+        /// <param name="hasVersion">Whether an integer version is currently accepted.</param>
+        /// <param name="version">The accepted integer.</param>
+        private static void ApplyVersion(ref Utf8JsonReader reader, ref bool hasVersion, ref int version)
+        {
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var parsed))
+            {
+                hasVersion = true;
+                version = parsed;
+                return;
+            }
+
+            hasVersion = false;
+            version = 0;
+            SkipValueIfContainer(ref reader);
+        }
+
+        /// <summary>Reads the current top-level <c>requestId</c> string as a non-empty GUID.</summary>
+        /// <param name="reader">Reader positioned on the property value. The parser constructs it from one span.</param>
+        /// <returns>The GUID, or <see langword="null"/> when the value is missing, blank, not a GUID, or <see cref="Guid.Empty"/>.</returns>
+        /// <remarks>
+        /// A reader over one span has <see cref="Utf8JsonReader.HasValueSequence"/> false, so
+        /// <see cref="Utf8JsonReader.ValueSpan"/> is the complete raw value. When that flag is true,
+        /// <see cref="Utf8JsonReader.ValueSpan"/> is only the first segment and <see cref="Utf8JsonReader.ValueSequence"/>
+        /// holds the rest, so those values use <see cref="Utf8JsonReader.GetString"/>.
+        /// JSON escapes decode to no more UTF-8 bytes than their raw form, so a raw value that fits
+        /// <see cref="RequestIdStackBytes"/> is copied on the stack. A longer value uses
+        /// <see cref="Guid.TryParse(string?, out Guid)"/> on the decoded string.
+        /// </remarks>
+        private static Guid? ReadRequestId(ref Utf8JsonReader reader)
+        {
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                SkipValueIfContainer(ref reader);
+                return null;
+            }
+
+            if (!reader.HasValueSequence && reader.ValueSpan.Length <= RequestIdStackBytes)
+            {
+                Span<byte> bytes = stackalloc byte[RequestIdStackBytes];
+                int written;
                 if (!reader.ValueIsEscaped)
                 {
-                    var value = reader.ValueSpan;
-                    if (value.Length > destination.Length)
-                    {
-                        return TopLevelJsonString.TooLong;
-                    }
-
-                    value.CopyTo(destination);
-                    written = value.Length;
-                    return TopLevelJsonString.Copied;
+                    reader.ValueSpan.CopyTo(bytes);
+                    written = reader.ValueSpan.Length;
+                }
+                else
+                {
+                    written = reader.CopyString(bytes);
                 }
 
+                Span<char> chars = stackalloc char[written];
+                var charCount = Encoding.UTF8.GetChars(bytes[..written], chars);
+                var text = chars[..charCount];
+                if (text.IsWhiteSpace() || !Guid.TryParse(text, out var parsed) || parsed == Guid.Empty)
+                {
+                    return null;
+                }
+
+                return parsed;
+            }
+
+            var owned = reader.GetString();
+            if (string.IsNullOrWhiteSpace(owned) || !Guid.TryParse(owned, out var guid) || guid == Guid.Empty)
+            {
+                return null;
+            }
+
+            return guid;
+        }
+
+        /// <summary>
+        /// Applies the first top-level <c>messageId</c> value. JSON null leaves the property unseen.
+        /// </summary>
+        /// <param name="reader">Reader positioned on the property value.</param>
+        /// <param name="propertySeen"><see langword="true"/> when the value was not JSON null.</param>
+        /// <param name="messageId">The accepted ASCII Message-ID, or <see langword="null"/> when the value is not a valid token.</param>
+        private static void ApplyMessageId(ref Utf8JsonReader reader, ref bool propertySeen, ref string? messageId)
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return;
+            }
+
+            propertySeen = true;
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                SkipValueIfContainer(ref reader);
+                return;
+            }
+
+            Span<byte> buffer = stackalloc byte[NntpMessageIdValidation.MaxMessageIdLength];
+            int written;
+            if (!reader.ValueIsEscaped)
+            {
+                var value = reader.ValueSpan;
+                if (value.Length > buffer.Length)
+                {
+                    return;
+                }
+
+                value.CopyTo(buffer);
+                written = value.Length;
+            }
+            else
+            {
                 try
                 {
-                    written = reader.CopyString(destination);
-                    return TopLevelJsonString.Copied;
+                    written = reader.CopyString(buffer);
                 }
                 catch (ArgumentException)
                 {
-                    written = 0;
-                    return TopLevelJsonString.TooLong;
+                    return;
                 }
             }
 
-            return TopLevelJsonString.Missing;
+            var token = buffer[..written];
+            if (NntpMessageIdValidation.IsValidMessageId(token))
+            {
+                messageId = Encoding.ASCII.GetString(token);
+            }
         }
 
-        /// <summary>Reads a case-sensitive JSON number property as a 32-bit integer.</summary>
-        /// <param name="root">Payload object.</param>
-        /// <param name="name">Exact property name.</param>
-        /// <param name="value">Parsed value when the result is <see langword="true"/>; otherwise zero.</param>
-        /// <returns>
-        /// <see langword="true"/> when <paramref name="name"/> exists, is a JSON number, and fits <see cref="int"/>.
-        /// </returns>
-        private static bool TryReadInt32(JsonElement root, string name, out int value)
+        /// <summary>Reads the current top-level <c>backbone</c> string.</summary>
+        /// <param name="reader">Reader positioned on the property value.</param>
+        /// <returns>The unescaped string when it is not blank; otherwise <see langword="null"/>.</returns>
+        private static string? ReadBackbone(ref Utf8JsonReader reader)
         {
-            value = 0;
-            return root.TryGetProperty(name, out var property)
-                   && property.ValueKind == JsonValueKind.Number
-                   && property.TryGetInt32(out value);
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                SkipValueIfContainer(ref reader);
+                return null;
+            }
+
+            var text = reader.GetString();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
         }
 
-        /// <summary>Reads a case-sensitive JSON string property without treating empty text as missing.</summary>
-        /// <param name="root">Payload object.</param>
-        /// <param name="name">Exact property name.</param>
-        /// <param name="value">The string when the result is <see langword="true"/>; otherwise null.</param>
-        /// <returns>
-        /// <see langword="true"/> when <paramref name="name"/> exists, is a JSON string, and is not JSON null.
-        /// </returns>
-        private static bool TryReadString(JsonElement root, string name, out string? value)
+        /// <summary>Consumes an object or array value. Primitive values stay on the current token.</summary>
+        /// <param name="reader">Reader positioned on a property value or a non-object root.</param>
+        private static void SkipValueIfContainer(ref Utf8JsonReader reader)
         {
-            value = null;
-            if (!root.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
             {
-                return false;
+                reader.Skip();
             }
-
-            value = property.GetString();
-            return value is not null;
-        }
-
-        /// <summary>Reads a case-sensitive JSON string property as a non-empty GUID.</summary>
-        /// <param name="root">Payload object.</param>
-        /// <param name="name">Exact property name.</param>
-        /// <param name="value">The GUID when the result is <see langword="true"/>; otherwise null.</param>
-        /// <returns>
-        /// <see langword="false"/> when the property is missing, not a string, blank, not a GUID, or <see cref="Guid.Empty"/>.
-        /// </returns>
-        private static bool TryReadGuid(JsonElement root, string name, out Guid? value)
-        {
-            value = null;
-            if (!TryReadString(root, name, out var text) || string.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            if (!Guid.TryParse(text, out var parsed) || parsed == Guid.Empty)
-            {
-                return false;
-            }
-
-            value = parsed;
-            return true;
         }
     }
 }
