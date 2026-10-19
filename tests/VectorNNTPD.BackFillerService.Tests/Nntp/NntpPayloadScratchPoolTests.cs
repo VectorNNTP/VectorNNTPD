@@ -42,7 +42,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         {
             var payload = Pattern(40);
             var pool = new TrackingArrayPool(slackBytes: 128);
-            var reader = Reader(Frame(payload), pool);
+            using var reader = Reader(Frame(payload), pool);
             Assert.Equal(payload, await ReadExactAsync(reader, maxBytes: 256));
             Assert.Equal(1, pool.RentCount);
             Assert.True(pool.OutstandingLengths().Single() >= pool.OutstandingRequests().Single() + 128);
@@ -133,7 +133,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         public async Task Empty_payload_and_repeated_disposal_return_nothing()
         {
             var pool = new TrackingArrayPool(slackBytes: 0);
-            var reader = Reader(".\r\n"u8.ToArray(), pool);
+            using var reader = Reader(".\r\n"u8.ToArray(), pool);
             var payload = await reader.ReadArticlePayloadAsync(1024, TimeSpan.FromSeconds(5), CancellationToken.None);
             Assert.Empty(payload);
             Assert.Equal(0, pool.RentCount);
@@ -148,23 +148,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         {
             var payload = Pattern(48);
             var pool = new TrackingArrayPool(slackBytes: 32);
-            var reader = Reader(Frame(payload), pool);
-            try
-            {
-                var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                    reader.ReadArticlePayloadAsync(
-                        1024,
-                        TimeSpan.FromSeconds(5),
-                        memory => FailWhileScratchIsLive(memory, payload, pool),
-                        CancellationToken.None));
-                Assert.Equal("consumer failed", exception.Message);
-                Assert.Equal(1, pool.OutstandingCount);
-                Assert.True(pool.ReturnCount < pool.RentCount);
-            }
-            finally
-            {
-                reader.Dispose();
-            }
+            using var reader = Reader(Frame(payload), pool);
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                reader.ReadArticlePayloadAsync(
+                    1024,
+                    TimeSpan.FromSeconds(5),
+                    memory => FailWhileScratchIsLive(memory, payload, pool),
+                    CancellationToken.None));
+            Assert.Equal("consumer failed", exception.Message);
+            Assert.Equal(1, pool.OutstandingCount);
+            Assert.True(pool.ReturnCount < pool.RentCount);
+            reader.Dispose();
 
             Assert.Equal(pool.RentCount, pool.ReturnCount);
             Assert.Equal(0, pool.OutstandingCount);
@@ -192,7 +186,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             var pool = new TrackingArrayPool(slackBytes: 16);
             var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var reader = new NntpStreamReader(new GateStream(Frame(payload), entered, release.Task), 1024, pool);
+            using var gate = new GateStream(Frame(payload), entered, release.Task);
+            using var reader = new NntpStreamReader(gate, 1024, pool);
             var read = reader.ReadArticlePayloadAsync(
                 1024,
                 TimeSpan.FromSeconds(5),
