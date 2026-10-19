@@ -334,7 +334,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Task<NntpSessionLease>? follower = null;
             var releaseCancelledDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseSurvivorWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            CancellationTokenSource? cancel = null;
             try
             {
                 await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
@@ -350,66 +349,72 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     var drainEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     releaseCancelledDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     releaseSurvivorWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    cancel = new CancellationTokenSource();
-                    pool.BeforePermitWait = () =>
+                    using var cancel = new CancellationTokenSource();
+                    try
                     {
-                        if (Interlocked.Increment(ref waitsEntered) == 2)
+                        pool.BeforePermitWait = () =>
                         {
-                            survivorWaiting.TrySetResult();
-                            return releaseSurvivorWait.Task;
-                        }
+                            if (Interlocked.Increment(ref waitsEntered) == 2)
+                            {
+                                survivorWaiting.TrySetResult();
+                                return releaseSurvivorWait.Task;
+                            }
 
-                        return Task.CompletedTask;
-                    };
-                    pool.BeforeCancelledPermitDrain = () =>
+                            return Task.CompletedTask;
+                        };
+                        pool.BeforeCancelledPermitDrain = () =>
+                        {
+                            drainEntered.TrySetResult();
+                            return releaseCancelledDrain.Task;
+                        };
+
+                        cancelled = pool.AcquireAsync(cancel.Token);
+                        await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
+                        survivor = pool.AcquireAsync(CancellationToken.None);
+                        await survivorWaiting.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                        Assert.Equal(2, pool.PermitWaiterCount);
+
+                        cancel.Cancel();
+                        await drainEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                        await held.DisposeAsync();
+                        held = null;
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+
+                        releaseCancelledDrain.TrySetResult();
+                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.PermitReservationCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+                        pool.BeforeCancelledPermitDrain = null;
+                        pool.BeforePermitWait = null;
+
+                        releaseSurvivorWait.TrySetResult();
+                        var gained = await survivor.WaitAsync(TimeSpan.FromSeconds(2));
+                        Assert.Equal(1, pool.ActiveLeaseCount);
+                        Assert.Equal(0, pool.AvailablePermitCount);
+                        Assert.Equal(1, pool.PermitReservationCount);
+
+                        follower = pool.AcquireAsync(CancellationToken.None);
+                        await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
+                        Assert.False(follower.IsCompleted);
+
+                        await gained.DisposeAsync();
+                        var followed = await follower.WaitAsync(TimeSpan.FromSeconds(2));
+                        await followed.DisposeAsync();
+                        follower = null;
+                        survivor = null;
+                        cancelled = null;
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.PermitReservationCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+                        Assert.Equal(0, pool.PermitWaiterCount);
+                    }
+                    finally
                     {
-                        drainEntered.TrySetResult();
-                        return releaseCancelledDrain.Task;
-                    };
-
-                    cancelled = pool.AcquireAsync(cancel.Token);
-                    await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
-                    survivor = pool.AcquireAsync(CancellationToken.None);
-                    await survivorWaiting.Task.WaitAsync(TimeSpan.FromSeconds(2));
-                    Assert.Equal(2, pool.PermitWaiterCount);
-
-                    cancel.Cancel();
-                    await drainEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-                    await held.DisposeAsync();
-                    held = null;
-                    Assert.Equal(1, pool.AvailablePermitCount);
-                    Assert.Equal(0, pool.ActiveLeaseCount);
-
-                    releaseCancelledDrain.TrySetResult();
-                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
-                    Assert.Equal(1, pool.AvailablePermitCount);
-                    Assert.Equal(0, pool.PermitReservationCount);
-                    Assert.Equal(0, pool.ActiveLeaseCount);
-                    pool.BeforeCancelledPermitDrain = null;
-                    pool.BeforePermitWait = null;
-
-                    releaseSurvivorWait.TrySetResult();
-                    var gained = await survivor.WaitAsync(TimeSpan.FromSeconds(2));
-                    Assert.Equal(1, pool.ActiveLeaseCount);
-                    Assert.Equal(0, pool.AvailablePermitCount);
-                    Assert.Equal(1, pool.PermitReservationCount);
-
-                    follower = pool.AcquireAsync(CancellationToken.None);
-                    await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
-                    Assert.False(follower.IsCompleted);
-
-                    await gained.DisposeAsync();
-                    var followed = await follower.WaitAsync(TimeSpan.FromSeconds(2));
-                    await followed.DisposeAsync();
-                    follower = null;
-                    survivor = null;
-                    cancelled = null;
-                    Assert.Equal(1, pool.AvailablePermitCount);
-                    Assert.Equal(0, pool.PermitReservationCount);
-                    Assert.Equal(0, pool.ActiveLeaseCount);
-                    Assert.Equal(0, pool.PermitWaiterCount);
-                    cancel.Dispose();
-                    cancel = null;
+                        releaseCancelledDrain.TrySetResult();
+                        releaseSurvivorWait.TrySetResult();
+                    }
                 }
             }
             finally
@@ -418,7 +423,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 releaseSurvivorWait.TrySetResult();
                 pool.BeforePermitWait = null;
                 pool.BeforeCancelledPermitDrain = null;
-                cancel?.Dispose();
                 if (held is not null)
                 {
                     await held.DisposeAsync();
