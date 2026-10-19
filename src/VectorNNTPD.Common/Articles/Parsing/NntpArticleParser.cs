@@ -226,6 +226,20 @@ namespace VectorNNTPD.Common.Articles.Parsing
                         localIdentity);
                 }
 
+                if (HasDuplicateDateHeader(parsedHeaders))
+                {
+                    return NntpArticleParseResult.Rejected(
+                        NntpArticleParseFailureCode.DuplicateDate,
+                        NntpArticleType.Malformed,
+                        articleBytes,
+                        headerOutcome.HeaderBytes,
+                        headerOutcome.BodyBytes,
+                        parsedHeaders,
+                        parsedHeaders.Length,
+                        localIdentity,
+                        originalMessageIdValue: originalMessageIdValue);
+                }
+
                 if (!ArticleDateHeaderResolver.TryResolve(
                         articleBytes,
                         parsedHeaders,
@@ -633,6 +647,32 @@ namespace VectorNNTPD.Common.Articles.Parsing
                                                                 : AsciiEqualsIgnoreCase(nameBytes, "References"u8)
                                                                     ? NntpArticleHeaderName.References
                                                                     : NntpArticleHeaderName.Unknown;
+
+        /// <summary>
+        /// Reports a second <c>Date</c> header. Folded continuation lines belong to the current header and are not a second header.
+        /// </summary>
+        /// <param name="headers">Parsed headers in wire order. <see cref="NntpArticleHeaderName.Date"/> is already case-folded.</param>
+        /// <returns><see langword="true"/> when two or more entries have <see cref="NntpArticleHeaderName.Date"/>.</returns>
+        private static bool HasDuplicateDateHeader(ReadOnlySpan<NntpArticleHeaderEntry> headers)
+        {
+            var found = false;
+            for (var i = 0; i < headers.Length; i++)
+            {
+                if (headers[i].KnownName != NntpArticleHeaderName.Date)
+                {
+                    continue;
+                }
+
+                if (found)
+                {
+                    return true;
+                }
+
+                found = true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// Requires exactly one Message-ID whose unfolded bytes pass <see cref="NntpMessageIdValidation.IsValidMessageId(ReadOnlySpan{byte})"/>.

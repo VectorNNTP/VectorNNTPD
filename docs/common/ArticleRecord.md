@@ -247,7 +247,9 @@ The parser never rewrites Date. `NntpArticleParseResult` carries `CanonicalUtc`,
 5. `X-Date`
 6. `Delivery-Date`
 
-For each name, headers are scanned in wire order. The first candidate that unfolds and `NewsDateParser.TryGetCanonicalUtc` succeeds wins. A malformed earlier header does not block a later good one.
+The parser rejects a second `Date` header as `NntpArticleParseFailureCode.DuplicateDate` before resolution. `Date` and `date` are the same header. A folded continuation is part of that one header, not a second `Date`. No canonical instant or record is published for that rejection.
+
+For each remaining candidate name, headers are scanned in wire order. The first value of that name that unfolds and `NewsDateParser.TryGetCanonicalUtc` succeeds wins. A missing or unparsable single `Date` does not block a later name such as `Injection-Date`.
 
 ### CanonicalUtc
 
@@ -271,7 +273,7 @@ These collisions are omitted rather than given one region's offset: `AST`/`ADT`,
 
 ### Failure
 
-If no candidate parses: `NntpArticleParseFailureCode.MissingOrInvalidDate`. The factory returns `RejectedParse` and does not materialize.
+If no candidate parses: `NntpArticleParseFailureCode.MissingOrInvalidDate`. A second `Date` is `DuplicateDate` instead. The factory returns `RejectedParse` and does not materialize.
 
 ### Why source offsets cannot be reused
 

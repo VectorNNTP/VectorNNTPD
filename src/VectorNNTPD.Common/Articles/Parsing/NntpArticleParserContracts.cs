@@ -108,6 +108,9 @@ namespace VectorNNTPD.Common.Articles.Parsing
 
         /// <summary>Body line exceeded configured maximum line length.</summary>
         BodyLineTooLong = 24,
+
+        /// <summary>A second <c>Date</c> header was found. Header-name matching is ASCII case-insensitive.</summary>
+        DuplicateDate = 25,
     }
 
     /// <summary>

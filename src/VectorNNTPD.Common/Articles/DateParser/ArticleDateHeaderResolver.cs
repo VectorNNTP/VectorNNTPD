@@ -6,14 +6,16 @@ namespace VectorNNTPD.Common.Articles.DateParser
     /// Resolves the first usable article date header in the parser's deterministic candidate order.
     /// </summary>
     /// <remarks>
-    /// The resolver keeps scanning later candidate headers when an earlier candidate is present but
-    /// malformed, allowing fallback values such as <c>Injection-Date</c> to recover otherwise acceptable articles.
+    /// The parser rejects a second <c>Date</c> header before calling this method, so a later <c>Date</c>
+    /// is not a fallback. A missing or unparsable single <c>Date</c> still falls through to later names
+    /// such as <c>Injection-Date</c>.
     /// </remarks>
     internal static class ArticleDateHeaderResolver
     {
         /// <summary>
         /// Date-family headers in the order they are tried: Date, Injection-Date, NNTP-Posting-Date, Posted, X-Date, Delivery-Date.
-        /// Within one name, the first entry in wire order that unfolds and parses wins. A present but unparsable candidate does not stop the scan.
+        /// Within one name, the first entry in wire order that unfolds and parses wins. A present but unparsable candidate does not stop the scan of a later name.
+        /// The parser rejects a second <c>Date</c> before resolution, so this scan is not the duplicate-<c>Date</c> policy.
         /// </summary>
         private static readonly NntpArticleHeaderName[] CandidateHeaderNames =
         [
