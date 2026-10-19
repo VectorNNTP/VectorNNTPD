@@ -277,9 +277,63 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             await concurrentDispose.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
             var cancelError = await Record.ExceptionAsync(() => concurrentCancel.WaitAsync(TimeSpan.FromSeconds(5)));
             var shutdownError = await Record.ExceptionAsync(() => concurrentShutdown.WaitAsync(TimeSpan.FromSeconds(5)));
-            Assert.True(cancelError is OperationCanceledException or ObjectDisposedException);
-            Assert.True(shutdownError is OperationCanceledException or ObjectDisposedException);
+            Assert.True(
+                cancelError is OperationCanceledException or ObjectDisposedException,
+                cancelError?.ToString() ?? "caller acquire completed without an exception");
+            Assert.True(
+                shutdownError is OperationCanceledException or ObjectDisposedException,
+                shutdownError?.ToString() ?? "shutdown acquire completed without an exception");
             Assert.Equal(0, concurrentPool.PermitWaiterCount);
+            Assert.Equal(0, concurrentPool.PermitWaitersAtSemaphoreDispose);
+        }
+
+        /// <summary>
+        /// Shutdown cancellation can return while a permit waiter is still inside the semaphore.
+        /// Dispose waits for that waiter to leave before it disposes the semaphore.
+        /// </summary>
+        [Fact]
+        public async Task Shutdown_drains_a_permit_waiter_still_queued_after_cancellation()
+        {
+            var sawBlockedWaiter = false;
+            for (var attempt = 0; attempt < 40 && !sawBlockedWaiter; attempt++)
+            {
+                sawBlockedWaiter = await RunConcurrentShutdownOnceAsync();
+            }
+
+            Assert.True(sawBlockedWaiter, "shutdown cancellation did not leave a permit waiter queued");
+        }
+
+        private static async Task<bool> RunConcurrentShutdownOnceAsync()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            NntpSessionPoolTests.EnqueueReadyServers(factory, 1);
+            var pool = NntpSessionPoolTests.CreatePool(factory, max: 1);
+            var held = await pool.AcquireAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            using var caller = new CancellationTokenSource();
+            var cancelAcquire = pool.AcquireAsync(caller.Token);
+            var shutdownAcquire = pool.AcquireAsync(CancellationToken.None);
+            await WaitUntilAsync(() => pool.PermitWaiterCount == 2);
+            var sawBlockedWaiter = false;
+            pool.BeforePermitWaiterDrain = () =>
+            {
+                sawBlockedWaiter = true;
+                return Task.CompletedTask;
+            };
+            caller.Cancel();
+            var disposing = pool.DisposeAsync();
+            await held.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            await disposing.AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            var cancelError = await Record.ExceptionAsync(() => cancelAcquire.WaitAsync(TimeSpan.FromSeconds(5)));
+            var shutdownError = await Record.ExceptionAsync(() => shutdownAcquire.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(
+                cancelError is OperationCanceledException or ObjectDisposedException,
+                cancelError?.ToString() ?? "caller acquire completed without an exception");
+            Assert.True(
+                shutdownError is OperationCanceledException or ObjectDisposedException,
+                shutdownError?.ToString() ?? "shutdown acquire completed without an exception");
+            Assert.Equal(0, pool.PermitWaiterCount);
+            Assert.Equal(0, pool.PermitWaitersAtSemaphoreDispose);
+            return sawBlockedWaiter;
         }
 
         private static async Task<NntpProviderSession> ConnectAsync(

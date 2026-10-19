@@ -164,6 +164,15 @@ namespace VectorNNTPD.BackFillerService.Nntp
         private Func<Task, Task>? _beforeLeaseDrainWait;
 
         /// <summary>
+        /// Test gate invoked when shutdown cancellation has returned and permit waiters are still inside <see cref="AcquirePermitAsync"/>.
+        /// Null in production. The delegate runs before those waiters are drained and before <see cref="_leases"/> is disposed.
+        /// </summary>
+        private Func<Task>? _beforePermitWaiterDrain;
+
+        /// <summary>Permit waiters still inside <see cref="AcquirePermitAsync"/> when semaphores are about to be disposed. Zero when the drain finished.</summary>
+        private int _permitWaitersAtSemaphoreDispose;
+
+        /// <summary>
         /// Test gate invoked after the lease drain wait returns and before remaining sessions are retired.
         /// Null in production. The delegate runs outside <see cref="_idleGate"/>.
         /// </summary>
@@ -568,6 +577,22 @@ namespace VectorNNTPD.BackFillerService.Nntp
         }
 
         /// <summary>
+        /// Pauses dispose after shutdown cancellation while a permit waiter is still blocked and before that waiter is drained.
+        /// Null unless a test is holding that window. The delegate runs outside <see cref="_permitGate"/>.
+        /// </summary>
+        internal Func<Task>? BeforePermitWaiterDrain
+        {
+            get => _beforePermitWaiterDrain;
+            set => _beforePermitWaiterDrain = value;
+        }
+
+        /// <summary>
+        /// Permit waiters remaining when dispose is about to drop <see cref="_leases"/>.
+        /// Zero after the drain has seen every waiter leave <see cref="AcquirePermitAsync"/>.
+        /// </summary>
+        internal int PermitWaitersAtSemaphoreDispose => _permitWaitersAtSemaphoreDispose;
+
+        /// <summary>
         /// Pauses dispose after the outstanding-lease wait has returned and before remaining sessions are retired.
         /// Null unless a test is holding that window. Issuance after this point must already have been rejected.
         /// </summary>
@@ -646,31 +671,59 @@ namespace VectorNNTPD.BackFillerService.Nntp
         internal async Task<NntpSessionLease> AcquireAsync(CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-            CancellationTokenSource? linked = null;
-            try
+            using var linked = new PermitWaitLink();
+            while (true)
             {
-                while (true)
+                if (!TryTakeAvailablePermit())
                 {
-                    if (!TryTakeAvailablePermit())
+                    await AcquirePermitAsync(linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
+                }
+
+                var permitHeld = true;
+                NntpProviderSession? taken = null;
+                try
+                {
+                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                    var retryWithoutPermit = false;
+                    while (TryTakeIdleSession(out var keepalive) is { } idle)
                     {
-                        await AcquirePermitAsync(WaitToken()).ConfigureAwait(false);
+                        taken = idle;
+                        CancelKeepAliveRegistration(keepalive);
+                        if (idle.State == NntpSessionState.Busy)
+                        {
+                            await WaitUntilNotBusyAsync(idle, linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
+                        }
+
+                        var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
+                        if (issued.Lease is not null)
+                        {
+                            return issued.Lease;
+                        }
+
+                        if (issued.RejectedForCapacity)
+                        {
+                            permitHeld = false;
+                            taken = null;
+                            retryWithoutPermit = true;
+                            break;
+                        }
+
+                        await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
+                        taken = null;
                     }
 
-                    var permitHeld = true;
-                    NntpProviderSession? taken = null;
+                    if (retryWithoutPermit)
+                    {
+                        continue;
+                    }
+
+                    await _fillGate.WaitAsync(linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
                     try
                     {
-                        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-                        var retryWithoutPermit = false;
                         while (TryTakeIdleSession(out var keepalive) is { } idle)
                         {
                             taken = idle;
                             CancelKeepAliveRegistration(keepalive);
-                            if (idle.State == NntpSessionState.Busy)
-                            {
-                                await WaitUntilNotBusyAsync(idle, WaitToken()).ConfigureAwait(false);
-                            }
-
                             var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
                             if (issued.Lease is not null)
                             {
@@ -689,132 +742,121 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             taken = null;
                         }
 
-                        if (retryWithoutPermit)
+                        if (!retryWithoutPermit)
                         {
-                            continue;
-                        }
-
-                        await _fillGate.WaitAsync(WaitToken()).ConfigureAwait(false);
-                        try
-                        {
-                            while (TryTakeIdleSession(out var keepalive) is { } idle)
+                            if (Volatile.Read(ref _created) >= _provider.MaxSessions)
                             {
-                                taken = idle;
-                                CancelKeepAliveRegistration(keepalive);
-                                var issued = await TryIssueHeldSessionAsync(idle).ConfigureAwait(false);
-                                if (issued.Lease is not null)
-                                {
-                                    return issued.Lease;
-                                }
+                                throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
+                            }
 
-                                if (issued.RejectedForCapacity)
-                                {
-                                    permitHeld = false;
-                                    taken = null;
-                                    retryWithoutPermit = true;
-                                    break;
-                                }
+                            var created = await CreateReadySessionAsync(linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
+                            taken = created;
+                            if (_beforeCreatedSessionIssue is { } beforeIssue)
+                            {
+                                await beforeIssue().ConfigureAwait(false);
+                            }
 
-                                await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
+                            var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
+                            if (issued.Lease is not null)
+                            {
+                                return issued.Lease;
+                            }
+
+                            if (issued.RejectedForCapacity)
+                            {
+                                permitHeld = false;
                                 taken = null;
+                                retryWithoutPermit = true;
                             }
-
-                            if (!retryWithoutPermit)
+                            else
                             {
-                                if (Volatile.Read(ref _created) >= _provider.MaxSessions)
-                                {
-                                    throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
-                                }
-
-                                var created = await CreateReadySessionAsync(WaitToken()).ConfigureAwait(false);
-                                taken = created;
-                                if (_beforeCreatedSessionIssue is { } beforeIssue)
-                                {
-                                    await beforeIssue().ConfigureAwait(false);
-                                }
-
-                                var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
-                                if (issued.Lease is not null)
-                                {
-                                    return issued.Lease;
-                                }
-
-                                if (issued.RejectedForCapacity)
-                                {
-                                    permitHeld = false;
-                                    taken = null;
-                                    retryWithoutPermit = true;
-                                }
-                                else
-                                {
-                                    await RetireSessionAsync(created, "created session was not reusable").ConfigureAwait(false);
-                                    taken = null;
-                                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-                                    throw new InvalidOperationException("NNTP session was retired before it could be issued.");
-                                }
+                                await RetireSessionAsync(created, "created session was not reusable").ConfigureAwait(false);
+                                taken = null;
+                                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                                throw new InvalidOperationException("NNTP session was retired before it could be issued.");
                             }
-                        }
-                        finally
-                        {
-                            try
-                            {
-                                _fillGate.Release();
-                            }
-                            catch (ObjectDisposedException)
-                            {
-                                ShutdownObservations.AlreadyDisposed(_logger, "fill gate release");
-                            }
-                        }
-
-                        if (retryWithoutPermit)
-                        {
-                            continue;
                         }
                     }
-                    catch (Exception)
+                    finally
                     {
                         try
                         {
-                            if (taken is not null)
-                            {
-                                var connectionNumber = taken.ConnectionNumber;
-                                try
-                                {
-                                    // The DATE loop retires only a session that is still idle. This one was already removed.
-                                    await RetireSessionAsync(taken, "idle session was not reusable").ConfigureAwait(false);
-                                }
-                                catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
-                                {
-                                    TryLogSessionEstablishmentFailed(connectionNumber, cleanup.GetType().Name);
-                                }
-                            }
+                            _fillGate.Release();
                         }
-                        finally
+                        catch (ObjectDisposedException)
                         {
-                            if (permitHeld)
-                            {
-                                ReleasePermit();
-                            }
+                            ShutdownObservations.AlreadyDisposed(_logger, "fill gate release");
                         }
+                    }
 
-                        throw;
+                    if (retryWithoutPermit)
+                    {
+                        continue;
                     }
                 }
-            }
-            finally
-            {
-                linked?.Dispose();
-            }
-
-            CancellationToken WaitToken()
-            {
-                if (!cancellationToken.CanBeCanceled || cancellationToken == _shutdown.Token)
+                catch (Exception)
                 {
-                    return _shutdown.Token;
+                    try
+                    {
+                        if (taken is not null)
+                        {
+                            var connectionNumber = taken.ConnectionNumber;
+                            try
+                            {
+                                // The DATE loop retires only a session that is still idle. This one was already removed.
+                                await RetireSessionAsync(taken, "idle session was not reusable").ConfigureAwait(false);
+                            }
+                            catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
+                            {
+                                TryLogSessionEstablishmentFailed(connectionNumber, cleanup.GetType().Name);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (permitHeld)
+                        {
+                            ReleasePermit();
+                        }
+                    }
+
+                    throw;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Disposes the caller-and-shutdown link created only when <see cref="AcquireAsync"/> may block.
+        /// </summary>
+        /// <remarks>
+        /// Stored by value in the acquire state machine, so the fast path does not allocate a holder.
+        /// The linked source is created on the first blocking wait. This value does not dispose <see cref="_shutdown"/>.
+        /// A <see langword="using"/> variable cannot be assigned after it is declared, which is why the source lives inside this value.
+        /// </remarks>
+        private struct PermitWaitLink : IDisposable
+        {
+            private CancellationTokenSource? _linked;
+
+            /// <summary>Returns <paramref name="shutdown"/> when the caller token does not need a separate link. Otherwise returns the linked token.</summary>
+            /// <param name="caller">Token passed to <see cref="AcquireAsync"/>.</param>
+            /// <param name="shutdown">Pool shutdown token. Not owned by this holder.</param>
+            /// <returns>The token the blocking wait should observe.</returns>
+            internal CancellationToken Token(CancellationToken caller, CancellationToken shutdown)
+            {
+                if (!caller.CanBeCanceled || caller == shutdown)
+                {
+                    return shutdown;
                 }
 
-                linked ??= CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-                return linked.Token;
+                _linked ??= CancellationTokenSource.CreateLinkedTokenSource(caller, shutdown);
+                return _linked.Token;
+            }
+
+            /// <summary>Disposes the linked source when one was created.</summary>
+            public void Dispose()
+            {
+                _linked?.Dispose();
+                _linked = null;
             }
         }
 
@@ -1029,7 +1071,13 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// That wait does not hold <see cref="_idleGate"/>.
         /// Retirement uses <see cref="NntpShutdownWork"/> so one stalled QUIT does not keep every other session from starting.
         /// When <paramref name="deadline"/> is bounded, every session receives it. When it is unbounded, retirement captures one
-        /// <see cref="_shutdownGrace"/> instant and every session receives that instant. The pool semaphores are disposed after that attempt, including when a session throws.
+        /// <see cref="_shutdownGrace"/> instant and every session receives that instant.
+        /// Permit waiters are drained before the pool semaphores are disposed. Disposing a <see cref="SemaphoreSlim"/> does not complete a
+        /// queued <see cref="SemaphoreSlim.WaitAsync(CancellationToken)"/>, and shutdown cancellation can still have that wait's continuation
+        /// queued when <see cref="CancellationTokenSource.CancelAsync"/> returns. Disposing <see cref="_leases"/> in that window leaves the
+        /// acquire blocked on the orphaned waiter. The drain yields until <see cref="_permitWaiters"/> is zero, then disposes the semaphores.
+        /// If that does not happen within <see cref="_shutdownGrace"/>, one release is issued per remaining waiter so the wait can observe
+        /// <see cref="_disposed"/> and leave without a permit. Semaphores stay undisposed when a waiter is still inside the wait after that release.
         /// </remarks>
         private async Task DisposeCoreAsync(
             bool forceAfterGrace,
@@ -1118,9 +1166,99 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
             finally
             {
-                _leases.Dispose();
-                _fillGate.Dispose();
-                _shutdown.Dispose();
+                var permitWaitersDrained = await DrainPermitWaitersBeforeDisposeAsync().ConfigureAwait(false);
+                if (permitWaitersDrained)
+                {
+                    _leases.Dispose();
+                    _fillGate.Dispose();
+                    _shutdown.Dispose();
+                }
+                else
+                {
+                    ShutdownObservations.TimedOut(_logger, "permit waiter drain");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits until every <see cref="AcquirePermitAsync"/> waiter has left <see cref="_leases"/> before that semaphore is disposed.
+        /// </summary>
+        /// <returns><see langword="false"/> when a waiter is still counted after one wakeup and another <see cref="_shutdownGrace"/>.</returns>
+        /// <remarks>
+        /// <see cref="SemaphoreSlim.WaitAsync(CancellationToken)"/> queues a continuation that removes the waiter after cancellation.
+        /// <see cref="CancellationTokenSource.CancelAsync"/> can return before that continuation runs.
+        /// Disposing the semaphore then drops the queue without completing the waiter, and the continuation waits forever on the unfinished node.
+        /// This method yields until <see cref="_permitWaiters"/> is zero so that continuation runs first.
+        /// A waiter that is still counted when <see cref="_shutdownGrace"/> elapses is woken with <see cref="SemaphoreSlim.Release(int)"/>.
+        /// The grant path sees <see cref="_disposed"/> and does not take the permit. The semaphore is left alive if the waiter is still inside the wait.
+        /// </remarks>
+        private async Task<bool> DrainPermitWaitersBeforeDisposeAsync()
+        {
+            int blocked;
+            lock (_permitGate)
+            {
+                blocked = _permitWaiters;
+            }
+
+            if (blocked > 0 && _beforePermitWaiterDrain is { } beforeDrain)
+            {
+                await beforeDrain().ConfigureAwait(false);
+            }
+
+            var started = Environment.TickCount64;
+            var graceMs = Math.Max(0L, (long)_shutdownGrace.TotalMilliseconds);
+            var woke = false;
+            while (true)
+            {
+                lock (_permitGate)
+                {
+                    if (_permitWaiters == 0)
+                    {
+                        _permitWaitersAtSemaphoreDispose = 0;
+                        return true;
+                    }
+                }
+
+                if (Environment.TickCount64 - started >= graceMs)
+                {
+                    if (woke)
+                    {
+                        lock (_permitGate)
+                        {
+                            _permitWaitersAtSemaphoreDispose = _permitWaiters;
+                        }
+
+                        return false;
+                    }
+
+                    woke = true;
+                    WakePermitWaiters();
+                    started = Environment.TickCount64;
+                }
+
+                await Task.Yield();
+            }
+        }
+
+        /// <summary>Releases one <see cref="_leases"/> count per permit waiter so a wait that missed shutdown cancellation can leave.</summary>
+        private void WakePermitWaiters()
+        {
+            lock (_permitGate)
+            {
+                var waiters = _permitWaiters;
+                if (waiters <= 0)
+                {
+                    return;
+                }
+
+                try
+                {
+                    _leases.Release(waiters);
+                }
+                catch (ObjectDisposedException)
+                {
+                    ShutdownObservations.AlreadyDisposed(_logger, "lease permit release");
+                }
             }
         }
 
