@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -146,6 +147,146 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.DoesNotContain("secret", failed.Reason, StringComparison.Ordinal);
             await ok.DisposeAsync();
             await fail.DisposeAsync();
+        }
+
+        /// <summary>
+        /// AUTHINFO PASS is the expected CRLF command on the wire, and the rented buffer is clear when it is returned.
+        /// Debug logs keep the redacted command.
+        /// </summary>
+        [Fact]
+        public async Task Authinfo_pass_buffer_is_clear_when_returned()
+        {
+            const string Password = "pool-clear-secret";
+            var pool = new CredentialCommandPool();
+            var logger = new CollectingLogger<NntpProviderSession>();
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.Respond(static command => command.StartsWith("AUTHINFO USER", StringComparison.Ordinal)
+                ? "381 password required\r\n"
+                : "281 ok\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession(user: "acct", password: Password, logger: logger);
+            session.PrefixedCommandPool = pool;
+            try
+            {
+                Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+                Assert.Equal(
+                    ["CAPABILITIES", "AUTHINFO USER acct", "AUTHINFO PASS " + Password],
+                    server.Commands);
+                Assert.True(server.LastCommandUsedCrlf);
+                Assert.Equal(2, pool.RentCount);
+                Assert.Equal(2, pool.ReturnCount);
+                AssertClearedCredential(pool, 0, Password);
+                AssertClearedCredential(pool, 1, Password);
+                Assert.Equal(
+                    NntpProtocolIo.AuthInfoPassPrefix.Length + Password.Length + NntpProtocolIo.Crlf.Length,
+                    pool.RequestedLength(1));
+                Assert.Contains(logger.Messages, static message => message.Contains("TX: AUTHINFO PASS ***", StringComparison.Ordinal));
+                Assert.DoesNotContain(logger.Messages, message => message.Contains(Password, StringComparison.Ordinal));
+            }
+            finally
+            {
+                await session.DisposeAsync();
+            }
+        }
+
+        /// <summary>A failed AUTHINFO PASS write still clears and returns the rented buffer once.</summary>
+        [Fact]
+        public async Task Authinfo_pass_write_fault_still_clears_the_buffer()
+        {
+            const string Password = "pool-clear-secret";
+            var pool = new CredentialCommandPool();
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer
+            {
+                FaultClientAuthInfoPassWrite = true,
+            };
+            server.Respond(static command => command.StartsWith("AUTHINFO USER", StringComparison.Ordinal)
+                ? "381 password required\r\n"
+                : "281 ok\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession(user: "acct", password: Password);
+            session.PrefixedCommandPool = pool;
+            try
+            {
+                var result = await session.ConnectAsync(factory, CancellationToken.None);
+                Assert.Equal(ArticleRetrievalKind.ProviderFailure, result!.Kind);
+                Assert.Equal(nameof(IOException), result.Reason);
+                Assert.DoesNotContain(Password, result.Reason, StringComparison.Ordinal);
+                Assert.Equal("AUTHINFO USER acct", server.Commands[1]);
+                Assert.DoesNotContain(
+                    server.Commands,
+                    static command => command.StartsWith("AUTHINFO PASS", StringComparison.Ordinal));
+                Assert.Equal(2, pool.RentCount);
+                Assert.Equal(2, pool.ReturnCount);
+                AssertClearedCredential(pool, 0, Password);
+                AssertClearedCredential(pool, 1, Password);
+            }
+            finally
+            {
+                await session.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// Cancellation during AUTHINFO PASS returns the buffer only after the write has left it, and the bytes are then clear.
+        /// </summary>
+        [Fact]
+        public async Task Authinfo_pass_cancellation_clears_the_buffer_after_the_write()
+        {
+            const string Password = "pool-clear-secret";
+            var pool = new CredentialCommandPool();
+            var factory = new ScriptedNntpTransportFactory();
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var server = new ScriptedNntpServer
+            {
+                HoldAuthInfoPassWrite = release,
+                AuthInfoPassWriteEntered = entered,
+            };
+            server.Respond(static command => command.StartsWith("AUTHINFO USER", StringComparison.Ordinal)
+                ? "381 password required\r\n"
+                : "281 ok\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession(user: "acct", password: Password);
+            session.PrefixedCommandPool = pool;
+            using var cancel = new CancellationTokenSource();
+            try
+            {
+                var connect = session.ConnectAsync(factory, cancel.Token);
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Equal(2, pool.RentCount);
+                Assert.Equal(1, pool.ReturnCount);
+                AssertClearedCredential(pool, 0, Password);
+                Assert.True(pool.Rented(1).AsSpan().IndexOf(Encoding.ASCII.GetBytes(Password)) >= 0);
+                cancel.Cancel();
+                var result = await connect.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Equal(ArticleRetrievalKind.Cancelled, result!.Kind);
+                Assert.Equal(2, pool.ReturnCount);
+                AssertClearedCredential(pool, 1, Password);
+                Assert.DoesNotContain(
+                    server.Commands,
+                    static command => command.StartsWith("AUTHINFO PASS", StringComparison.Ordinal));
+            }
+            finally
+            {
+                release.TrySetResult();
+                await session.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// <see cref="ArrayPool{T}.Return(T[], bool)"/> with clearing zeroes the whole rented array, including slack past the request.
+        /// </summary>
+        [Fact]
+        public void ArrayPool_return_with_clearArray_zeroes_the_entire_rental()
+        {
+            var pool = ArrayPool<byte>.Create();
+            var rented = pool.Rent(8);
+            rented.AsSpan().Fill(0x5A);
+            Assert.True(rented.Length >= 8);
+            pool.Return(rented, clearArray: true);
+            Assert.All(rented, static value => Assert.Equal(0, value));
         }
 
         /// <summary>
@@ -1880,6 +2021,127 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// Plaintext transport whose first handshake read waits until that read is cancelled.
         /// Later writes pass through so the client hello can leave the socket.
         /// </summary>
+        /// <summary>Asserts one returned command buffer no longer contains <paramref name="password"/>.</summary>
+        /// <param name="pool">Pool that observed the return.</param>
+        /// <param name="index">Return order. Zero is AUTHINFO USER.</param>
+        /// <param name="password">Credential that must be absent. Not written to the assertion message.</param>
+        private static void AssertClearedCredential(CredentialCommandPool pool, int index, string password)
+        {
+            Assert.True(pool.ClearArray(index));
+            Assert.All(pool.PrefixAtReturn(index), static value => Assert.Equal(0, value));
+            var secret = Encoding.ASCII.GetBytes(password);
+            Assert.True(pool.Rented(index).AsSpan().IndexOf(secret) < 0);
+        }
+
+        /// <summary>
+        /// Records the buffers <see cref="NntpProviderSession.WritePrefixedAsync"/> rents and the bytes present when they are returned.
+        /// Does not consult <see cref="ArrayPool{T}.Shared"/>.
+        /// </summary>
+        private sealed class CredentialCommandPool : ArrayPool<byte>
+        {
+            /// <summary>Guards the rental lists.</summary>
+            private readonly Lock _gate = new();
+
+            /// <summary>Arrays rented, in rent order.</summary>
+            private readonly List<byte[]> _rented = [];
+
+            /// <summary>Requested lengths, in rent order.</summary>
+            private readonly List<int> _requested = [];
+
+            /// <summary>Arrays still rented.</summary>
+            private readonly HashSet<byte[]> _outstanding = new(ReferenceEqualityComparer.Instance);
+
+            /// <summary><c>clearArray</c> values in return order.</summary>
+            private readonly List<bool> _clearArray = [];
+
+            /// <summary>Copies of each populated prefix at the moment of return, in return order.</summary>
+            private readonly List<byte[]> _prefixAtReturn = [];
+
+            /// <summary>Calls to <see cref="Rent"/>.</summary>
+            internal int RentCount { get; private set; }
+
+            /// <summary>Calls to <see cref="Return"/>.</summary>
+            internal int ReturnCount { get; private set; }
+
+            /// <summary>The array from rent <paramref name="index"/>.</summary>
+            /// <param name="index">Zero-based rent order.</param>
+            /// <returns>The rented array.</returns>
+            internal byte[] Rented(int index)
+            {
+                lock (_gate)
+                {
+                    return _rented[index];
+                }
+            }
+
+            /// <summary>The length requested for rent <paramref name="index"/>.</summary>
+            /// <param name="index">Zero-based rent order.</param>
+            /// <returns>The minimum length passed to <see cref="Rent"/>.</returns>
+            internal int RequestedLength(int index)
+            {
+                lock (_gate)
+                {
+                    return _requested[index];
+                }
+            }
+
+            /// <summary>Whether return <paramref name="index"/> asked for the array to be cleared.</summary>
+            /// <param name="index">Zero-based return order.</param>
+            /// <returns><see langword="true"/> when <c>clearArray</c> was set.</returns>
+            internal bool ClearArray(int index)
+            {
+                lock (_gate)
+                {
+                    return _clearArray[index];
+                }
+            }
+
+            /// <summary>The populated prefix copied when return <paramref name="index"/> was called.</summary>
+            /// <param name="index">Zero-based return order.</param>
+            /// <returns>A copy taken before this pool mutates the array.</returns>
+            internal byte[] PrefixAtReturn(int index)
+            {
+                lock (_gate)
+                {
+                    return _prefixAtReturn[index];
+                }
+            }
+
+            /// <inheritdoc />
+            public override byte[] Rent(int minimumLength)
+            {
+                var array = new byte[minimumLength + 8];
+                Array.Fill(array, (byte)0xA5);
+                lock (_gate)
+                {
+                    RentCount++;
+                    _rented.Add(array);
+                    _requested.Add(minimumLength);
+                    _outstanding.Add(array);
+                }
+
+                return array;
+            }
+
+            /// <inheritdoc />
+            public override void Return(byte[] array, bool clearArray = false)
+            {
+                ArgumentNullException.ThrowIfNull(array);
+                lock (_gate)
+                {
+                    if (!_outstanding.Remove(array))
+                    {
+                        throw new InvalidOperationException("Returned a command buffer that was not outstanding.");
+                    }
+
+                    var index = _rented.IndexOf(array);
+                    ReturnCount++;
+                    _clearArray.Add(clearArray);
+                    _prefixAtReturn.Add(array.AsSpan(0, _requested[index]).ToArray());
+                }
+            }
+        }
+
         private sealed class StalledPlaintextStream : Stream
         {
             /// <summary>Transport wrapped for the scripted server.</summary>
