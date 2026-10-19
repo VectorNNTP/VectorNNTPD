@@ -263,6 +263,12 @@ ddd, dd MMM yyyy HH:mm:ss +0000
 
 Example from parser tests: `Fri, 23 Aug 2024 07:30:10 +0200` resolves to `Fri, 23 Aug 2024 05:30:10 +0000`. The materializer overwrites only the winning header’s **value** bytes (not the header name). If Injection-Date won, that value is rewritten; `Fields.Date` then points at that rewritten Injection-Date value.
 
+### Timezone abbreviations
+
+The parser replaces one trailing ASCII letter token, length 2 through 8, with a fixed offset. It does not consult the machine timezone database. RFC 1036 §2.1.2 names `CST` as a North American news-date abbreviation. The local RFC text does not give its numeric offset. The `-06:00` mapping is the Issue #164 convention. `CDT` stays `-05:00`. China Standard Time is the distinct token `BJT` (`+08:00`). `PST` is Pacific `-08:00`; the Philippines are `PHT`. `BST` is British Summer Time `+01:00`, not Bangladesh. `IST` remains the existing India Standard Time mapping `+05:30`; Irish and Israel Standard Time share those letters and are not distinguished.
+
+These collisions are omitted rather than given one region's offset: `AST`/`ADT`, `GST`, `NST`/`NDT`, `AMT`, `ECT`, `WST`, and `SST`. `MSD`, `BRST`, `WAST`, `IRDT`, `AZST`, and `AWDT` stay in the table as historical daylight-time conventions, not current year-round offsets. Civil offsets varied by place and period, so those static values do not reconstruct the original local civil time for every article date. `UTC+0` through `UTC+9` and `UTC-1` through `UTC-9` stay in the table and are not selected, because the detector accepts letters only. Numeric `±hhmm` and `±hh:mm` forms are a separate parse path. The table is a news-date convention, not a complete history of civil offsets.
+
 ### Failure
 
 If no candidate parses: `NntpArticleParseFailureCode.MissingOrInvalidDate`. The factory returns `RejectedParse` and does not materialize.
