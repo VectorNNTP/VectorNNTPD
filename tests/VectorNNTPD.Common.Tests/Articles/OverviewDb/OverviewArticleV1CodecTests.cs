@@ -206,10 +206,10 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
         }
 
         /// <summary>
-        /// A folded Newsgroups header is rejected with <see cref="NntpArticleParseFailureCode.InvalidNewsgroups"/> before an overview payload is produced.
+        /// A CRLF-folded Newsgroups header is accepted, and overview stores each comma-separated group.
         /// </summary>
         [Fact]
-        public void FoldedNewsgroups_AreRejectedByParser_BeforeOverviewEncode()
+        public void FoldedNewsgroups_AreAccepted_AndOverviewStoresEachGroup()
         {
             var destuffed =
                 "Path: peer.example\r\n" +
@@ -225,8 +225,9 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
                 new NntpArticleParser(LocalFqdn),
                 Encoding.ASCII.GetBytes(destuffed));
 
-            Assert.False(created.IsAccepted);
-            Assert.Equal(NntpArticleParseFailureCode.InvalidNewsgroups, created.ParseFailure);
+            Assert.True(created.IsAccepted);
+            var overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(created.Record));
+            Assert.Equal(["group.one", "group.two", "group.three"], overview.Newsgroups);
         }
 
         /// <summary>Multi-line body containing a token that must not appear in the overview payload.</summary>
