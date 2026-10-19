@@ -401,9 +401,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     messageIdBytes.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length));
                     NntpProtocolIo.Crlf.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length));
                     ArticleCommandStartedTimestamp = Stopwatch.GetTimestamp();
-                    var wireCommand = _logger.IsEnabled(LogLevel.Debug)
-                        ? "ARTICLE " + messageId
-                        : "ARTICLE";
+                    var wireCommand = FormatArticleDebugCommand(_logger, messageId);
                     await WriteCommandAsync(
                             wireCommand,
                             command.AsMemory(0, commandLength),
@@ -1454,6 +1452,24 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 ArrayPool<byte>.Shared.Return(rented);
             }
+        }
+
+        /// <summary>
+        /// Debug text for one ARTICLE command. The message-id concatenation runs only when Debug is enabled.
+        /// </summary>
+        /// <param name="logger">Session logger. <see cref="ILogger.IsEnabled"/> for <see cref="LogLevel.Debug"/> selects the text.</param>
+        /// <param name="messageId">ARTICLE argument already accepted for the wire. Not revalidated.</param>
+        /// <returns>
+        /// <c>ARTICLE</c> when Debug is disabled. Otherwise <c>ARTICLE </c> followed by <paramref name="messageId"/>.
+        /// The returned text is not written to the socket.
+        /// </returns>
+        /// <exception cref="ArgumentNullException"><paramref name="logger"/> is null.</exception>
+        internal static string FormatArticleDebugCommand(ILogger logger, string messageId)
+        {
+            ArgumentNullException.ThrowIfNull(logger);
+            return logger.IsEnabled(LogLevel.Debug)
+                ? "ARTICLE " + messageId
+                : "ARTICLE";
         }
 
         /// <summary>Logs <paramref name="wireCommand"/> at Debug, then writes <paramref name="bytes"/> under <see cref="NntpSessionOptions.CommandTimeout"/>.</summary>
