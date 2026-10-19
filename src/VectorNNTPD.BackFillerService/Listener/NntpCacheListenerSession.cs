@@ -88,11 +88,23 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// </summary>
         private readonly TimeProvider _time;
 
-        /// <summary>Unread command bytes, including any pipelined commands after the one just parsed.</summary>
+        /// <summary>Unread command bytes. The command being handled stays at the front until its response writes finish.</summary>
         private byte[] _pending = new byte[MaximumCommandOctets];
 
         /// <summary>Valid prefix length of <see cref="_pending"/>.</summary>
         private int _pendingCount;
+
+        /// <summary>
+        /// Reused <c>111</c> response. Twenty octets. The next <c>DATE</c> does not write it until the previous write has returned.
+        /// </summary>
+        private readonly byte[] _dateResponse = new byte[DatePrefix.Length + 14 + 2];
+
+        /// <summary>
+        /// Reused <c>220</c> response. Sized for the longest RFC 5536 message-id.
+        /// The next <c>ARTICLE</c> does not write it until the previous status write has returned.
+        /// </summary>
+        private readonly byte[] _articleFollows = new byte[
+            ArticlePrefix.Length + NntpMessageIdValidation.MaxMessageIdLength + ArticleFollowsSuffix.Length];
 
         /// <summary>Initializes a session over an established transport.</summary>
         /// <param name="transport">Connected transport. Not disposed by this session.</param>
@@ -129,49 +141,59 @@ namespace VectorNNTPD.BackFillerService.Listener
             while (!cancellationToken.IsCancellationRequested)
             {
                 var read = await ReadCommandAsync(cancellationToken).ConfigureAwait(false);
-                if (read.Kind == CommandReadKind.Disconnected)
+                try
                 {
-                    return;
-                }
+                    if (read.Kind == CommandReadKind.Disconnected)
+                    {
+                        return;
+                    }
 
-                if (read.Kind == CommandReadKind.Overlong)
-                {
-                    await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                var line = read.Line;
-                if (EqualsIgnoreCase(Keyword(line), QuitKeyword))
-                {
-                    if (HasArgument(line))
+                    if (read.Kind == CommandReadKind.Overlong)
                     {
                         await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
-                    await WriteFullyAsync(Closing, cancellationToken).ConfigureAwait(false);
-                    return;
-                }
-
-                if (EqualsIgnoreCase(Keyword(line), DateKeyword))
-                {
-                    if (HasArgument(line))
+                    var line = read.Line;
+                    if (EqualsIgnoreCase(Keyword(line), QuitKeyword))
                     {
-                        await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
+                        if (HasArgument(line))
+                        {
+                            await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        await WriteFullyAsync(Closing, cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+
+                    if (EqualsIgnoreCase(Keyword(line), DateKeyword))
+                    {
+                        if (HasArgument(line))
+                        {
+                            await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        await WriteFullyAsync(BuildDateResponse(), cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
-                    await WriteFullyAsync(BuildDateResponse(), cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
+                    if (!EqualsIgnoreCase(Keyword(line), ArticleKeyword))
+                    {
+                        await WriteFullyAsync(UnknownCommand, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
 
-                if (!EqualsIgnoreCase(Keyword(line), ArticleKeyword))
+                    await HandleArticleAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+                finally
                 {
-                    await WriteFullyAsync(UnknownCommand, cancellationToken).ConfigureAwait(false);
-                    continue;
+                    if (read.Consumed > 0)
+                    {
+                        RemoveFront(read.Consumed);
+                    }
                 }
-
-                await HandleArticleAsync(line, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -188,7 +210,7 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// </remarks>
         private async Task HandleArticleAsync(ReadOnlyMemory<byte> line, CancellationToken cancellationToken)
         {
-            if (!TryReadSingleArgument(line.Span, out var argument))
+            if (!TryReadSingleArgument(line, out var argument))
             {
                 await WriteFullyAsync(argument.IsEmpty ? NoNewsgroup : SyntaxError, cancellationToken).ConfigureAwait(false);
                 return;
@@ -244,6 +266,10 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <summary>Reads one command, or reports that the peer closed or the line exceeded 512 octets.</summary>
         /// <param name="cancellationToken">Cancels the transport read.</param>
         /// <returns>The next command, an overlong marker, or disconnect.</returns>
+        /// <remarks>
+        /// A command result refers to the front of <see cref="_pending"/> and does not copy it.
+        /// The caller drops those bytes only after the handler has finished, including its response writes.
+        /// </remarks>
         private async Task<CommandRead> ReadCommandAsync(CancellationToken cancellationToken)
         {
             while (true)
@@ -258,9 +284,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                         return CommandRead.Overlong();
                     }
 
-                    var line = _pending.AsMemory(0, crlf).ToArray();
-                    RemoveFront(lineLength);
-                    return CommandRead.Command(line);
+                    return CommandRead.Command(_pending.AsMemory(0, crlf), lineLength);
                 }
 
                 if (_pendingCount >= MaximumCommandOctets)
@@ -414,43 +438,45 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <summary>
         /// Reads the single argument of an <c>ARTICLE</c> command.
         /// </summary>
-        /// <param name="line">Command line without CRLF.</param>
+        /// <param name="line">Command line without CRLF. The argument is a slice of this memory.</param>
         /// <param name="argument">
         /// The argument when there is exactly one. Empty when the argument is missing.
         /// When extra arguments are present, <paramref name="argument"/> is non-empty and the method returns false.
+        /// The memory is a slice of <paramref name="line"/>, not a copy.
         /// </param>
         /// <returns>
         /// <see langword="true"/> when there is exactly one argument.
         /// <see langword="false"/> when the argument is missing or more than one argument is present.
         /// </returns>
-        private static bool TryReadSingleArgument(ReadOnlySpan<byte> line, out ReadOnlyMemory<byte> argument)
+        private static bool TryReadSingleArgument(ReadOnlyMemory<byte> line, out ReadOnlyMemory<byte> argument)
         {
-            var index = KeywordLength(line);
-            while (index < line.Length && line[index] is (byte)' ' or (byte)'\t')
+            var span = line.Span;
+            var index = KeywordLength(span);
+            while (index < span.Length && span[index] is (byte)' ' or (byte)'\t')
             {
                 index++;
             }
 
-            if (index >= line.Length)
+            if (index >= span.Length)
             {
                 argument = ReadOnlyMemory<byte>.Empty;
                 return false;
             }
 
             var start = index;
-            while (index < line.Length && line[index] is not (byte)' ' and not (byte)'\t')
+            while (index < span.Length && span[index] is not (byte)' ' and not (byte)'\t')
             {
                 index++;
             }
 
             var end = index;
-            while (index < line.Length && line[index] is (byte)' ' or (byte)'\t')
+            while (index < span.Length && span[index] is (byte)' ' or (byte)'\t')
             {
                 index++;
             }
 
-            argument = line[start..end].ToArray();
-            return index >= line.Length;
+            argument = line.Slice(start, end - start);
+            return index >= span.Length;
         }
 
         /// <summary>Counts the keyword octets at the start of <paramref name="line"/>.</summary>
@@ -520,22 +546,22 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// Builds RFC 3977 <c>111 yyyymmddhhmmss</c> from <see cref="_time"/>, in UTC, ending in CRLF.
         /// Seconds are the clock's whole seconds. The response has no subsecond field.
         /// </summary>
-        /// <returns>Twenty octets: the status, fourteen digits, and CRLF.</returns>
-        private byte[] BuildDateResponse()
+        /// <returns>Twenty octets in <see cref="_dateResponse"/>: the status, fourteen digits, and CRLF.</returns>
+        /// <remarks>The returned memory stays valid until the next <c>DATE</c> on this session, which waits for the write to finish.</remarks>
+        private ReadOnlyMemory<byte> BuildDateResponse()
         {
             var utc = _time.GetUtcNow().UtcDateTime;
-            var line = new byte[DatePrefix.Length + 14 + 2];
-            DatePrefix.CopyTo(line);
-            var digits = line.AsSpan(DatePrefix.Length, 14);
+            DatePrefix.CopyTo(_dateResponse);
+            var digits = _dateResponse.AsSpan(DatePrefix.Length, 14);
             WriteDigits(digits[..4], utc.Year);
             WriteDigits(digits.Slice(4, 2), utc.Month);
             WriteDigits(digits.Slice(6, 2), utc.Day);
             WriteDigits(digits.Slice(8, 2), utc.Hour);
             WriteDigits(digits.Slice(10, 2), utc.Minute);
             WriteDigits(digits.Slice(12, 2), utc.Second);
-            line[^2] = (byte)'\r';
-            line[^1] = (byte)'\n';
-            return line;
+            _dateResponse[^2] = (byte)'\r';
+            _dateResponse[^1] = (byte)'\n';
+            return _dateResponse;
         }
 
         /// <summary>Writes <paramref name="value"/> as ASCII digits into <paramref name="destination"/>, most significant digit first.</summary>
@@ -550,28 +576,34 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
         }
 
-        /// <summary>Builds <c>220 0 &lt;message-id&gt; article follows</c> ending in CRLF.</summary>
-        /// <param name="messageId">Message-ID octets from the command. Not rewritten.</param>
-        /// <returns>The status line, including CRLF.</returns>
-        private static byte[] BuildFollowsLine(ReadOnlySpan<byte> messageId)
+        /// <summary>Writes <c>220 0 &lt;message-id&gt; article follows</c> ending in CRLF into <see cref="_articleFollows"/>.</summary>
+        /// <param name="messageId">Message-ID octets from the command. Not rewritten. At most <see cref="NntpMessageIdValidation.MaxMessageIdLength"/> octets.</param>
+        /// <returns>The status line, including CRLF. Valid until the next successful <c>ARTICLE</c> on this session.</returns>
+        private ReadOnlyMemory<byte> BuildFollowsLine(ReadOnlySpan<byte> messageId)
         {
-            var line = new byte[ArticlePrefix.Length + messageId.Length + ArticleFollowsSuffix.Length];
-            ArticlePrefix.CopyTo(line);
-            messageId.CopyTo(line.AsSpan(ArticlePrefix.Length));
-            ArticleFollowsSuffix.CopyTo(line.AsSpan(ArticlePrefix.Length + messageId.Length));
-            return line;
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(messageId.Length, NntpMessageIdValidation.MaxMessageIdLength);
+            var length = ArticlePrefix.Length + messageId.Length + ArticleFollowsSuffix.Length;
+            ArticlePrefix.CopyTo(_articleFollows);
+            messageId.CopyTo(_articleFollows.AsSpan(ArticlePrefix.Length));
+            ArticleFollowsSuffix.CopyTo(_articleFollows.AsSpan(ArticlePrefix.Length + messageId.Length));
+            return _articleFollows.AsMemory(0, length);
         }
 
         /// <summary>One read from the command buffer.</summary>
         private readonly struct CommandRead
         {
-            /// <summary>Stores a classified read. <paramref name="line"/> is null unless <paramref name="kind"/> is a command.</summary>
+            /// <summary>Stores a classified read.</summary>
             /// <param name="kind">Whether a command, an overlong line, or disconnect was observed.</param>
-            /// <param name="line">Command bytes without CRLF, or null.</param>
-            private CommandRead(CommandReadKind kind, byte[]? line)
+            /// <param name="line">Command bytes without CRLF. Empty unless <paramref name="kind"/> is a command.</param>
+            /// <param name="consumed">
+            /// Bytes at the front of the pending buffer that the caller drops after the handler finishes.
+            /// Zero when this read already discarded its line or has no line.
+            /// </param>
+            private CommandRead(CommandReadKind kind, ReadOnlyMemory<byte> line, int consumed)
             {
                 Kind = kind;
                 Line = line;
+                Consumed = consumed;
             }
 
             /// <summary>Whether a complete command, an overlong discard, or peer close was read from the buffer.</summary>
@@ -580,24 +612,34 @@ namespace VectorNNTPD.BackFillerService.Listener
             /// <summary>Command octets without CRLF when <see cref="Kind"/> is <see cref="CommandReadKind.Command"/>; otherwise empty.</summary>
             internal ReadOnlyMemory<byte> Line { get; }
 
-            /// <summary>Creates a parsed command.</summary>
-            /// <param name="line">Command bytes without CRLF.</param>
-            /// <returns>A command read.</returns>
-            internal static CommandRead Command(byte[] line) => new(CommandReadKind.Command, line);
+            /// <summary>Pending-buffer prefix the caller removes after this line is no longer used, including its CRLF.</summary>
+            internal int Consumed { get; }
 
-            /// <summary>Creates an overlong-line result.</summary>
+            /// <summary>Creates a parsed command that still occupies the front of the pending buffer.</summary>
+            /// <param name="line">Command bytes without CRLF. A slice of the pending buffer.</param>
+            /// <param name="consumed">Line length including CRLF.</param>
+            /// <returns>A command read.</returns>
+            internal static CommandRead Command(ReadOnlyMemory<byte> line, int consumed) =>
+                new(CommandReadKind.Command, line, consumed);
+
+            /// <summary>Creates an overlong-line result whose bytes were already discarded.</summary>
             /// <returns>A read that must be answered with <c>501</c> and not interpreted.</returns>
-            internal static CommandRead Overlong() => new(CommandReadKind.Overlong, null);
+            internal static CommandRead Overlong() => new(CommandReadKind.Overlong, ReadOnlyMemory<byte>.Empty, 0);
 
             /// <summary>Creates a disconnect result.</summary>
             /// <returns>A read that ends the session without a further response.</returns>
-            internal static CommandRead Disconnected() => new(CommandReadKind.Disconnected, null);
+            internal static CommandRead Disconnected() => new(CommandReadKind.Disconnected, ReadOnlyMemory<byte>.Empty, 0);
         }
 
         /// <summary>Classification of one command-buffer read.</summary>
         private enum CommandReadKind : byte
         {
-            /// <summary>A CRLF-terminated command of at most 512 octets was copied out of the buffer.</summary>
+            /// <summary>
+            /// A CRLF-terminated command of at most 512 octets. The line references the session pending buffer and is not a copy.
+            /// </summary>
+            /// <remarks>
+            /// Do not retain or use that memory after the pending buffer is consumed, compacted, resized, or reused.
+            /// </remarks>
             Command = 0,
 
             /// <summary>The line exceeded 512 octets and was discarded through its CRLF.</summary>

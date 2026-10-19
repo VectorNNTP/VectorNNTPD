@@ -693,6 +693,44 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
         }
 
         /// <summary>
+        /// A command split before its LF, then a later command, still produces the exact status lines after the pending buffer is reused.
+        /// </summary>
+        [Fact]
+        public async Task A_command_split_before_lf_is_followed_by_the_next_command()
+        {
+            var time = new ManualTimeProvider(DateTimeOffset.Parse("2026-03-04T05:06:07Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(time, 1_000_000);
+            var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
+            var articleWireLength = Greeting.Length + Status("<a@b>").Length + prepared.ArtData.Length + Terminator.Length;
+            var written = await RunAsync(authority, "ARTICLE <a@b>\r\nDATE\r\nQUIT\r\n", maxRead: 14, time: time);
+
+            AssertArticleWire(written.AsSpan(0, articleWireLength).ToArray(), "<a@b>", prepared.ArtData);
+            Assert.Equal(
+                "111 20260304050607\r\n205 Connection closing\r\n"u8.ToArray(),
+                written.AsSpan(articleWireLength).ToArray());
+            Assert.Equal(0, authority.RetainedCount);
+        }
+
+        /// <summary>Successive DATE commands rewrite the session response and keep each timestamp.</summary>
+        [Fact]
+        public async Task Successive_date_commands_keep_each_timestamp()
+        {
+            var time = new SteppingTimeProvider(
+                DateTimeOffset.Parse("2026-03-04T05:06:07Z"),
+                DateTimeOffset.Parse("2026-12-31T23:59:58Z"));
+            await using var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z")), 1_000_000);
+            var written = await RunAsync(authority, "DATE\r\nDATE\r\nQUIT\r\n", time: time);
+
+            Assert.Equal(
+                Greeting.ToArray()
+                    .Concat("111 20260304050607\r\n"u8.ToArray())
+                    .Concat("111 20261231235958\r\n"u8.ToArray())
+                    .Concat("205 Connection closing\r\n"u8.ToArray())
+                    .ToArray(),
+                written);
+        }
+
+        /// <summary>
         /// DATE returns RFC 3977 111 yyyymmddhhmmss from the retention clock and does not claim an article.
         /// </summary>
         [Fact]
@@ -1185,6 +1223,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
             }
 
             return -1;
+        }
+
+        /// <summary>Returns a different UTC instant from each <see cref="GetUtcNow"/> call, in order.</summary>
+        private sealed class SteppingTimeProvider : TimeProvider
+        {
+            private readonly DateTimeOffset[] _instants;
+            private int _index;
+
+            /// <summary>Stores the instants returned by successive clock reads.</summary>
+            /// <param name="instants">At least one instant. Later reads repeat the last instant.</param>
+            internal SteppingTimeProvider(params DateTimeOffset[] instants)
+            {
+                _instants = instants;
+            }
+
+            /// <inheritdoc />
+            public override DateTimeOffset GetUtcNow()
+            {
+                var instant = _instants[Math.Min(_index, _instants.Length - 1)];
+                _index++;
+                return instant;
+            }
         }
 
         /// <summary>
