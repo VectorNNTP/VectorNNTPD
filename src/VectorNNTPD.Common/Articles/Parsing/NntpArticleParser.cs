@@ -756,7 +756,10 @@ namespace VectorNNTPD.Common.Articles.Parsing
         /// <returns>
         /// <see langword="false"/> for an empty token (leading, trailing, or doubled comma), a byte other than SP, HTAB, comma,
         /// or <see cref="IsPlausibleNewsgroupChar"/>, or a value whose last token has no plausible character.
-        /// SP and HTAB are skipped and do not separate tokens.
+        /// A CRLF followed by SP or HTAB is unfolded to one SP before that check. A bare CR, a bare LF, or a CRLF that is not
+        /// followed by SP or HTAB is <see cref="NntpArticleParseFailureCode.InvalidNewsgroups"/>.
+        /// SP and HTAB are allowed before the first name, after the last name, and immediately beside a comma.
+        /// The same bytes inside a name are <see cref="NntpArticleParseFailureCode.InvalidNewsgroups"/>.
         /// </returns>
         private static bool TryValidateNewsgroups(
             ReadOnlySpan<byte> articleSpan,
@@ -797,10 +800,19 @@ namespace VectorNNTPD.Common.Articles.Parsing
             }
 
             var value = articleSpan.Slice(newsgroupsHeader.ValueOffset, newsgroupsHeader.ValueLength);
-            var tokenHasChar = false;
-            for (var i = 0; i < value.Length; i++)
+            Span<byte> unfolded = stackalloc byte[value.Length];
+            if (!HasOnlyCrlfFolds(value)
+                || !NntpArticleHeaderValueUnfolder.TryUnfold(value, unfolded, out var unfoldedLength))
             {
-                var b = value[i];
+                failureCode = NntpArticleParseFailureCode.InvalidNewsgroups;
+                return false;
+            }
+
+            ReadOnlySpan<byte> semantic = unfolded[..unfoldedLength];
+            var tokenHasChar = false;
+            for (var i = 0; i < semantic.Length; i++)
+            {
+                var b = semantic[i];
                 if (b == (byte)',')
                 {
                     if (!tokenHasChar)
@@ -815,7 +827,24 @@ namespace VectorNNTPD.Common.Articles.Parsing
 
                 if (b is (byte)' ' or (byte)'\t')
                 {
-                    continue;
+                    if (!tokenHasChar)
+                    {
+                        continue;
+                    }
+
+                    var next = i + 1;
+                    while (next < semantic.Length && semantic[next] is (byte)' ' or (byte)'\t')
+                    {
+                        next++;
+                    }
+
+                    if (next >= semantic.Length || semantic[next] == (byte)',')
+                    {
+                        continue;
+                    }
+
+                    failureCode = NntpArticleParseFailureCode.InvalidNewsgroups;
+                    return false;
                 }
 
                 if (!IsPlausibleNewsgroupChar(b))
@@ -831,6 +860,40 @@ namespace VectorNNTPD.Common.Articles.Parsing
             {
                 failureCode = NntpArticleParseFailureCode.InvalidNewsgroups;
                 return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Reports whether every line break in a Newsgroups value is a CRLF fold.
+        /// </summary>
+        /// <param name="value">Raw Newsgroups value, including continuation bytes.</param>
+        /// <returns>
+        /// <see langword="false"/> when a CR is not followed by LF or a LF appears without a preceding CR.
+        /// The following SP or HTAB is checked by <see cref="NntpArticleHeaderValueUnfolder.TryUnfold"/>.
+        /// </returns>
+        private static bool HasOnlyCrlfFolds(ReadOnlySpan<byte> value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                var b = value[i];
+                if (b == (byte)'\n')
+                {
+                    return false;
+                }
+
+                if (b != (byte)'\r')
+                {
+                    continue;
+                }
+
+                if ((uint)(i + 1) >= (uint)value.Length || value[i + 1] != (byte)'\n')
+                {
+                    return false;
+                }
+
+                i++;
             }
 
             return true;

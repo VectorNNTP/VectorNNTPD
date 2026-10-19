@@ -1215,6 +1215,175 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         }
 
         /// <summary>
+        /// A single-line Newsgroups value remains one stored group.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsIsSingleLine_AcceptsThatGroup()
+        {
+            AssertNewsgroupsAccepted("Newsgroups: alt.test", "alt.test");
+        }
+
+        /// <summary>
+        /// CRLF plus a space is folding whitespace and does not join the group names.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsFoldsOnCrlfSpace_AcceptsSeparateGroups()
+        {
+            ArticleRecord record = AssertNewsgroupsAccepted(
+                "Newsgroups: alt.test,\r\n alt.example",
+                "alt.test",
+                "alt.example");
+            string stored = Encoding.ASCII.GetString(record.Newsgroups);
+            Assert.Contains("alt.test", stored, StringComparison.Ordinal);
+            Assert.Contains("alt.example", stored, StringComparison.Ordinal);
+            Assert.Contains("\r\n", stored, StringComparison.Ordinal);
+            Assert.DoesNotContain("alt.testalt.example", stored, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// CRLF plus a tab is the same fold as CRLF plus a space.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsFoldsOnCrlfTab_AcceptsSeparateGroups()
+        {
+            AssertNewsgroupsAccepted(
+                "Newsgroups: alt.test,\r\n\talt.example",
+                "alt.test",
+                "alt.example");
+        }
+
+        /// <summary>
+        /// Several CRLF folds in one value stay separate groups.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsHasMultipleCrlfFolds_AcceptsEachGroup()
+        {
+            AssertNewsgroupsAccepted(
+                "Newsgroups: alt.test,\r\n alt.example,\r\n alt.misc",
+                "alt.test",
+                "alt.example",
+                "alt.misc");
+        }
+
+        /// <summary>
+        /// Folding whitespace on either side of a comma remains a separator.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsFoldsAroundComma_AcceptsSeparateGroups()
+        {
+            AssertNewsgroupsAccepted(
+                "Newsgroups: alt.test\r\n ,\r\n alt.example",
+                "alt.test",
+                "alt.example");
+        }
+
+        /// <summary>
+        /// Spaces and tabs without a line break still separate only at commas.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsUsesSpaceOrTabWithoutCrlf_AcceptsSeparateGroups()
+        {
+            AssertNewsgroupsAccepted("Newsgroups: alt.test, alt.example", "alt.test", "alt.example");
+            AssertNewsgroupsAccepted("Newsgroups: alt.test,\talt.example", "alt.test", "alt.example");
+        }
+
+        /// <summary>
+        /// A bare CR is not folding whitespace.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsContainsBareCr_RejectsInvalidNewsgroups()
+        {
+            AssertNewsgroupsRejected("Newsgroups: alt.test,\r alt.example", NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// A bare LF is not folding whitespace.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsContainsBareLf_RejectsInvalidNewsgroups()
+        {
+            AssertNewsgroupsRejected("Newsgroups: alt.test,\n alt.example", NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// A CRLF that is not followed by SP or HTAB is not a Newsgroups fold.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsCrlfIsNotAContinuation_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.test,\r\nalt.example",
+                NntpArticleParseFailureCode.MissingHeaderBodySeparator);
+        }
+
+        /// <summary>
+        /// An illegal group character is still rejected after a legal fold.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenFoldedNewsgroupsContainsIllegalCharacter_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.test,\r\n alt.example!",
+                NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// A fold does not hide an empty comma token.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenFoldedNewsgroupsContainsEmptyToken_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.test,\r\n ,alt.example",
+                NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// Folding whitespace immediately before a comma remains a separator.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsFoldsBeforeComma_AcceptsSeparateGroups()
+        {
+            AssertNewsgroupsAccepted(
+                "Newsgroups: alt.test\r\n ,alt.example",
+                "alt.test",
+                "alt.example");
+        }
+
+        /// <summary>
+        /// A fold inside a group name is rejected.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsFoldSplitsGroupName_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.\r\n test",
+                NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// A space inside a group name is rejected.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsSpaceSplitsGroupName_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.te st",
+                NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
+        /// A tab inside a group name is rejected.
+        /// </summary>
+        [Fact]
+        public void Parse_WhenNewsgroupsTabSplitsGroupName_Rejects()
+        {
+            AssertNewsgroupsRejected(
+                "Newsgroups: alt.\t test",
+                NntpArticleParseFailureCode.InvalidNewsgroups);
+        }
+
+        /// <summary>
         /// Verifies date resolver integration uses fallback candidate headers when primary Date is absent.
         /// </summary>
         [Fact]
@@ -2273,6 +2442,64 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
             }
 
             throw new InvalidOperationException($"Header '{knownName}' was not found in parse output.");
+        }
+
+        /// <summary>
+        /// Accepts one article and returns the record whose overview groups equal <paramref name="groups"/>.
+        /// </summary>
+        /// <param name="newsgroupsHeader">Newsgroups header line. It may contain a CRLF fold.</param>
+        /// <param name="groups">Group names in header order.</param>
+        /// <returns>The accepted record.</returns>
+        private static ArticleRecord AssertNewsgroupsAccepted(string newsgroupsHeader, params string[] groups)
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <ng-fold@example.test>",
+                    newsgroupsHeader,
+                    "From: user@example.test",
+                ],
+                body: "body\r\n");
+
+            NntpArticleParseResult result = parser.Parse(article);
+            Assert.True(result.IsAccepted);
+            Assert.Equal(NntpArticleParseFailureCode.None, result.FailureCode);
+
+            ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
+            Assert.True(created.IsAccepted);
+            OverviewArticleV1 overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(created.Record));
+            Assert.Equal(groups, overview.Newsgroups);
+            return created.Record;
+        }
+
+        /// <summary>
+        /// Parses one article and asserts the Newsgroups failure code.
+        /// </summary>
+        /// <param name="newsgroupsHeader">Newsgroups header line. It may contain a broken fold.</param>
+        /// <param name="failureCode">Expected parser failure.</param>
+        private static void AssertNewsgroupsRejected(string newsgroupsHeader, NntpArticleParseFailureCode failureCode)
+        {
+            NntpArticleParser parser = new(LocalFqdn);
+            byte[] article = BuildArticle(
+                headers:
+                [
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <ng-fold-bad@example.test>",
+                    newsgroupsHeader,
+                    "From: user@example.test",
+                ],
+                body: "body\r\n");
+
+            NntpArticleParseResult result = parser.Parse(article);
+            Assert.False(result.IsAccepted);
+            Assert.Equal(failureCode, result.FailureCode);
+
+            ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
+            Assert.False(created.IsAccepted);
+            Assert.Equal(failureCode, created.ParseFailure);
+            Assert.Equal(0, created.Record.ArtSize);
         }
 
         /// <summary>

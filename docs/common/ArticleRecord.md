@@ -323,7 +323,7 @@ Headers are split on CR, LF, or CRLF. A zero-length line is the header/body sepa
 | Header | Rule |
 |---|---|
 | Message-ID | Required, not duplicate, unfold + `IsValidMessageId` (no strip in this path) |
-| Newsgroups | Required, not duplicate, length 1…4096, comma tokens, SP/HTAB ignored, plausible group chars |
+| Newsgroups | Required, not duplicate, length 1…4096. A CRLF followed by SP or HTAB unfolds to one SP before comma-token checks. Bare CR, bare LF, and CRLF without that whitespace are `InvalidNewsgroups`. SP and HTAB are allowed before the first name, after the last name, and immediately beside a comma. Whitespace inside a name is `InvalidNewsgroups`. |
 | Date-family | At least one resolvable candidate (see §8) |
 | Path | At most one; may be absent; invalid tokens/controls/length → `InvalidPath` |
 | From | Optional; if present, unfold, must contain `@` not at ends, printable ASCII, non-empty |
@@ -451,7 +451,7 @@ public readonly struct ArticleFieldTable
 
 `Locate(artData, selectedDateHeaderName)` walks canonical headers (same CR/LF/CRLF and folding rules as the parser) and records the **first** occurrence of each name. `Date` is the header whose known name equals the parser’s winning `SelectedDateHeaderName`.
 
-Ranges include folded continuation bytes as stored. Absent fields use `ArticleByteRange.Absent`. Newsgroups is that value range (ArtGroups). Membership checks tokenize `,` / skip SP-HTAB later; the record does not allocate `List<string>` (`TryCreate_DoesNotCreateGroupStringCollection`).
+Ranges include folded continuation bytes as stored. Absent fields use `ArticleByteRange.Absent`. Newsgroups is that value range (ArtGroups). Membership checks tokenize `,` and skip SP, HTAB, CR, and LF around each token; the record does not allocate `List<string>` (`TryCreate_DoesNotCreateGroupStringCollection`).
 
 Parser offsets into destuffed source must not be kept after Date/Path rewrite.
 
