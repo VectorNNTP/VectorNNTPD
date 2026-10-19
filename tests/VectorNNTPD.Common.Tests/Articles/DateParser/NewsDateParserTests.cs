@@ -100,6 +100,223 @@ namespace VectorNNTPD.Common.Tests.Articles.DateParser
         }
 
         /// <summary>
+        /// Noon Central Standard Time is 18:00 UTC on the same calendar date.
+        /// RFC 1036 names <c>CST</c> as a North American abbreviation. The <c>-06:00</c> mapping is the Issue #164 convention; the local RFC text does not state the numeric offset.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenCentralStandardTime_ReturnsEighteenHundredUtc()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Fri, 23 Aug 2024 12:00:00 CST"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2024, 8, 23, 18, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// Noon Central Daylight Time is 17:00 UTC on the same calendar date. <c>CDT</c> stays <c>-05:00</c>.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenCentralDaylightTime_ReturnsSeventeenHundredUtc()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Fri, 23 Aug 2024 12:00:00 CDT"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2024, 8, 23, 17, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// Each built-in letter abbreviation converts 12:00 on 23 Aug 2024 to the UTC instant of its documented offset.
+        /// Minutes are east of UTC. A west-of-UTC abbreviation therefore moves the result later on the same date, or onto the next date.
+        /// </summary>
+        /// <param name="abbreviation">Trailing timezone token.</param>
+        /// <param name="offsetMinutesEast">Documented offset in minutes east of UTC.</param>
+        [Theory]
+        [MemberData(nameof(KnownTimezoneAbbreviations))]
+        public void TryGetCanonicalUtc_WhenKnownAbbreviation_ReturnsDocumentedUtcInstant(
+            string abbreviation,
+            int offsetMinutesEast)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {abbreviation}"),
+                out var utc,
+                out var failure);
+
+            var expected = new DateTime(2024, 8, 23, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-offsetMinutesEast);
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(expected, utc);
+        }
+
+        /// <summary>
+        /// Abbreviation matching folds ASCII case, so a lowercase North American token keeps the uppercase offset.
+        /// </summary>
+        /// <param name="abbreviation">Mixed-case or lowercase token.</param>
+        /// <param name="offsetMinutesEast">Documented offset in minutes east of UTC.</param>
+        [Theory]
+        [InlineData("cst", -360)]
+        [InlineData("Cdt", -300)]
+        [InlineData("est", -300)]
+        [InlineData("pst", -480)]
+        [InlineData("aest", 600)]
+        [InlineData("npt", 345)]
+        [InlineData("chst", 600)]
+        public void TryGetCanonicalUtc_WhenAbbreviationCaseDiffers_ReturnsSameUtcInstant(
+            string abbreviation,
+            int offsetMinutesEast)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {abbreviation}"),
+                out var utc,
+                out var failure);
+
+            var expected = new DateTime(2024, 8, 23, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-offsetMinutesEast);
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(expected, utc);
+        }
+
+        /// <summary>
+        /// A longer trailing token is not split into a shorter known abbreviation.
+        /// <c>ACST</c> is <c>+09:30</c>, not Central <c>CST</c>. <c>AEST</c> is not <c>EST</c>. <c>WEST</c> and <c>CEST</c> are not <c>EST</c>.
+        /// <c>WITA</c> is not <c>WIT</c>. <c>PETT</c> is not <c>PET</c>. <c>CHAST</c> is not <c>ChST</c>.
+        /// </summary>
+        /// <param name="abbreviation">Longer trailing token.</param>
+        /// <param name="offsetMinutesEast">Offset of that complete token, in minutes east of UTC.</param>
+        [Theory]
+        [InlineData("ACST", 570)]
+        [InlineData("AEST", 600)]
+        [InlineData("WEST", 60)]
+        [InlineData("CEST", 120)]
+        [InlineData("WITA", 480)]
+        [InlineData("WIT", 540)]
+        [InlineData("WIB", 420)]
+        [InlineData("PETT", 720)]
+        [InlineData("PET", -300)]
+        [InlineData("CHAST", 765)]
+        [InlineData("CHADT", 825)]
+        [InlineData("ChST", 600)]
+        [InlineData("PHT", 480)]
+        [InlineData("PST", -480)]
+        [InlineData("BJT", 480)]
+        [InlineData("CST", -360)]
+        public void TryGetCanonicalUtc_WhenTokensShareLetters_UsesTheCompleteToken(
+            string abbreviation,
+            int offsetMinutesEast)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {abbreviation}"),
+                out var utc,
+                out var failure);
+
+            var expected = new DateTime(2024, 8, 23, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-offsetMinutesEast);
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(expected, utc);
+        }
+
+        /// <summary>
+        /// An abbreviation is only a trailing letter token after SP or HTAB. Letters glued to the time, or a word that merely ends in a known abbreviation, stay unknown.
+        /// </summary>
+        /// <param name="input">Date text that must not be rewritten as Central Standard Time.</param>
+        [Theory]
+        [InlineData("Fri, 23 Aug 2024 12:00:00CST")]
+        [InlineData("Fri, 23 Aug 2024 12:00:00 FORECAST")]
+        public void TryGetCanonicalUtc_WhenAbbreviationIsNotATrailingToken_DoesNotApplyCst(string input)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes(input),
+                out var utc,
+                out var failure);
+
+            Assert.False(accepted);
+            Assert.Equal(DateParseFailureReason.ParseFailed, failure);
+            Assert.Equal(default, utc);
+        }
+
+        /// <summary>
+        /// Without the strict option, an unknown letter token is left in place and exact parsing fails.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenUnknownAbbreviationIsTolerated_ReturnsParseFailed()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Fri, 23 Aug 2024 05:30:10 ZZQX"u8,
+                out _,
+                out var failure);
+
+            Assert.False(accepted);
+            Assert.Equal(DateParseFailureReason.ParseFailed, failure);
+        }
+
+        /// <summary>
+        /// Colliding abbreviations that this table refuses are unknown in strict mode, not silently assigned one region's offset.
+        /// </summary>
+        /// <param name="abbreviation">Omitted trailing token.</param>
+        [Theory]
+        [InlineData("AST")]
+        [InlineData("ADT")]
+        [InlineData("GST")]
+        [InlineData("NST")]
+        [InlineData("NDT")]
+        [InlineData("AMT")]
+        [InlineData("ECT")]
+        [InlineData("WST")]
+        [InlineData("SST")]
+        public void TryGetCanonicalUtc_WhenOmittedCollisionIsStrict_RejectsUnknownAbbreviation(string abbreviation)
+        {
+            var options = DateParseOptions.Default with { RequireKnownTimezoneAbbreviation = true };
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {abbreviation}"),
+                options,
+                out _,
+                out var failure);
+
+            Assert.False(accepted);
+            Assert.Equal(DateParseFailureReason.UnknownTimezoneAbbreviation, failure);
+        }
+
+        /// <summary>
+        /// <c>UTC+1</c> is not a letter token, so the abbreviation table does not rewrite it and numeric-offset parsing does not accept that spelling.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenUtcPlusDigitForm_IsNotAnAbbreviationMatch()
+        {
+            var options = DateParseOptions.Default with { RequireKnownTimezoneAbbreviation = true };
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Fri, 23 Aug 2024 12:00:00 UTC+1"u8,
+                options,
+                out _,
+                out var failure);
+
+            Assert.False(accepted);
+            Assert.Equal(DateParseFailureReason.ParseFailed, failure);
+        }
+
+        /// <summary>
+        /// A fractional numeric offset is still parsed on the numeric path and is not confused with an abbreviation.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenFractionalNumericOffsetPresent_ReturnsUtc()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Fri, 23 Aug 2024 12:00:00 +0530"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2024, 8, 23, 6, 30, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
         /// Input one byte longer than <see cref="DateParseOptions.MaxInputLength"/> is rejected with <see cref="DateParseFailureReason.TooLong"/>.
         /// </summary>
         [Fact]
@@ -110,6 +327,129 @@ namespace VectorNNTPD.Common.Tests.Articles.DateParser
             var accepted = NewsDateParser.TryGetCanonicalUtc(padded, out _, out var failure);
             Assert.False(accepted);
             Assert.Equal(DateParseFailureReason.TooLong, failure);
+        }
+
+        /// <summary>
+        /// Built-in letter abbreviations and their documented minutes east of UTC.
+        /// <c>UTC+N</c> rows are excluded because the letter-run detector does not select them.
+        /// </summary>
+        /// <returns>Pairs of abbreviation and offset minutes.</returns>
+        public static IEnumerable<object[]> KnownTimezoneAbbreviations()
+        {
+            (string Abbreviation, int OffsetMinutesEast)[] rows =
+            [
+                ("UT", 0),
+                ("UTC", 0),
+                ("GMT", 0),
+                ("EST", -300),
+                ("EDT", -240),
+                ("CST", -360),
+                ("CDT", -300),
+                ("MST", -420),
+                ("MDT", -360),
+                ("PST", -480),
+                ("PDT", -420),
+                ("AKST", -540),
+                ("AKDT", -480),
+                ("HST", -600),
+                ("WET", 0),
+                ("WEST", 60),
+                ("CET", 60),
+                ("CEST", 120),
+                ("MET", 60),
+                ("MEST", 120),
+                ("EET", 120),
+                ("EEST", 180),
+                ("BST", 60),
+                ("MSK", 180),
+                ("MSD", 240),
+                ("TRT", 180),
+                ("ART", -180),
+                ("BRT", -180),
+                ("BRST", -120),
+                ("CLT", -240),
+                ("CLST", -180),
+                ("COT", -300),
+                ("PET", -300),
+                ("BOT", -240),
+                ("GYT", -240),
+                ("SRT", -180),
+                ("UYT", -180),
+                ("GFT", -180),
+                ("PMST", -180),
+                ("PMDT", -120),
+                ("WAT", 60),
+                ("WAST", 120),
+                ("CAT", 120),
+                ("EAT", 180),
+                ("SAST", 120),
+                ("IRST", 210),
+                ("IRDT", 270),
+                ("AFT", 270),
+                ("PKT", 300),
+                ("IST", 330),
+                ("NPT", 345),
+                ("LKT", 330),
+                ("MMT", 390),
+                ("BTT", 360),
+                ("IDT", 180),
+                ("AZT", 240),
+                ("AZST", 300),
+                ("GET", 240),
+                ("ICT", 420),
+                ("WIB", 420),
+                ("WITA", 480),
+                ("WIT", 540),
+                ("HKT", 480),
+                ("SGT", 480),
+                ("BJT", 480),
+                ("PHT", 480),
+                ("MYT", 480),
+                ("BNT", 480),
+                ("JST", 540),
+                ("KST", 540),
+                ("ULAT", 480),
+                ("HOVT", 420),
+                ("KGT", 360),
+                ("UZT", 300),
+                ("TMT", 300),
+                ("TJT", 300),
+                ("YEKT", 300),
+                ("OMST", 360),
+                ("NOVT", 420),
+                ("KRAT", 420),
+                ("IRKT", 480),
+                ("YAKT", 540),
+                ("VLAT", 600),
+                ("PETT", 720),
+                ("AWST", 480),
+                ("AWDT", 540),
+                ("ACST", 570),
+                ("ACDT", 630),
+                ("AEST", 600),
+                ("AEDT", 660),
+                ("LHST", 630),
+                ("LHDT", 660),
+                ("NZST", 720),
+                ("NZDT", 780),
+                ("CHAST", 765),
+                ("CHADT", 825),
+                ("ChST", 600),
+                ("TAHT", -600),
+                ("MART", -570),
+                ("CKT", -600),
+                ("FJT", 720),
+                ("TOT", 780),
+                ("GILT", 720),
+                ("PHOT", 780),
+                ("LINT", 840),
+                ("NRT", 720),
+            ];
+
+            foreach (var row in rows)
+            {
+                yield return new object[] { row.Abbreviation, row.OffsetMinutesEast };
+            }
         }
 
         /// <summary>
