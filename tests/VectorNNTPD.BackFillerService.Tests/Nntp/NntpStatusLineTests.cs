@@ -79,6 +79,85 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(-1, await ReadAsync(partial));
         }
 
+        /// <summary>
+        /// The multiline terminator is one dot after CRLF removal, including when the CR and LF arrive in different reads.
+        /// A CR that is not followed by LF stays in the line and is not treated as the terminator.
+        /// </summary>
+        [Fact]
+        public async Task Split_crlf_multiline_terminator_is_a_single_dot()
+        {
+            using (var unsplitStream = new ChunkedStream([".\r\n"u8.ToArray()]))
+            using (var unsplit = Reader(unsplitStream))
+            {
+                Assert.Equal(1, await ReadAsync(unsplit));
+                Assert.Equal("."u8.ToArray(), unsplit.ConsumedLine.ToArray());
+                Assert.True(NntpProtocolIo.IsMultilineTerminator(unsplit.ConsumedLine.Span));
+            }
+
+            using (var splitStream = new ChunkedStream([".\r"u8.ToArray(), "\n"u8.ToArray()]))
+            using (var split = Reader(splitStream))
+            {
+                Assert.Equal(1, await ReadAsync(split));
+                Assert.Equal("."u8.ToArray(), split.ConsumedLine.ToArray());
+                Assert.True(NntpProtocolIo.IsMultilineTerminator(split.ConsumedLine.Span));
+            }
+
+            using (var followedStream = new ChunkedStream([".\r"u8.ToArray(), "\n201 ready\r\n"u8.ToArray()]))
+            using (var followed = Reader(followedStream))
+            {
+                Assert.Equal(1, await ReadAsync(followed));
+                Assert.True(NntpProtocolIo.IsMultilineTerminator(followed.ConsumedLine.Span));
+                Assert.Equal(9, await ReadAsync(followed));
+                Assert.Equal("201 ready"u8.ToArray(), followed.ConsumedLine.ToArray());
+                Assert.False(NntpProtocolIo.IsMultilineTerminator(followed.ConsumedLine.Span));
+            }
+
+            using (var ordinaryStream = new ChunkedStream(["VERSION 2\r"u8.ToArray(), "\n.\r\n"u8.ToArray()]))
+            using (var ordinary = Reader(ordinaryStream))
+            {
+                Assert.Equal(9, await ReadAsync(ordinary));
+                Assert.Equal("VERSION 2"u8.ToArray(), ordinary.ConsumedLine.ToArray());
+                Assert.False(NntpProtocolIo.IsMultilineTerminator(ordinary.ConsumedLine.Span));
+                Assert.Equal(1, await ReadAsync(ordinary));
+                Assert.True(NntpProtocolIo.IsMultilineTerminator(ordinary.ConsumedLine.Span));
+            }
+
+            using (var pendingStream = new ChunkedStream([".\r"u8.ToArray(), "x\n"u8.ToArray()]))
+            using (var pending = Reader(pendingStream))
+            {
+                Assert.Equal(3, await ReadAsync(pending));
+                Assert.Equal(".\rx"u8.ToArray(), pending.ConsumedLine.ToArray());
+                Assert.False(NntpProtocolIo.IsMultilineTerminator(pending.ConsumedLine.Span));
+            }
+
+            using (var incompleteStream = new ChunkedStream([".\r"u8.ToArray()]))
+            using (var incomplete = Reader(incompleteStream))
+            {
+                var end = await Assert.ThrowsAsync<EndOfStreamException>(() => ReadAsync(incomplete));
+                Assert.Contains("mid-line", end.Message, StringComparison.Ordinal);
+                Assert.Equal(-1, await ReadAsync(incomplete));
+            }
+
+            using (var capabilitiesStream = new ChunkedStream(
+            [
+                "101 Capability list follows\r\nVERSION 2\r\n.\r"u8.ToArray(),
+                "\n201 ready\r\n"u8.ToArray(),
+            ]))
+            using (var capabilities = Reader(capabilitiesStream))
+            {
+                Assert.Equal(27, await ReadAsync(capabilities));
+                Assert.Equal("101 Capability list follows"u8.ToArray(), capabilities.ConsumedLine.ToArray());
+                Assert.Equal(9, await ReadAsync(capabilities));
+                Assert.Equal("VERSION 2"u8.ToArray(), capabilities.ConsumedLine.ToArray());
+                Assert.Equal(1, await ReadAsync(capabilities));
+                Assert.Equal("."u8.ToArray(), capabilities.ConsumedLine.ToArray());
+                Assert.True(NntpProtocolIo.IsMultilineTerminator(capabilities.ConsumedLine.Span));
+                Assert.Equal(9, await ReadAsync(capabilities));
+                Assert.Equal("201 ready"u8.ToArray(), capabilities.ConsumedLine.ToArray());
+                Assert.Equal(0, capabilities.BufferedByteCount);
+            }
+        }
+
         /// <summary>A line of exactly the maximum length is accepted. One more byte is rejected before the delimiter is consumed.</summary>
         [Fact]
         public async Task Maximum_length_is_accepted_and_one_extra_byte_is_rejected()
