@@ -1,5 +1,4 @@
 using System.Text;
-using System.Buffers;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -45,26 +44,29 @@ namespace VectorNNTPD.BackFillerService.Nntp
         internal const int MaxCapabilityLines = 256;
 
         /// <summary>
-        /// Parses one status line into a three-digit code and the remainder of the line.
+        /// Parses the numeric status code and the unallocated text bytes that follow it.
         /// </summary>
         /// <param name="line">Status line with the LF or CRLF already removed.</param>
         /// <param name="code">Parsed code when the line begins with three ASCII digits; otherwise 0.</param>
         /// <param name="text">
-        /// ASCII decoding of the bytes after the code. One leading space is skipped.
+        /// Bytes after the code. One leading space is skipped and is not included.
         /// Empty when the line is only the code, or when that space is the last byte.
+        /// The span aliases <paramref name="line"/>.
         /// </param>
         /// <returns>
         /// <see langword="true"/> when <paramref name="line"/> begins with three ASCII digits.
-        /// A separator other than space is left in <paramref name="text"/>.
+        /// A separator other than space is left at the start of <paramref name="text"/>.
         /// Otherwise <see langword="false"/>, <paramref name="code"/> is 0, and <paramref name="text"/> is empty.
         /// </returns>
         /// <remarks>
-        /// The code is not restricted to 100–599. Bytes above 127 are decoded with <see cref="Encoding.ASCII"/> replacement.
+        /// This method does not allocate. The code is not restricted to 100–599.
+        /// Call <see cref="DecodeStatusText"/> only when the caller stores or logs the text.
+        /// Bytes above 127 stay in <paramref name="text"/> until that decode, which uses <see cref="Encoding.ASCII"/> replacement.
         /// </remarks>
-        internal static bool TryParseStatus(ReadOnlySpan<byte> line, out int code, out string text)
+        internal static bool TryParseStatus(ReadOnlySpan<byte> line, out int code, out ReadOnlySpan<byte> text)
         {
             code = 0;
-            text = string.Empty;
+            text = default;
             if (line.Length < 3
                 || !IsDigit(line[0])
                 || !IsDigit(line[1])
@@ -85,11 +87,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 start = 4;
             }
 
-            text = start < line.Length
-                ? Encoding.ASCII.GetString(line[start..])
-                : string.Empty;
+            text = start < line.Length ? line[start..] : default;
             return true;
         }
+
+        /// <summary>Decodes status text that <see cref="TryParseStatus"/> already separated from the code.</summary>
+        /// <param name="text">Text bytes. Empty input returns <see cref="string.Empty"/> without allocating.</param>
+        /// <returns>
+        /// <see cref="string.Empty"/> when <paramref name="text"/> is empty.
+        /// Otherwise an ASCII string. Bytes above 127 use <see cref="Encoding.ASCII"/> replacement.
+        /// </returns>
+        internal static string DecodeStatusText(ReadOnlySpan<byte> text) =>
+            text.IsEmpty ? string.Empty : Encoding.ASCII.GetString(text);
 
         /// <summary>Encodes <paramref name="value"/> as ASCII when every character is in the 0–127 range.</summary>
         /// <param name="value">Text to encode. CR and LF are accepted.</param>
@@ -241,6 +250,23 @@ namespace VectorNNTPD.BackFillerService.Nntp
         private int _payloadCount;
 
         /// <summary>
+        /// Reused status-line scratch. Not returned as an owned array.
+        /// The first non-empty line allocates <see cref="LineScratchInitialBytes"/> or the caller's maximum when that maximum is smaller.
+        /// Growth doubles until the line fits and stops at that call's maximum, so capacity stays bounded by the largest maximum this reader has been given.
+        /// <see cref="ConsumedLine"/> aliases this buffer and is valid only until the next <see cref="ReadLineAsync"/>.
+        /// </summary>
+        private byte[] _lineScratch = [];
+
+        /// <summary>Valid prefix of <see cref="_lineScratch"/> for the line currently in <see cref="ConsumedLine"/>.</summary>
+        private int _lineCount;
+
+        /// <summary>
+        /// First status-line scratch size when the caller allows at least this many bytes.
+        /// Matches the previous per-call <c>ArrayBufferWriter</c> initial capacity. Not <c>MaxStatusLineBytes</c>.
+        /// </summary>
+        private const int LineScratchInitialBytes = 256;
+
+        /// <summary>
         /// First scratch size when the caller allows at least this many destuffed bytes.
         /// Chosen so a typical ~740 KiB article fits once. Not <c>MaxArticleBytes</c>.
         /// </summary>
@@ -258,22 +284,46 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>Gets unread bytes already taken from the socket but not yet consumed as a line.</summary>
         internal int BufferedByteCount => _count;
 
-        /// <summary>Reads one line, excluding the LF delimiter and a CR immediately before that LF.</summary>
-        /// <param name="maxBytes">Maximum accepted line length, excluding the delimiter.</param>
-        /// <param name="timeout">Budget for the whole read. Linked with <paramref name="cancellationToken"/>.</param>
-        /// <param name="cancellationToken">Cancels the read.</param>
+        /// <summary>
+        /// Gets the line most recently completed by <see cref="ReadLineAsync"/>.
+        /// </summary>
+        /// <remarks>
+        /// The memory aliases <see cref="_lineScratch"/>. It remains valid only until the next <see cref="ReadLineAsync"/> on this reader.
+        /// Callers must finish with it before that call, and must not store it or await while still using it.
+        /// An EOF result does not refresh this memory. A payload read does not overwrite it.
+        /// One session reads lines one at a time; this buffer is not safe for concurrent reads.
+        /// </remarks>
+        internal ReadOnlyMemory<byte> ConsumedLine => _lineScratch.AsMemory(0, _lineCount);
+
+        /// <summary>Gets the retained <see cref="_lineScratch"/> length. Zero before the first non-empty line.</summary>
+        internal int LineBufferCapacity => _lineScratch.Length;
+
+        /// <summary>Reads one line, excluding the LF delimiter and a CR immediately before that LF in the same receive window.</summary>
+        /// <param name="maxBytes">Maximum accepted line length, excluding the delimiter. Also the growth ceiling for <see cref="_lineScratch"/> on this call.</param>
+        /// <param name="timeout">
+        /// Budget for this read only. It starts when this method arms its own linked source.
+        /// It is not a remainder of an earlier write or payload budget.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the read. Linked with <paramref name="timeout"/> for this call only.</param>
         /// <returns>
-        /// The line bytes, or <see langword="null"/> when the stream ends before any byte of a new line.
+        /// The line length, or -1 when the stream ends before any byte of a new line.
+        /// The bytes are <see cref="ConsumedLine"/>. An empty line returns 0.
         /// </returns>
         /// <exception cref="EndOfStreamException">The stream ends after one or more bytes of the line were buffered.</exception>
         /// <exception cref="InvalidOperationException">The line exceeds <paramref name="maxBytes"/>.</exception>
         /// <remarks>
+        /// The timeout source is created for this read and disposed before the method returns, including when the read throws.
         /// Caller cancellation and the timeout both surface as <see cref="OperationCanceledException"/> from the stream read.
         /// This method does not distinguish those causes. A bare LF is a delimiter; CRLF is not required.
+        /// A CR is removed when the next byte is LF, including when those two bytes arrive in different reads.
+        /// A CR followed by any other byte stays in the line. A trailing CR is left unread until that next byte arrives,
+        /// so it is not committed before the delimiter can be recognized.
+        /// If that follow-up read fails, the pending CR is dropped with the rest of the partial line and is not replayed.
+        /// Bytes after the delimiter stay in the receive buffer. An over-long line throws before that delimiter is consumed.
         /// </remarks>
-        internal async Task<byte[]?> ReadLineAsync(int maxBytes, TimeSpan timeout, CancellationToken cancellationToken)
+        internal async Task<int> ReadLineAsync(int maxBytes, TimeSpan timeout, CancellationToken cancellationToken)
         {
-            var builder = new ArrayBufferWriter<byte>(256);
+            _lineCount = 0;
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(timeout);
 
@@ -285,7 +335,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     _count = await _stream.ReadAsync(_buffer.AsMemory(), timeoutCts.Token).ConfigureAwait(false);
                     if (_count == 0)
                     {
-                        return builder.WrittenCount == 0 ? null : throw new EndOfStreamException("NNTP connection closed mid-line.");
+                        if (_lineCount == 0)
+                        {
+                            return -1;
+                        }
+
+                        throw new EndOfStreamException("NNTP connection closed mid-line.");
                     }
                 }
 
@@ -293,12 +348,37 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 var newline = span.IndexOf((byte)'\n');
                 if (newline < 0)
                 {
-                    if (builder.WrittenCount + span.Length > maxBytes)
+                    if (span.Length > 0 && span[^1] == (byte)'\r')
+                    {
+                        var body = span[..^1];
+                        if (_lineCount + body.Length > maxBytes)
+                        {
+                            throw new InvalidOperationException("NNTP status line exceeded maximum length.");
+                        }
+
+                        AppendLine(body, maxBytes);
+                        _offset += body.Length;
+                        _count = 1;
+                        try
+                        {
+                            await ReadByteAfterPendingCarriageReturnAsync(timeoutCts.Token).ConfigureAwait(false);
+                        }
+                        catch (Exception)
+                        {
+                            _offset = 0;
+                            _count = 0;
+                            throw;
+                        }
+
+                        continue;
+                    }
+
+                    if (_lineCount + span.Length > maxBytes)
                     {
                         throw new InvalidOperationException("NNTP status line exceeded maximum length.");
                     }
 
-                    builder.Write(span);
+                    AppendLine(span, maxBytes);
                     _count = 0;
                     continue;
                 }
@@ -309,16 +389,16 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     lineEnd--;
                 }
 
-                if (builder.WrittenCount + lineEnd > maxBytes)
+                if (_lineCount + lineEnd > maxBytes)
                 {
                     throw new InvalidOperationException("NNTP status line exceeded maximum length.");
                 }
 
-                builder.Write(span[..lineEnd]);
+                AppendLine(span[..lineEnd], maxBytes);
                 var consumed = newline + 1;
                 _offset += consumed;
                 _count -= consumed;
-                return builder.WrittenSpan.ToArray();
+                return _lineCount;
             }
         }
 
@@ -448,6 +528,32 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 _payloadCount = 0;
             }
+        }
+
+        /// <summary>
+        /// Reads one more socket chunk after a trailing CR was left as the only unread byte.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the additional read. The caller passes the timeout-linked token.</param>
+        /// <exception cref="EndOfStreamException">The additional read returns no bytes.</exception>
+        /// <remarks>
+        /// The CR stays at the front of the unread window so the next pass can see whether LF follows it.
+        /// The caller drops that window when this method throws. A completed read leaves the CR and the new bytes together.
+        /// </remarks>
+        private async Task ReadByteAfterPendingCarriageReturnAsync(CancellationToken cancellationToken)
+        {
+            if (_offset > 0)
+            {
+                Buffer.BlockCopy(_buffer, _offset, _buffer, 0, _count);
+                _offset = 0;
+            }
+
+            var additional = await _stream.ReadAsync(_buffer.AsMemory(_count), cancellationToken).ConfigureAwait(false);
+            if (additional == 0)
+            {
+                throw new EndOfStreamException("NNTP connection closed mid-line.");
+            }
+
+            _count += additional;
         }
 
         /// <summary>Moves any unread tail to the front of the buffer and reads at least one more byte.</summary>
@@ -582,6 +688,67 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
 
             return exact;
+        }
+
+        /// <summary>Appends one line fragment to <see cref="_lineScratch"/>.</summary>
+        /// <param name="data">Bytes that already fit under the caller's maximum. Empty input does nothing.</param>
+        /// <param name="maxBytes">Ceiling passed to <see cref="EnsureLineCapacity"/>.</param>
+        private void AppendLine(ReadOnlySpan<byte> data, int maxBytes)
+        {
+            if (data.IsEmpty)
+            {
+                return;
+            }
+
+            var needed = _lineCount + data.Length;
+            EnsureLineCapacity(needed, maxBytes);
+            data.CopyTo(_lineScratch.AsSpan(_lineCount));
+            _lineCount = needed;
+        }
+
+        /// <summary>
+        /// Grows <see cref="_lineScratch"/> to at least <paramref name="needed"/> and at most <paramref name="maxBytes"/>.
+        /// </summary>
+        /// <param name="needed">Required valid-prefix capacity. The caller keeps it at or below <paramref name="maxBytes"/>.</param>
+        /// <param name="maxBytes">Caller ceiling for this line.</param>
+        /// <remarks>
+        /// An empty scratch starts at <see cref="LineScratchInitialBytes"/> when the caller allows it, otherwise at <paramref name="maxBytes"/>.
+        /// Later lines reuse that array. This method does not shrink it.
+        /// </remarks>
+        private void EnsureLineCapacity(int needed, int maxBytes)
+        {
+            if ((uint)needed <= (uint)_lineScratch.Length)
+            {
+                return;
+            }
+
+            var size = _lineScratch.Length == 0
+                ? Math.Min(maxBytes, LineScratchInitialBytes)
+                : _lineScratch.Length;
+            while (size < needed)
+            {
+                if (size >= maxBytes || size > int.MaxValue / 2)
+                {
+                    size = maxBytes;
+                    break;
+                }
+
+                var doubled = size * 2;
+                size = doubled > maxBytes ? maxBytes : doubled;
+            }
+
+            if (size < needed)
+            {
+                size = needed;
+            }
+
+            var next = GC.AllocateUninitializedArray<byte>(size);
+            if (_lineCount > 0)
+            {
+                _lineScratch.AsSpan(0, _lineCount).CopyTo(next);
+            }
+
+            _lineScratch = next;
         }
     }
 }

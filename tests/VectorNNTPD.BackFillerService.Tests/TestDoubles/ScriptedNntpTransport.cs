@@ -203,6 +203,12 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         public TaskCompletionSource? CommandWriteFlushed { get; set; }
 
         /// <summary>
+        /// When true, <see cref="HoldAfterCommandWrite"/> and <see cref="HoldStatusLineReturn"/> wait on the stream token.
+        /// Leave false when a test must resume the command after disposal has already cancelled that token.
+        /// </summary>
+        public bool ObserveCommandHoldCancellation { get; set; }
+
+        /// <summary>
         /// When set, the first client read waits here before touching the pipe.
         /// Used to dispose the session after transport publication and before the greeting read returns.
         /// </summary>
@@ -666,7 +672,14 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                     && owner.TryBeginStatusLineHold())
                 {
                     owner.StatusLineCopied?.TrySetResult();
-                    await owner.HoldStatusLineReturn!.Task.ConfigureAwait(false);
+                    if (owner.ObserveCommandHoldCancellation)
+                    {
+                        await owner.HoldStatusLineReturn!.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await owner.HoldStatusLineReturn!.Task.ConfigureAwait(false);
+                    }
                 }
 
                 return taken;
@@ -716,7 +729,14 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 && owner.TryBeginCommandWriteHold())
             {
                 owner.CommandWriteFlushed?.TrySetResult();
-                await owner.HoldAfterCommandWrite!.Task.ConfigureAwait(false);
+                if (owner.ObserveCommandHoldCancellation)
+                {
+                    await owner.HoldAfterCommandWrite!.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    await owner.HoldAfterCommandWrite!.Task.ConfigureAwait(false);
+                }
             }
         }
 
