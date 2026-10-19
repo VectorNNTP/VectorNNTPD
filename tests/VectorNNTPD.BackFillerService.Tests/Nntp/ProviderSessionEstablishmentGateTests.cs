@@ -395,14 +395,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             NntpSessionPool pool,
             EstablishmentAttemptLog log)
         {
-            var connects = 0;
-            foreach (var attempt in factory.ConnectAttempts)
-            {
-                if (string.Equals(attempt.Backbone, pool.Backbone, StringComparison.Ordinal))
-                {
-                    connects++;
-                }
-            }
+            var connects = factory.ConnectAttempts.Count(attempt =>
+                string.Equals(attempt.Backbone, pool.Backbone, StringComparison.Ordinal));
 
             builder.Append("pool=").Append(pool.Backbone);
             builder.Append(" desired=").Append(pool.Provider.MaxSessions.ToString(CultureInfo.InvariantCulture));
