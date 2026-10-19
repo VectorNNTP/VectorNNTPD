@@ -216,12 +216,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return default;
             }
 
-            var hasVersion = false;
-            var version = 0;
+            var version = default(VersionRead);
             Guid? requestId = null;
             var messageIdLocked = false;
-            var messageIdSeen = false;
-            string? messageId = null;
+            var messageId = default(MessageIdRead);
             string? backbone = null;
 
             while (reader.Read())
@@ -233,7 +231,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         throw new JsonException();
                     }
 
-                    return new PayloadFields(true, hasVersion, version, requestId, messageIdSeen, messageId, backbone);
+                    return new PayloadFields(
+                        true,
+                        version.HasVersion,
+                        version.Version,
+                        requestId,
+                        messageId.PropertySeen,
+                        messageId.MessageId,
+                        backbone);
                 }
 
                 if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1)
@@ -252,7 +257,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
                 if (versionName)
                 {
-                    ApplyVersion(ref reader, ref hasVersion, ref version);
+                    ApplyVersion(ref reader, ref version);
                 }
                 else if (requestName)
                 {
@@ -267,7 +272,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     else
                     {
                         messageIdLocked = true;
-                        ApplyMessageId(ref reader, ref messageIdSeen, ref messageId);
+                        ApplyMessageId(ref reader, ref messageId);
                     }
                 }
                 else if (backboneName)
@@ -283,21 +288,30 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             throw new JsonException();
         }
 
+        /// <summary>Last top-level integer <c>version</c>. A later non-integer clears <see cref="HasVersion"/>.</summary>
+        private struct VersionRead
+        {
+            /// <summary><see langword="true"/> when the current value is an integer.</summary>
+            public bool HasVersion;
+
+            /// <summary>The accepted integer, or zero when <see cref="HasVersion"/> is <see langword="false"/>.</summary>
+            public int Version;
+        }
+
         /// <summary>Applies the current top-level <c>version</c> value. A non-integer clears any earlier integer.</summary>
         /// <param name="reader">Reader positioned on the property value.</param>
-        /// <param name="hasVersion">Whether an integer version is currently accepted.</param>
-        /// <param name="version">The accepted integer.</param>
-        private static void ApplyVersion(ref Utf8JsonReader reader, ref bool hasVersion, ref int version)
+        /// <param name="version">Version state updated in place.</param>
+        private static void ApplyVersion(ref Utf8JsonReader reader, ref VersionRead version)
         {
             if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var parsed))
             {
-                hasVersion = true;
-                version = parsed;
+                version.HasVersion = true;
+                version.Version = parsed;
                 return;
             }
 
-            hasVersion = false;
-            version = 0;
+            version.HasVersion = false;
+            version.Version = 0;
             SkipValueIfContainer(ref reader);
         }
 
@@ -355,20 +369,29 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             return guid;
         }
 
+        /// <summary>First top-level <c>messageId</c>. JSON null leaves <see cref="PropertySeen"/> false.</summary>
+        private struct MessageIdRead
+        {
+            /// <summary><see langword="true"/> when the value was not JSON null.</summary>
+            public bool PropertySeen;
+
+            /// <summary>The accepted ASCII Message-ID, or <see langword="null"/> when the value is not a valid token.</summary>
+            public string? MessageId;
+        }
+
         /// <summary>
         /// Applies the first top-level <c>messageId</c> value. JSON null leaves the property unseen.
         /// </summary>
         /// <param name="reader">Reader positioned on the property value.</param>
-        /// <param name="propertySeen"><see langword="true"/> when the value was not JSON null.</param>
-        /// <param name="messageId">The accepted ASCII Message-ID, or <see langword="null"/> when the value is not a valid token.</param>
-        private static void ApplyMessageId(ref Utf8JsonReader reader, ref bool propertySeen, ref string? messageId)
+        /// <param name="messageId">Message-ID state updated in place. The caller does not invoke this for a later duplicate.</param>
+        private static void ApplyMessageId(ref Utf8JsonReader reader, ref MessageIdRead messageId)
         {
             if (reader.TokenType == JsonTokenType.Null)
             {
                 return;
             }
 
-            propertySeen = true;
+            messageId.PropertySeen = true;
             if (reader.TokenType != JsonTokenType.String)
             {
                 SkipValueIfContainer(ref reader);
@@ -403,7 +426,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var token = buffer[..written];
             if (NntpMessageIdValidation.IsValidMessageId(token))
             {
-                messageId = Encoding.ASCII.GetString(token);
+                messageId.MessageId = Encoding.ASCII.GetString(token);
             }
         }
 
