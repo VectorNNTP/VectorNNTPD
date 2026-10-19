@@ -145,17 +145,68 @@ namespace VectorNNTPD.Common.Articles.Parsing
                 return false;
             }
 
-            for (var i = 0; i < rawPath.Length; i++)
+            if (!ContainsLineBreak(rawPath))
             {
-                var b = rawPath[i];
-                if (b is < 0x20 or > 0x7E)
-                {
-                    failureCode = NntpArticleParseFailureCode.InvalidPath;
-                    return false;
-                }
+                return TryAnalyzePrepared(
+                    rawPath,
+                    localIdentity,
+                    organizationalTracker,
+                    out kind,
+                    out containsOrganizationalTracker,
+                    out failureCode);
             }
 
-            var remaining = TrimAscii(rawPath);
+            if (!IsLegalPathFold(rawPath))
+            {
+                failureCode = NntpArticleParseFailureCode.InvalidPath;
+                return false;
+            }
+
+            Span<byte> unfoldBuffer = stackalloc byte[rawPath.Length];
+            if (!TryUnfoldPath(rawPath, unfoldBuffer, out var prepared))
+            {
+                failureCode = NntpArticleParseFailureCode.InvalidPath;
+                return false;
+            }
+
+            return TryAnalyzePrepared(
+                prepared,
+                localIdentity,
+                organizationalTracker,
+                out kind,
+                out containsOrganizationalTracker,
+                out failureCode);
+        }
+
+        /// <summary>
+        /// Classifies a Path value that has already been unfolded.
+        /// </summary>
+        /// <param name="prepared">Unfolded Path bytes.</param>
+        /// <param name="localIdentity">Local application FQDN.</param>
+        /// <param name="organizationalTracker">Tracker host compared with Path tokens.</param>
+        /// <param name="kind">Rewrite classification when validation succeeds.</param>
+        /// <param name="containsOrganizationalTracker">Whether a token equals <paramref name="organizationalTracker"/>.</param>
+        /// <param name="failureCode"><see cref="NntpArticleParseFailureCode.InvalidPath"/> when the value is rejected.</param>
+        /// <returns><see langword="true"/> when the Path is usable.</returns>
+        private static bool TryAnalyzePrepared(
+            ReadOnlySpan<byte> prepared,
+            ReadOnlySpan<byte> localIdentity,
+            ReadOnlySpan<byte> organizationalTracker,
+            out ArticlePathKind kind,
+            out bool containsOrganizationalTracker,
+            out NntpArticleParseFailureCode failureCode)
+        {
+            kind = ArticlePathKind.Missing;
+            containsOrganizationalTracker = false;
+            failureCode = NntpArticleParseFailureCode.None;
+
+            if (!IsPrintablePathText(prepared))
+            {
+                failureCode = NntpArticleParseFailureCode.InvalidPath;
+                return false;
+            }
+
+            var remaining = TrimAscii(prepared);
             if (remaining.IsEmpty)
             {
                 kind = ArticlePathKind.Empty;
@@ -163,20 +214,36 @@ namespace VectorNNTPD.Common.Articles.Parsing
             }
 
             var sawComponent = false;
+            var sawLeadingEmpty = false;
+            var pendingEmpty = false;
             var leftmostMatchesLocal = false;
             while (TryConsumePathComponent(ref remaining, out var component))
             {
                 if (component.IsEmpty)
                 {
+                    if (!sawComponent)
+                    {
+                        sawLeadingEmpty = true;
+                        continue;
+                    }
+
+                    if (pendingEmpty)
+                    {
+                        failureCode = NntpArticleParseFailureCode.InvalidPath;
+                        return false;
+                    }
+
+                    pendingEmpty = true;
                     continue;
                 }
 
-                if (!IsValidPathComponent(component))
+                if (sawLeadingEmpty || !IsValidPathComponent(component))
                 {
                     failureCode = NntpArticleParseFailureCode.InvalidPath;
                     return false;
                 }
 
+                pendingEmpty = false;
                 if (!sawComponent)
                 {
                     leftmostMatchesLocal = AsciiEqualsIgnoreCase(component, localIdentity);
@@ -218,7 +285,10 @@ namespace VectorNNTPD.Common.Articles.Parsing
         /// A later traverse writes <c>{application-fqdn}!existing</c> even when that FQDN is already present.
         /// <see cref="ArticlePathMode.Normalize"/> does not write an application FQDN.
         /// <c>news.usenet.ninja</c> is inserted when absent and reduced to the first occurrence.
-        /// Empty Path tokens from repeated <c>!</c> separators are dropped.
+        /// One empty token between two hops is a <c>diag-match</c> and is written as <c>!!</c>.
+        /// If tracker deduplication removes that marker's right-hand hop, the marker is dropped.
+        /// Leading <c>!</c> is invalid. A trailing <c>!</c> is omitted. A run of only separators stays empty.
+        /// A CRLF fold is accepted only in the whitespace immediately before a <c>!</c> delimiter.
         /// </remarks>
         internal static bool TryWriteCanonicalPath(
             ReadOnlySpan<byte> rawPath,
@@ -258,10 +328,6 @@ namespace VectorNNTPD.Common.Articles.Parsing
             Span<byte> destination,
             out int bytesWritten)
         {
-            var remaining = kind is ArticlePathKind.Missing or ArticlePathKind.Empty
-                ? []
-                : TrimAscii(rawPath);
-
             var traverse = mode == ArticlePathMode.Traverse;
             var localIsTracker = traverse
                 && !localIdentity.IsEmpty
@@ -269,14 +335,226 @@ namespace VectorNNTPD.Common.Articles.Parsing
             var prependTracker = !containsOrganizationalTracker && !localIsTracker;
             var applicationHop = traverse ? localIdentity : default;
 
+            if (kind is ArticlePathKind.Missing or ArticlePathKind.Empty)
+            {
+                return TryWriteJoinedComponents(
+                    [],
+                    prependTracker ? organizationalTracker : default,
+                    applicationHop,
+                    organizationalTracker,
+                    trackerAlreadyEmitted: prependTracker || localIsTracker,
+                    destination,
+                    out bytesWritten);
+            }
+
+            if (!ContainsLineBreak(rawPath))
+            {
+                return TryWriteJoinedComponents(
+                    TrimAscii(rawPath),
+                    prependTracker ? organizationalTracker : default,
+                    applicationHop,
+                    organizationalTracker,
+                    trackerAlreadyEmitted: prependTracker || localIsTracker,
+                    destination,
+                    out bytesWritten);
+            }
+
+            if (!IsLegalPathFold(rawPath))
+            {
+                bytesWritten = 0;
+                return false;
+            }
+
+            Span<byte> unfoldBuffer = stackalloc byte[rawPath.Length];
+            if (!TryUnfoldPath(rawPath, unfoldBuffer, out var prepared))
+            {
+                bytesWritten = 0;
+                return false;
+            }
+
             return TryWriteJoinedComponents(
-                remaining,
+                TrimAscii(prepared),
                 prependTracker ? organizationalTracker : default,
                 applicationHop,
                 organizationalTracker,
                 trackerAlreadyEmitted: prependTracker || localIsTracker,
                 destination,
                 out bytesWritten);
+        }
+
+        /// <summary>
+        /// Unfolds a Path value whose only line breaks are CRLF folds.
+        /// </summary>
+        /// <param name="rawPath">Raw Path bytes, including continuation terminators.</param>
+        /// <param name="destination">Buffer at least as long as <paramref name="rawPath"/>.</param>
+        /// <param name="prepared">Unfolded bytes inside <paramref name="destination"/>.</param>
+        /// <returns>
+        /// <see langword="false"/> for a bare CR, a bare LF, a CRLF that is not followed by SP or HTAB,
+        /// or a fold that is not in the whitespace immediately before a <c>!</c> delimiter.
+        /// </returns>
+        private static bool TryUnfoldPath(ReadOnlySpan<byte> rawPath, Span<byte> destination, out ReadOnlySpan<byte> prepared)
+        {
+            prepared = default;
+            if (!IsLegalPathFold(rawPath)
+                || !NntpArticleHeaderValueUnfolder.TryUnfold(rawPath, destination, out var written))
+            {
+                return false;
+            }
+
+            prepared = destination[..written];
+            return true;
+        }
+
+        /// <summary>Returns whether <paramref name="value"/> contains CR or LF.</summary>
+        /// <param name="value">Path bytes.</param>
+        /// <returns><see langword="true"/> when a line break is present.</returns>
+        private static bool ContainsLineBreak(ReadOnlySpan<byte> value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (value[i] is (byte)'\r' or (byte)'\n')
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Returns whether every line break is a CRLF fold placed immediately before a <c>!</c> delimiter.
+        /// </summary>
+        /// <param name="value">Raw Path bytes.</param>
+        /// <returns>
+        /// <see langword="false"/> for a bare CR, a bare LF, a fold after <c>!</c>, a fold inside a hop,
+        /// or a fold that is not followed by a delimiter.
+        /// </returns>
+        private static bool IsLegalPathFold(ReadOnlySpan<byte> value)
+            => HasOnlyCrlfFolds(value) && FoldsSitBeforeDelimiters(value);
+
+        /// <summary>
+        /// Returns whether each fold is trailing whitespace of a hop that is followed by <c>!</c>.
+        /// </summary>
+        /// <param name="value">Raw Path bytes.</param>
+        /// <returns>
+        /// <see langword="false"/> when a line break occurs before a hop, inside a hop, after a delimiter,
+        /// or after the final hop.
+        /// </returns>
+        private static bool FoldsSitBeforeDelimiters(ReadOnlySpan<byte> value)
+        {
+            var segmentStart = 0;
+            for (var i = 0; i <= value.Length; i++)
+            {
+                var atEnd = i == value.Length;
+                if (!atEnd && value[i] != (byte)'!')
+                {
+                    continue;
+                }
+
+                if (!SegmentFoldIsBeforeDelimiter(value, segmentStart, i, followedByDelimiter: !atEnd))
+                {
+                    return false;
+                }
+
+                segmentStart = i + 1;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Returns whether line breaks in one <c>!</c>-separated segment are only trailing whitespace.
+        /// </summary>
+        /// <param name="value">Raw Path bytes containing <paramref name="start"/> and <paramref name="end"/>.</param>
+        /// <param name="start">Inclusive segment start.</param>
+        /// <param name="end">Exclusive segment end. The delimiter itself is not included.</param>
+        /// <param name="followedByDelimiter">Whether a <c>!</c> follows this segment.</param>
+        /// <returns><see langword="false"/> when a fold is not the trailing whitespace before that delimiter.</returns>
+        private static bool SegmentFoldIsBeforeDelimiter(
+            ReadOnlySpan<byte> value,
+            int start,
+            int end,
+            bool followedByDelimiter)
+        {
+            var sawContent = false;
+            var inTrailingBreak = false;
+            var contentAfterBreak = false;
+            for (var i = start; i < end; i++)
+            {
+                var b = value[i];
+                if (b is (byte)'\r' or (byte)'\n')
+                {
+                    if (!sawContent)
+                    {
+                        return false;
+                    }
+
+                    inTrailingBreak = true;
+                    continue;
+                }
+
+                if (b is (byte)' ' or (byte)'\t')
+                {
+                    continue;
+                }
+
+                if (inTrailingBreak)
+                {
+                    contentAfterBreak = true;
+                }
+
+                sawContent = true;
+                inTrailingBreak = false;
+            }
+
+            return !contentAfterBreak && (!inTrailingBreak || followedByDelimiter);
+        }
+
+        /// <summary>
+        /// Returns whether every line break is a CRLF. The following SP or HTAB is checked by the unfolder.
+        /// </summary>
+        /// <param name="value">Raw Path bytes.</param>
+        /// <returns><see langword="false"/> for a bare CR or a bare LF.</returns>
+        private static bool HasOnlyCrlfFolds(ReadOnlySpan<byte> value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                var b = value[i];
+                if (b == (byte)'\n')
+                {
+                    return false;
+                }
+
+                if (b != (byte)'\r')
+                {
+                    continue;
+                }
+
+                if ((uint)(i + 1) >= (uint)value.Length || value[i + 1] != (byte)'\n')
+                {
+                    return false;
+                }
+
+                i++;
+            }
+
+            return true;
+        }
+
+        /// <summary>Returns whether every byte is printable ASCII, including SP.</summary>
+        /// <param name="value">Unfolded Path bytes.</param>
+        /// <returns><see langword="false"/> for a byte below <c>0x20</c> or above <c>0x7E</c>.</returns>
+        private static bool IsPrintablePathText(ReadOnlySpan<byte> value)
+        {
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (value[i] is < 0x20 or > 0x7E)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -301,7 +579,7 @@ namespace VectorNNTPD.Common.Articles.Parsing
         /// <summary>
         /// Writes optional prepended hops, then <c>!</c>-separated components from <paramref name="remaining"/>.
         /// </summary>
-        /// <param name="remaining">Path value still to split. Empty components are skipped.</param>
+        /// <param name="remaining">Path value still to split. A single empty component between hops is written as an extra <c>!</c> unless the right-hand hop is a duplicate tracker that this method omits.</param>
         /// <param name="prepend1">First hop, or empty. Used for <see cref="OrganizationalTrackerHost"/> when it must be inserted.</param>
         /// <param name="prepend2">Second hop, or empty. Used for the application FQDN in traverse mode.</param>
         /// <param name="organizationalTracker">Tracker component suppressed after its first occurrence.</param>
@@ -329,21 +607,49 @@ namespace VectorNNTPD.Common.Articles.Parsing
                 return false;
             }
 
+            var sawComponent = false;
+            var pendingDiagnostic = false;
             while (TryConsumePathComponent(ref remaining, out var component))
             {
                 if (component.IsEmpty)
                 {
+                    if (sawComponent)
+                    {
+                        if (pendingDiagnostic)
+                        {
+                            bytesWritten = 0;
+                            return false;
+                        }
+
+                        pendingDiagnostic = true;
+                    }
+
                     continue;
                 }
 
+                sawComponent = true;
                 if (AsciiEqualsIgnoreCase(component, organizationalTracker))
                 {
                     if (trackerAlreadyEmitted)
                     {
+                        // A suppressed hop cannot stay the right-hand side of a pending marker.
+                        pendingDiagnostic = false;
                         continue;
                     }
 
                     trackerAlreadyEmitted = true;
+                }
+
+                if (pendingDiagnostic)
+                {
+                    if (first || bytesWritten >= destination.Length)
+                    {
+                        bytesWritten = 0;
+                        return false;
+                    }
+
+                    destination[bytesWritten++] = (byte)'!';
+                    pendingDiagnostic = false;
                 }
 
                 if (!TryWriteHop(component, ref first, destination, ref bytesWritten))

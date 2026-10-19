@@ -363,11 +363,13 @@ Tests: [`ArticlePathCanonicalizerTests.cs`](../../tests/VectorNNTPD.Common.Tests
 
 ### Token rules
 
+- A CRLF followed by SP or HTAB is unfolded before validation only when that fold is in the whitespace immediately before a `!` delimiter. A fold after `!`, a fold inside a hop, a fold after the final hop, bare CR, bare LF, and CRLF without continuation whitespace are `InvalidPath`
 - Split on `!`
 - Trim SP/HTAB on each token
-- Empty tokens (repeated `!`) are dropped
+- One empty token between two hops is RFC 5536 `diag-match` (`!!`) and is kept when both hops are written. If tracker deduplication removes the right-hand hop, the marker is dropped with that hop. A second empty token in that position (`a!!!b`) is `InvalidPath`
+- A leading `!` before the first hop is `InvalidPath`. A trailing `!` is omitted. A value that is only separators, such as `!!!`, stays `Empty`
 - Tokens must be printable ASCII, not space, not `!` (`IsValidPathComponent`)
-- Entire Path must be printable 0x20–0x7E and ≤ 8192
+- The unfolded Path must be printable 0x20–0x7E. The raw value must be ≤ 8192
 - Tracker and local FQDN matching is **case-insensitive complete-token** equality (`AsciiEqualsIgnoreCase`), not substring search
 
 Organizational tracker: `news.usenet.ninja` (`OrganizationalTrackerHost`). After any Vector application has seen the article, that token is present **exactly once**.
