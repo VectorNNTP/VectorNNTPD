@@ -764,9 +764,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <see cref="AggregateException"/> or <see cref="ObjectDisposedException"/> from that cancellation is logged and does not skip transport disposal or the transition to <see cref="NntpSessionState.Closed"/>.
         /// An upgrade that publishes before this capture is the stream that is closed here, so the wrapper is not left on a closed session.
         /// After the transport dispose is attempted, <see cref="_stream"/> and <see cref="_reader"/> stay clear.
-        /// That drops the receive buffer and the article scratch buffer owned by the reader.
+        /// <see cref="DetachReader"/> asks the reader to return its pooled payload scratch. An in-flight payload read
+        /// still owns that buffer until the read returns; the scratch is not returned while the read is using it.
         /// Bytes already copied into a <see cref="RetrievedArticle"/> stay with that article.
-        /// An in-flight read holds the reader on its own stack until it returns; clearing the fields does not mutate that reader.
+        /// An in-flight read holds the reader on its own stack until it returns; clearing the fields does not replace that reader's buffer.
         /// <see cref="State"/> ends as <see cref="NntpSessionState.Closed"/>.
         /// Command paths assign <see cref="State"/> through <see cref="AssignState"/>, which returns once <see cref="_disposed"/> is set, so they do not replace that terminal value.
         /// This method does not hold <see cref="_transportGate"/> across an await.
@@ -785,7 +786,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 idleQuit = State == NntpSessionState.Ready && !_unhealthy && _stream is not null;
                 stream = _upgradeOwnsTransport == 1 ? null : _stream;
                 _stream = null;
-                _reader = null;
+                DetachReader();
             }
 
             var holdsGate = false;
@@ -1183,6 +1184,28 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
         }
 
+        /// <summary>Stores <paramref name="reader"/> and returns the previous reader's payload scratch.</summary>
+        /// <param name="reader">Reader bound to the transport just published.</param>
+        /// <remarks>
+        /// Called under <see cref="_transportGate"/>. <see cref="NntpStreamReader.Dispose"/> does not wait.
+        /// A payload read still using the previous reader returns that scratch when the read finishes.
+        /// </remarks>
+        private void PublishReader(NntpStreamReader reader)
+        {
+            var previous = _reader;
+            _reader = reader;
+            previous?.Dispose();
+        }
+
+        /// <summary>Clears <see cref="_reader"/> and returns its payload scratch when no payload read is using it.</summary>
+        /// <remarks>Called under <see cref="_transportGate"/>. Does not dispose the transport.</remarks>
+        private void DetachReader()
+        {
+            var previous = _reader;
+            _reader = null;
+            previous?.Dispose();
+        }
+
         /// <summary>Stores <paramref name="connected"/> as the session transport when disposal has not won.</summary>
         /// <param name="connected">Stream returned by the transport factory. The caller disposes it when this returns <see langword="false"/>.</param>
         /// <returns><see langword="true"/> when <paramref name="connected"/> is now <see cref="_stream"/> and <see cref="State"/> is <see cref="NntpSessionState.Connected"/>.</returns>
@@ -1200,7 +1223,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
 
                 _stream = connected;
-                _reader = new NntpStreamReader(connected, _options.ReceiveBufferBytes);
+                PublishReader(new NntpStreamReader(connected, _options.ReceiveBufferBytes));
                 State = NntpSessionState.Connected;
                 return true;
             }
@@ -1225,7 +1248,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 if (ReferenceEquals(_stream, stream))
                 {
                     _stream = null;
-                    _reader = null;
+                    DetachReader();
                 }
             }
 
@@ -1247,7 +1270,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
 
                 _stream = ssl;
-                _reader = new NntpStreamReader(ssl, _options.ReceiveBufferBytes);
+                PublishReader(new NntpStreamReader(ssl, _options.ReceiveBufferBytes));
                 return true;
             }
         }
@@ -1264,7 +1287,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 if (Volatile.Read(ref _disposed) == 0)
                 {
                     _stream = null;
-                    _reader = null;
+                    DetachReader();
                 }
             }
         }
