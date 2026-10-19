@@ -319,6 +319,123 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
+        /// A cancelled permit wait that drains the only wakeup restores it for a waiter already counted.
+        /// The survivor acquires without a second release, and repeated cycles do not drift the permit counts.
+        /// </summary>
+        [Fact]
+        public async Task Cancelled_permit_wait_does_not_consume_the_only_wakeup()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            EnqueueReadyServers(factory, count: 1);
+            var pool = CreatePool(factory, max: 1);
+            NntpSessionLease? held = null;
+            Task<NntpSessionLease>? cancelled = null;
+            Task<NntpSessionLease>? survivor = null;
+            Task<NntpSessionLease>? follower = null;
+            var releaseCancelledDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseSurvivorWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+
+                for (var cycle = 0; cycle < 8; cycle++)
+                {
+                    held = await pool.AcquireAsync(CancellationToken.None);
+                    Assert.Equal(0, pool.AvailablePermitCount);
+                    Assert.Equal(1, pool.ActiveLeaseCount);
+
+                    var waitsEntered = 0;
+                    var survivorWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    var drainEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    releaseCancelledDrain = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    releaseSurvivorWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    using var cancel = new CancellationTokenSource();
+                    try
+                    {
+                        pool.BeforePermitWait = () =>
+                        {
+                            if (Interlocked.Increment(ref waitsEntered) == 2)
+                            {
+                                survivorWaiting.TrySetResult();
+                                return releaseSurvivorWait.Task;
+                            }
+
+                            return Task.CompletedTask;
+                        };
+                        pool.BeforeCancelledPermitDrain = () =>
+                        {
+                            drainEntered.TrySetResult();
+                            return releaseCancelledDrain.Task;
+                        };
+
+                        cancelled = pool.AcquireAsync(cancel.Token);
+                        await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
+                        survivor = pool.AcquireAsync(CancellationToken.None);
+                        await survivorWaiting.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                        Assert.Equal(2, pool.PermitWaiterCount);
+
+                        cancel.Cancel();
+                        await drainEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                        await held.DisposeAsync();
+                        held = null;
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+
+                        releaseCancelledDrain.TrySetResult();
+                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.PermitReservationCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+                        pool.BeforeCancelledPermitDrain = null;
+                        pool.BeforePermitWait = null;
+
+                        releaseSurvivorWait.TrySetResult();
+                        var gained = await survivor.WaitAsync(TimeSpan.FromSeconds(2));
+                        Assert.Equal(1, pool.ActiveLeaseCount);
+                        Assert.Equal(0, pool.AvailablePermitCount);
+                        Assert.Equal(1, pool.PermitReservationCount);
+
+                        follower = pool.AcquireAsync(CancellationToken.None);
+                        await WaitUntilAsync(() => pool.PermitWaiterCount == 1);
+                        Assert.False(follower.IsCompleted);
+
+                        await gained.DisposeAsync();
+                        var followed = await follower.WaitAsync(TimeSpan.FromSeconds(2));
+                        await followed.DisposeAsync();
+                        follower = null;
+                        survivor = null;
+                        cancelled = null;
+                        Assert.Equal(1, pool.AvailablePermitCount);
+                        Assert.Equal(0, pool.PermitReservationCount);
+                        Assert.Equal(0, pool.ActiveLeaseCount);
+                        Assert.Equal(0, pool.PermitWaiterCount);
+                    }
+                    finally
+                    {
+                        releaseCancelledDrain.TrySetResult();
+                        releaseSurvivorWait.TrySetResult();
+                    }
+                }
+            }
+            finally
+            {
+                releaseCancelledDrain.TrySetResult();
+                releaseSurvivorWait.TrySetResult();
+                pool.BeforePermitWait = null;
+                pool.BeforeCancelledPermitDrain = null;
+                if (held is not null)
+                {
+                    await held.DisposeAsync();
+                }
+
+                await SettleAcquireAsync(cancelled);
+                await SettleAcquireAsync(survivor);
+                await SettleAcquireAsync(follower);
+                await pool.DisposeAsync();
+            }
+        }
+
+        /// <summary>
         /// Released healthy lease reuses the same connection when max is one.
         /// </summary>
 

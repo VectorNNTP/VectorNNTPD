@@ -52,6 +52,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>
         /// Wakeup signal for <see cref="AcquirePermitAsync"/> waiters. The count is not the pool capacity.
         /// <see cref="ReleasePermit"/> releases one count only when <see cref="_permitWaiters"/> is positive.
+        /// A cancelled waiter that drains that count posts it again while another waiter is still counted,
+        /// so an available permit cannot be left with no wakeup.
         /// </summary>
         // codeql[cs/missed-using-statement] Owned for the pool lifetime. A using at this declaration would release it when the constructor returns. Shutdown disposes it once, after retirement, and a second dispose returns before that finally.
         private readonly SemaphoreSlim _leases = new(0);
@@ -168,6 +170,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Null in production. The delegate runs before those waiters are drained and before <see cref="_leases"/> is disposed.
         /// </summary>
         private Func<Task>? _beforePermitWaiterDrain;
+
+        /// <summary>
+        /// Test gate invoked after a permit waiter is counted and before it waits on <see cref="_leases"/>.
+        /// Null in production. The delegate runs outside <see cref="_permitGate"/>.
+        /// </summary>
+        private Func<Task>? _beforePermitWait;
+
+        /// <summary>
+        /// Test gate invoked after a permit wait has failed and before that waiter drains a raced release.
+        /// Null in production. The waiter is still counted. The delegate runs outside <see cref="_permitGate"/>.
+        /// </summary>
+        private Func<Task>? _beforeCancelledPermitDrain;
 
         /// <summary>Permit waiters still inside <see cref="AcquirePermitAsync"/> when semaphores are about to be disposed. Zero when the drain finished.</summary>
         private int _permitWaitersAtSemaphoreDispose;
@@ -584,6 +598,27 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             get => _beforePermitWaiterDrain;
             set => _beforePermitWaiterDrain = value;
+        }
+
+        /// <summary>
+        /// Pauses a permit waiter after it is counted and before <see cref="SemaphoreSlim.WaitAsync(CancellationToken)"/>.
+        /// Null unless a test is holding that window. The delegate runs outside <see cref="_permitGate"/>.
+        /// </summary>
+        internal Func<Task>? BeforePermitWait
+        {
+            get => _beforePermitWait;
+            set => _beforePermitWait = value;
+        }
+
+        /// <summary>
+        /// Pauses a failed permit wait after that waiter has left the semaphore and before it drains a raced count.
+        /// The waiter is still included in <see cref="PermitWaiterCount"/>. Null unless a test is holding that window.
+        /// The delegate runs outside <see cref="_permitGate"/>.
+        /// </summary>
+        internal Func<Task>? BeforeCancelledPermitDrain
+        {
+            get => _beforeCancelledPermitDrain;
+            set => _beforeCancelledPermitDrain = value;
         }
 
         /// <summary>
@@ -1327,7 +1362,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> is cancelled while waiting.</exception>
         /// <remarks>
         /// The fast path takes <see cref="_permitGate"/> only long enough to decrement <see cref="_availablePermits"/> and increment <see cref="_permitReservations"/>.
-        /// The wait itself does not hold that lock. A signal that arrives after cancellation is consumed so it cannot grant a later waiter twice.
+        /// The wait itself does not hold that lock.
+        /// A release is paired with a counted waiter. If that waiter fails and <see cref="SemaphoreSlim.Wait(int)"/> drains the release,
+        /// the same count is posted again while <see cref="_permitWaiters"/> is still positive. It is not posted when no waiter remains,
+        /// because the permit stays in <see cref="_availablePermits"/> for the next fast path.
         /// </remarks>
         private async Task AcquirePermitAsync(CancellationToken cancellationToken)
         {
@@ -1348,20 +1386,48 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                 try
                 {
+                    if (_beforePermitWait is { } beforeWait)
+                    {
+                        await beforeWait().ConfigureAwait(false);
+                    }
+
                     await _leases.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception)
                 {
-                    lock (_permitGate)
+                    try
                     {
-                        _permitWaiters--;
-                        try
+                        if (_beforeCancelledPermitDrain is { } beforeDrain)
                         {
-                            _ = _leases.Wait(0);
+                            await beforeDrain().ConfigureAwait(false);
                         }
-                        catch (ObjectDisposedException)
+                    }
+                    finally
+                    {
+                        lock (_permitGate)
                         {
-                            ShutdownObservations.AlreadyDisposed(_logger, "lease permit wait");
+                            _permitWaiters--;
+                            var consumedRelease = false;
+                            try
+                            {
+                                consumedRelease = _leases.Wait(0);
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                ShutdownObservations.AlreadyDisposed(_logger, "lease permit wait");
+                            }
+
+                            if (consumedRelease && _permitWaiters > 0)
+                            {
+                                try
+                                {
+                                    _leases.Release();
+                                }
+                                catch (ObjectDisposedException)
+                                {
+                                    ShutdownObservations.AlreadyDisposed(_logger, "lease permit release");
+                                }
+                            }
                         }
                     }
 
