@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Serilog.Debugging;
 using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
@@ -365,6 +366,11 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// The service is stopping, runtime options were not projected, or the opened connection is not usable.
         /// The unusable connection is disposed before the exception is thrown.
         /// </exception>
+        /// <remarks>
+        /// After <see cref="Publish"/> succeeds, <see cref="RaiseConnectionReplaced"/> isolates subscriber exceptions
+        /// so they cannot fail this method or cause <see cref="RecoverAsync"/> to treat the install as failed.
+        /// Failures before publication still dispose the unpublished connection and rethrow.
+        /// </remarks>
         private async Task<long> ConnectAndInstallAsync(
             bool startup,
             bool logConnect,
@@ -425,11 +431,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     live.Current.Generation,
                     elapsedMs);
 
-                ConnectionReplaced?.Invoke(
-                    this,
-                    new RabbitMqConnectionReplacedEventArgs(
-                        live.Current.Generation,
-                        live.Current.Generation > 1));
+                // After Publish, the generation is authoritative. Subscriber failures must not fail connect
+                // or cause RecoverAsync to retire this working connection.
+                RaiseConnectionReplaced(live.Current.Generation, live.Current.Generation > 1);
 
                 return live.Current.Generation;
             }
@@ -454,6 +458,76 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Invokes each <see cref="ConnectionReplaced"/> subscriber after a generation is published.
+        /// </summary>
+        /// <param name="generation">Installed connection generation.</param>
+        /// <param name="isReplacement"><see langword="true"/> when a prior generation existed.</param>
+        /// <remarks>
+        /// Handlers run one at a time outside <see cref="_gate"/>. A non-fatal exception from one subscriber is logged and
+        /// does not prevent later subscribers from running, and does not invalidate the published generation.
+        /// Logging of a subscriber failure is also contained so a non-fatal diagnostic failure cannot fail connect or recover.
+        /// <see cref="ExceptionHelpers.IsFatal"/> failures propagate.
+        /// </remarks>
+        private void RaiseConnectionReplaced(long generation, bool isReplacement)
+        {
+            var handlers = ConnectionReplaced;
+            if (handlers is null)
+            {
+                return;
+            }
+
+            var args = new RabbitMqConnectionReplacedEventArgs(generation, isReplacement);
+            foreach (var handler in handlers.GetInvocationList()
+                         .Cast<EventHandler<RabbitMqConnectionReplacedEventArgs>>())
+            {
+                try
+                {
+                    handler(this, args);
+                }
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+                {
+                    try
+                    {
+                        RabbitMqLogMessages.ConnectionReplacedHandlerFailed(
+                            _logger,
+                            ex,
+                            generation,
+                            DescribeConnectionReplacedSubscriber(handler));
+                    }
+                    catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
+                    {
+                        try
+                        {
+                            SelfLog.WriteLine(
+                                "ConnectionReplaced handler failure log failed after generation {0}: {1}",
+                                generation,
+                                logFailure);
+                        }
+                        catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
+                        {
+                            // Handler and its diagnostic log are both best-effort after Publish.
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Formats a multicast handler identity for structured logging.</summary>
+        /// <param name="handler">Subscriber from <see cref="Delegate.GetInvocationList"/>.</param>
+        /// <returns>Declaring type and method name, or a placeholder when metadata is unavailable.</returns>
+        private static string DescribeConnectionReplacedSubscriber(
+            EventHandler<RabbitMqConnectionReplacedEventArgs> handler)
+        {
+            var declaringType = handler.Method.DeclaringType?.FullName;
+            if (string.IsNullOrEmpty(declaringType))
+            {
+                return handler.Method.Name;
+            }
+
+            return declaringType + "." + handler.Method.Name;
         }
 
         /// <summary>

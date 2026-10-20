@@ -59,6 +59,102 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         }
 
         /// <summary>
+        /// A ConnectionReplaced subscriber that throws during initial install does not fail StartAsync or retire generation 1.
+        /// </summary>
+        [Fact]
+        public async Task StartAsync_succeeds_when_a_ConnectionReplaced_subscriber_throws()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var logger = new CollectingLogger<RabbitMqService>();
+            var service = CreateService(factory, logger);
+            service.ConnectionReplaced += static (_, _) =>
+                throw new InvalidOperationException("subscriber boom on first connect");
+
+            await service.StartAsync(CancellationToken.None);
+
+            Assert.True(service.IsReady);
+            Assert.Equal(1, service.ConnectionGeneration);
+            Assert.True(service.TryGetCurrent(out var handle));
+            Assert.Same(factory.LastConnection, handle.Connection);
+            Assert.Equal(0, factory.LastConnection!.DisposeCount);
+            Assert.Contains(
+                logger.Entries,
+                static entry => entry.EventId.Id == 2820
+                    && entry.Message.Contains("generation 1", StringComparison.Ordinal));
+            Assert.Contains(logger.Messages, static message => message == "subscriber boom on first connect");
+
+            await service.DisposeAsync();
+        }
+
+        /// <summary>
+        /// One throwing ConnectionReplaced subscriber does not prevent later subscribers from receiving the event.
+        /// </summary>
+        [Fact]
+        public async Task ConnectionReplaced_continues_notifying_subscribers_after_one_throws()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var service = CreateService(factory);
+            var healthy = new List<RabbitMqConnectionReplacedEventArgs>();
+            service.ConnectionReplaced += static (_, _) =>
+                throw new InvalidOperationException("first subscriber failed");
+            service.ConnectionReplaced += (_, args) => healthy.Add(args);
+
+            await service.StartAsync(CancellationToken.None);
+
+            var observed = Assert.Single(healthy);
+            Assert.Equal(1, observed.ConnectionGeneration);
+            Assert.False(observed.IsReplacement);
+            Assert.True(service.IsReady);
+
+            await service.DisposeAsync();
+        }
+
+        /// <summary>
+        /// A throwing ConnectionReplaced subscriber during reconnect does not fail recovery or retire the new generation.
+        /// </summary>
+        [Fact]
+        public async Task ConnectionLost_keeps_replacement_when_a_ConnectionReplaced_subscriber_throws()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var logger = new CollectingLogger<RabbitMqService>();
+            var service = CreateService(factory, logger);
+            await service.StartAsync(CancellationToken.None);
+            var first = factory.LastConnection!;
+
+            service.ConnectionReplaced += (_, args) =>
+            {
+                if (args.IsReplacement)
+                {
+                    throw new InvalidOperationException("subscriber boom on replacement");
+                }
+            };
+
+            var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            factory.Connected = secondConnected;
+            first.SimulateLost();
+
+            using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await secondConnected.Task.WaitAsync(safety.Token);
+
+            Assert.Equal(2, service.ConnectionGeneration);
+            Assert.True(service.IsReady);
+            Assert.Equal(1, first.DisposeCount);
+            Assert.True(service.TryGetCurrent(out var current));
+            Assert.Same(factory.LastConnection, current.Connection);
+            Assert.Equal(0, factory.LastConnection!.DisposeCount);
+            Assert.Contains(
+                logger.Entries,
+                static entry => entry.EventId.Id == 2820
+                    && entry.Message.Contains("generation 2", StringComparison.Ordinal));
+            Assert.Contains(logger.Messages, static message => message == "subscriber boom on replacement");
+            Assert.DoesNotContain(
+                logger.Entries,
+                static entry => entry.EventId.Id == 2810);
+
+            await service.DisposeAsync();
+        }
+
+        /// <summary>
         /// Connect exception fails startup without marking service ready.
         /// </summary>
 
