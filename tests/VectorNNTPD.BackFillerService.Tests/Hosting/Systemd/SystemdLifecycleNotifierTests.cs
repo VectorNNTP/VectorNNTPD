@@ -251,37 +251,53 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
         public async Task Readiness_ConcurrentTriggers_DoNotDuplicateReady()
         {
             var notify = new FakeSystemdNotifyBridge();
-            var gate = new ManualResetEventSlim(false);
+            using var gate = new ManualResetEventSlim(false);
+            using var start = new ManualResetEventSlim(false);
             notify.BlockReadyUntil = gate;
             var lifetime = new TestHostApplicationLifetime();
             var health = new BackFillerApplicationHealth();
             health.MarkCertificateUnavailable();
             using var notifier = CreateNotifier(lifetime, health, notify);
 
-            await notifier.StartAsync(CancellationToken.None);
-            lifetime.SignalStarted();
-            Assert.Equal(0, notify.ReadyCount);
+            Task[]? workers = null;
+            try
+            {
+                await notifier.StartAsync(CancellationToken.None);
+                lifetime.SignalStarted();
+                Assert.Equal(0, notify.ReadyCount);
 
-            var start = new ManualResetEventSlim(false);
-            var workers = Enumerable.Range(0, 8)
-                .Select(_ => Task.Run(() =>
+                workers = Enumerable.Range(0, 8)
+                    .Select(_ => Task.Run(() =>
+                    {
+                        start.Wait();
+                        health.MarkCertificateAvailable();
+                    }))
+                    .ToArray();
+
+                start.Set();
+                await notify.ReadyAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Equal(1, notify.ReadyAttemptCount);
+                Assert.Equal(0, notify.ReadyCount);
+
+                gate.Set();
+                await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(2));
+                workers = null;
+                await notify.ReadySent.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+                Assert.Equal(1, notify.ReadyCount);
+                Assert.True(notify.ReadyAttemptCount >= 1);
+            }
+            finally
+            {
+                // Unblock any waiter before disposing the events (including when an assertion fails mid-test).
+                start.Set();
+                gate.Set();
+                notify.BlockReadyUntil = null;
+                if (workers is not null)
                 {
-                    start.Wait();
-                    health.MarkCertificateAvailable();
-                }))
-                .ToArray();
-
-            start.Set();
-            await notify.ReadyAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.Equal(1, notify.ReadyAttemptCount);
-            Assert.Equal(0, notify.ReadyCount);
-
-            gate.Set();
-            await Task.WhenAll(workers);
-            await notify.ReadySent.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-            Assert.Equal(1, notify.ReadyCount);
-            Assert.True(notify.ReadyAttemptCount >= 1);
+                    await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(2));
+                }
+            }
         }
 
         /// <summary>Disposal cancels retries and prevents a later health recovery from emitting READY.</summary>
@@ -292,7 +308,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
             var notify = new FakeSystemdNotifyBridge { ReadyFailuresRemaining = 5 };
             var lifetime = new TestHostApplicationLifetime();
             var health = new BackFillerApplicationHealth();
-            var notifier = CreateNotifier(lifetime, health, notify, time: time);
+            using var notifier = CreateNotifier(lifetime, health, notify, time: time);
 
             await notifier.StartAsync(CancellationToken.None);
             lifetime.SignalStarted();

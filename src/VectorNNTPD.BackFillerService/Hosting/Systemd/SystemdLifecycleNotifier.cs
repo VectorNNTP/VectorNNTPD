@@ -270,7 +270,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
 
             try
             {
-                if (!_subscribed || Volatile.Read(ref _readyTerminal) != 0)
+                if (Volatile.Read(ref _readyTerminal) != 0)
                 {
                     return;
                 }
