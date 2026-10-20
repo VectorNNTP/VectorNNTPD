@@ -2,7 +2,7 @@
   "BackFiller": {
     "AcmeStateDir": "certs/",
     "ArticleRetention": {
-      "MaximumRetainedPayloadGigabytes": 8,
+      "MaximumRetainedPayloadGigabytes": 4,
       "MaxOpenableRequestIdsPerArticle": 16,
       "RetentionTtlSeconds": 10,
       "SweepIntervalSeconds": 1

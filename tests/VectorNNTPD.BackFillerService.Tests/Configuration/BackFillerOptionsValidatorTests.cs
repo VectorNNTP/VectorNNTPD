@@ -16,6 +16,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
 
     public sealed class BackFillerOptionsValidatorTests
     {
+        private static readonly string ExpectedMinimumPhysicalMemoryPhrase =
+            $"at least {BackFillerArticleRetentionOptions.MinimumPhysicalMemoryGibibytes} GiB ({BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes} bytes) of physical RAM";
+
         /// <summary>
         /// Valid baseline configuration passes validation.
         /// </summary>
@@ -226,11 +229,141 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         public void Validate_fails_when_retention_exceeds_physical_memory_ceiling()
         {
             var options = BackFillerTestOptions.CreateValid();
-            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 8;
-            var memory = new FakePhysicalMemoryProvider(4L * 1024 * 1024 * 1024);
+            // 8 GiB host → truncated 80% ceiling is 6 GiB.
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 7;
+            var memory = new FakePhysicalMemoryProvider(BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes);
             var result = BackFillerTestOptions.CreateValidator(memory: memory).Validate(null, options);
             Assert.True(result.Failed);
-            Assert.Contains(result.Failures!, static f => f.Contains("physical-memory", StringComparison.Ordinal));
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("80% physical-memory ceiling (6 GiB)", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                result.Failures!,
+                static f => f.Contains("of physical RAM; detected", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Hosts just below 8 GiB of physical RAM are rejected at startup validation.
+        /// </summary>
+        [Fact]
+        public void Validate_fails_when_physical_memory_is_below_eight_gib()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            var belowMinimum = BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes - 1;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(belowMinimum))
+                .Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                f => f.Contains(ExpectedMinimumPhysicalMemoryPhrase, StringComparison.Ordinal)
+                    && f.Contains(belowMinimum.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                result.Failures!,
+                static f => f.Contains("80% physical-memory ceiling", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Exactly 8 GiB satisfies the host-memory prerequisite; default retention fits the truncated 6 GiB ceiling.
+        /// </summary>
+        [Fact]
+        public void Validate_accepts_default_retention_on_exactly_eight_gib_host()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            Assert.Equal(4, options.ArticleRetention.MaximumRetainedPayloadGigabytes);
+            Assert.Equal(
+                6,
+                BackFillerOptionsValidator.ComputePhysicalMemoryRetentionCeilingGigabytes(
+                    BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes));
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes))
+                .Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        /// <summary>
+        /// Hosts above 8 GiB pass the host-memory prerequisite when retention fits the truncated ceiling.
+        /// </summary>
+        [Fact]
+        public void Validate_accepts_host_memory_above_eight_gib_when_retention_fits_ceiling()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 1;
+            var nineGib = 9L * BackFillerArticleRetentionOptions.BytesPerGibibyte;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(nineGib))
+                .Validate(null, options);
+            Assert.True(result.Succeeded);
+            Assert.Equal(7, BackFillerOptionsValidator.ComputePhysicalMemoryRetentionCeilingGigabytes(nineGib));
+        }
+
+        /// <summary>
+        /// Retention equal to the truncated 80% ceiling is accepted on an 8 GiB host (6 GiB, not 6.4).
+        /// </summary>
+        [Fact]
+        public void Validate_accepts_retention_at_truncated_eighty_percent_ceiling_on_eight_gib_host()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 6;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes))
+                .Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        /// <summary>
+        /// The 80% ceiling is truncated with no artificial 1 GiB floor (7 GiB rejected on an 8 GiB host).
+        /// </summary>
+        [Fact]
+        public void Validate_rejects_retention_above_truncated_eighty_percent_ceiling_without_artificial_floor()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 7;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes))
+                .Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("80% physical-memory ceiling (6 GiB)", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// An explicit retention value cannot bypass the host-memory prerequisite on a sub-8 GiB host.
+        /// </summary>
+        [Fact]
+        public void Validate_rejects_sub_eight_gib_host_even_with_explicit_retention()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 1;
+            var bytes = BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes - 1;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(bytes))
+                .Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                f => f.Contains(ExpectedMinimumPhysicalMemoryPhrase, StringComparison.Ordinal)
+                    && f.Contains(bytes.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Valid baseline configuration passes validation on intended 32 GiB and 64 GiB production hosts.
+        /// </summary>
+        [Theory]
+        [InlineData(32)]
+        [InlineData(64)]
+        public void Validate_accepts_default_retention_on_intended_production_host_sizes(int hostGibibytes)
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 4;
+            var totalBytes = hostGibibytes * BackFillerArticleRetentionOptions.BytesPerGibibyte;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(totalBytes))
+                .Validate(null, options);
+            Assert.True(result.Succeeded);
+            Assert.True(
+                BackFillerOptionsValidator.ComputePhysicalMemoryRetentionCeilingGigabytes(totalBytes) >= 4);
         }
 
         /// <summary>
@@ -262,7 +395,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.True(result.Failed);
             Assert.Contains(
                 result.Failures!,
-                static f => f.Contains("total physical memory could not be determined", StringComparison.Ordinal));
+                static f => f.Contains(ExpectedMinimumPhysicalMemoryPhrase, StringComparison.Ordinal)
+                    && f.Contains("total physical memory could not be determined", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                result.Failures!,
+                static f => f.Contains("80% physical-memory ceiling", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// A non-positive detected total is treated as below the host minimum (invalid memory).
+        /// </summary>
+        [Fact]
+        public void Validate_fails_when_physical_memory_is_zero()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(0))
+                .Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains(ExpectedMinimumPhysicalMemoryPhrase, StringComparison.Ordinal)
+                    && f.Contains("detected 0 bytes", StringComparison.Ordinal));
             Assert.DoesNotContain(
                 result.Failures!,
                 static f => f.Contains("80% physical-memory ceiling", StringComparison.Ordinal));

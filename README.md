@@ -42,6 +42,10 @@ Native AOT publish keeps trim and AOT analysis enabled. CI then runs the publish
 
 BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, ACME certificate management, the Cloudflare DNS API client, authoritative DNS queries used for DNS-01, RabbitMQ connectivity, and article parsing and validation. It keeps its own `ApplicationServiceManager` and does not use Common's `ApplicationLifecycle`. BackFiller still owns certificate watchdog health, the decision to publish listener-bound A/AAAA records only after the cache listener binds, Article Work topology, the RabbitMQ hosted adapter, and the retained article image that dot-stuffs body lines after Common's parser accepts the article.
 
+## Host requirements
+
+**Minimum supported physical RAM: 8 GiB.** Intended production hosts are **32–64 GiB**. Startup validation fails when total physical memory cannot be determined or is below the minimum. Article retention capacity is further limited to 80% of detected physical memory (truncated to whole gibibytes; at 8 GiB that ceiling is 6 GiB). See `docs/configuration.md`.
+
 ## Linux service
 
 `tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTPD.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.

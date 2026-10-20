@@ -1,11 +1,14 @@
 namespace VectorNNTPD.BackFillerService.Configuration
 {
     /// <summary>
-    /// Supplies total physical RAM for article-retention startup capacity validation.
+    /// Supplies total physical RAM for host startup prerequisites and article-retention capacity validation.
     /// </summary>
     /// <remarks>
     /// Implementations must return total physical system memory, not available memory,
     /// process memory, GC heap limits, or container/cgroup limits.
+    /// <see cref="BackFillerOptionsValidator"/> requires at least
+    /// <see cref="BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes"/> and rejects startup when
+    /// this probe fails.
     /// </remarks>
     internal interface IPhysicalMemoryProvider
     {

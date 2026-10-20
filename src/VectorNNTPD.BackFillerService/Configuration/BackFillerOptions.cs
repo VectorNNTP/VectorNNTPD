@@ -426,17 +426,39 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <summary>Bytes in one gibibyte.</summary>
         internal const long BytesPerGibibyte = 1024L * 1024L * 1024L;
 
+        /// <summary>
+        /// Minimum supported host physical RAM in whole gibibytes (8 GiB).
+        /// </summary>
+        /// <remarks>
+        /// This is the production floor enforced at <c>ValidateOnStart</c>. Intended production hosts are 32–64 GiB.
+        /// Derived byte form: <see cref="MinimumPhysicalMemoryBytes"/>.
+        /// </remarks>
+        internal const int MinimumPhysicalMemoryGibibytes = 8;
+
+        /// <summary>
+        /// Minimum total physical RAM required to start the host
+        /// (<see cref="MinimumPhysicalMemoryGibibytes"/> × <see cref="BytesPerGibibyte"/>).
+        /// </summary>
+        /// <remarks>
+        /// Enforced by <see cref="BackFillerOptionsValidator"/>. Distinct from the 80% retention ceiling.
+        /// </remarks>
+        internal const long MinimumPhysicalMemoryBytes =
+            MinimumPhysicalMemoryGibibytes * BytesPerGibibyte;
+
         /// <summary>Fraction of physical memory allowed for retained payloads.</summary>
         internal const double PhysicalMemoryCeilingRatio = 0.80;
 
         /// <summary>
-        /// Maximum retained payload capacity in GiB.
+        /// Maximum retained payload capacity in whole GiB.
         /// Under pressure, FIFO reclaim skips entries that still have openable Success RequestIds;
         /// new admissions may then fail with capacity unavailable instead of invalidating those capabilities.
         /// </summary>
         /// <remarks>
-        /// Default 4. Validation requires a positive value that does not exceed 80 percent of physical memory
-        /// or the largest GiB count that fits in a 64-bit byte length. The snapshot stores the value in bytes.
+        /// Default 4. The option is an integer gibibyte count (no fractional GiB). Validation requires a positive
+        /// value that does not exceed 80 percent of physical memory truncated down to whole gibibytes (no artificial
+        /// floor), and does not exceed the largest GiB count that fits in a 64-bit byte length. On an 8 GiB host the
+        /// truncated ceiling is 6 GiB, so the default remains valid. The host must also meet
+        /// <see cref="MinimumPhysicalMemoryBytes"/>. The snapshot stores the value in bytes.
         /// </remarks>
         public int MaximumRetainedPayloadGigabytes { get; set; } = 4;
 
