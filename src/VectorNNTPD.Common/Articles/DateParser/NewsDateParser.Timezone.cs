@@ -14,14 +14,20 @@ namespace VectorNNTPD.Common.Articles.DateParser
         private static bool IsAsciiLetter(byte value) => (uint)((value | 0x20) - (byte)'a') <= 'z' - 'a';
 
         /// <summary>
-        /// Finds a trailing ASCII letter run of length 2 through 8 that is preceded by SP or HTAB.
+        /// Finds a trailing timezone token: either <c>UTC+0</c>..<c>UTC+9</c> / <c>UTC-1</c>..<c>UTC-9</c>,
+        /// or an ASCII letter run of length 2 through 8. Both forms require a preceding SP or HTAB.
         /// </summary>
         /// <param name="input">Date bytes.</param>
-        /// <param name="abbrStart">Index of the first letter on success; otherwise 0.</param>
-        /// <param name="abbrLength">Letter-run length on success; otherwise 0. The preceding whitespace is not included.</param>
-        /// <returns><see langword="false"/> when the last byte is not a letter, the run is outside 2..8, or it is not preceded by SP or HTAB.</returns>
+        /// <param name="abbrStart">Index of the first token byte on success; otherwise 0.</param>
+        /// <param name="abbrLength">Token length on success; otherwise 0. The preceding whitespace is not included.</param>
+        /// <returns><see langword="false"/> when neither form matches.</returns>
         private static bool TryGetTrailingAbbreviation(ReadOnlySpan<byte> input, out int abbrStart, out int abbrLength)
         {
+            if (TryGetTrailingUtcNumericForm(input, out abbrStart, out abbrLength))
+            {
+                return true;
+            }
+
             abbrStart = 0;
             abbrLength = 0;
             if (input.IsEmpty || !IsAsciiLetter(input[^1]))
@@ -52,14 +58,91 @@ namespace VectorNNTPD.Common.Articles.DateParser
         }
 
         /// <summary>
-        /// Reports a trailing abbreviation that is structurally valid and absent from <c>TimezoneMappings</c>.
+        /// Finds a trailing <c>UTC+N</c> or <c>UTC-N</c> token of the documented single-digit forms.
+        /// </summary>
+        /// <param name="input">Date bytes.</param>
+        /// <param name="tokenStart">Index of <c>U</c>/<c>u</c> on success; otherwise 0.</param>
+        /// <param name="tokenLength">Always 5 on success; otherwise 0.</param>
+        /// <returns>
+        /// <see langword="true"/> for <c>UTC+0</c>..<c>UTC+9</c> and <c>UTC-1</c>..<c>UTC-9</c> (ASCII case-insensitive <c>UTC</c>),
+        /// preceded by SP or HTAB. Rejects <c>UTC-0</c>, multi-digit forms, and missing signs or digits.
+        /// </returns>
+        private static bool TryGetTrailingUtcNumericForm(
+            ReadOnlySpan<byte> input,
+            out int tokenStart,
+            out int tokenLength)
+        {
+            tokenStart = 0;
+            tokenLength = 0;
+            if (input.Length < 5)
+            {
+                return false;
+            }
+
+            var digit = input[^1];
+            var sign = input[^2];
+            if (sign == (byte)'+')
+            {
+                if (digit is < (byte)'0' or > (byte)'9')
+                {
+                    return false;
+                }
+            }
+            else if (sign == (byte)'-')
+            {
+                if (digit is < (byte)'1' or > (byte)'9')
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+
+            var start = input.Length - 5;
+            if (!IsUtcPrefix(input.Slice(start, 3)))
+            {
+                return false;
+            }
+
+            if (start == 0 || input[start - 1] is not ((byte)' ' or (byte)'\t'))
+            {
+                return false;
+            }
+
+            tokenStart = start;
+            tokenLength = 5;
+            return true;
+        }
+
+        /// <summary>Returns whether <paramref name="value"/> is ASCII <c>UTC</c> with case folding.</summary>
+        /// <param name="value">Three candidate bytes.</param>
+        /// <returns><see langword="true"/> only for those three letters.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsUtcPrefix(ReadOnlySpan<byte> value)
+            => value.Length == 3
+               && ToLowerAscii(value[0]) == (byte)'u'
+               && ToLowerAscii(value[1]) == (byte)'t'
+               && ToLowerAscii(value[2]) == (byte)'c';
+
+        /// <summary>
+        /// Reports a trailing alphabetic abbreviation that is structurally valid and absent from <c>TimezoneMappings</c>.
         /// </summary>
         /// <param name="cleaned">Date bytes after parenthetical stripping and whitespace normalization.</param>
         /// <param name="abbreviationLength">Letter-run length when the method returns <see langword="true"/>; otherwise 0.</param>
-        /// <returns><see langword="false"/> when there is no trailing abbreviation or the abbreviation has a table offset.</returns>
+        /// <returns>
+        /// <see langword="false"/> when there is no trailing letter abbreviation or the abbreviation has a table offset.
+        /// Documented <c>UTC±N</c> forms are known tokens and are not reported here. Malformed numeric UTC spellings are left for exact parse failure.
+        /// </returns>
         private static bool TryGetUnknownTrailingAbbreviation(ReadOnlySpan<byte> cleaned, out int abbreviationLength)
         {
             abbreviationLength = 0;
+            if (cleaned.IsEmpty || !IsAsciiLetter(cleaned[^1]))
+            {
+                return false;
+            }
+
             if (!TryGetTrailingAbbreviation(cleaned, out var start, out var length))
             {
                 return false;
@@ -75,13 +158,13 @@ namespace VectorNNTPD.Common.Articles.DateParser
         }
 
         /// <summary>
-        /// Replaces a known trailing abbreviation with its table offset when the replacement fits.
+        /// Replaces a known trailing abbreviation or <c>UTC±N</c> token with its table offset when the replacement fits.
         /// </summary>
-        /// <param name="buffer">Working date bytes. The offset is copied over the abbreviation, not over the preceding whitespace.</param>
+        /// <param name="buffer">Working date bytes. The offset is copied over the token, not over the preceding whitespace.</param>
         /// <param name="length">Current significant length.</param>
         /// <param name="maxLength">Maximum length the substituted text may occupy.</param>
         /// <returns>
-        /// <paramref name="length"/> when there is no trailing abbreviation, it is unknown, or
+        /// <paramref name="length"/> when there is no trailing token, it is unknown, or
         /// <c>start + offset.Length</c> exceeds <paramref name="maxLength"/>. Otherwise the index just after the copied offset.
         /// Bytes past the returned length are not cleared.
         /// </returns>
