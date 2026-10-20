@@ -1,18 +1,29 @@
+using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Configuration;
+
 namespace VectorNNTPD.BackFillerService.Configuration
 {
     /// <summary>
-    /// Immutable validated runtime snapshot consumed by application services.
+    /// Validated runtime snapshot consumed by application services.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Produced once after successful validation. Services must not re-read
     /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> for these values.
     /// Never log a complete instance: <see cref="NntpDbRuntimeOptions.ConnectionString"/> is secret.
     /// RabbitMQ broker connectivity settings live on Common <c>RabbitMqOptions</c> /
     /// <c>RabbitMqService</c>; this snapshot only carries Article Work application knobs.
+    /// </para>
+    /// <para>
+    /// Non-identity fields are immutable record state. <see cref="DnsSuffix"/>, <see cref="Fqdn"/>, and
+    /// <see cref="CertificateDomainNames"/> live on a shared <see cref="DnsIdentity"/> box that starts as the
+    /// config-file provisional identity. After <c>nntpsharedconfig</c> is published,
+    /// <see cref="ApplySharedDnsIdentity"/> updates that box in place so every holder of this singleton
+    /// (and any <c>with</c> copy that shares the box) observes the authoritative FQDN.
+    /// </para>
     /// </remarks>
     /// <param name="ServerId">Validated BackFiller server id.</param>
-    /// <param name="DnsSuffix">Canonical DNS suffix.</param>
-    /// <param name="Fqdn">Generated FQDN taken from the bindable options.</param>
+    /// <param name="DnsIdentity">Mutable DNS identity box shared across <c>with</c> copies of this snapshot.</param>
     /// <param name="BindAddressTokens">Trimmed non-empty bind tokens, including wildcards.</param>
     /// <param name="BindPortTls">TLS listener port.</param>
     /// <param name="LogDirectory">Resolved file-log directory, or empty when the file target directory is blank.</param>
@@ -21,14 +32,12 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// <param name="Listener">Validated listener bounds.</param>
     /// <param name="ArticleRetention">Validated retention policy.</param>
     /// <param name="RabbitMq">Article Work RabbitMQ knobs projected from Common options.</param>
-    /// <param name="CertificateDomainNames">Certificate DNS identities for <paramref name="Fqdn"/>.</param>
     /// <param name="NntpDb">NntpDB connection projection. <see cref="NntpDbRuntimeOptions.ConnectionString"/> is secret.</param>
     /// <param name="AccountRefreshInterval">MySQL account-refresh poll interval.</param>
     /// <param name="Nntp">Validated outbound NNTP provider session bounds.</param>
     internal sealed record BackFillerRuntimeOptions(
         int ServerId,
-        string DnsSuffix,
-        string Fqdn,
+        BackFillerRuntimeDnsIdentity DnsIdentity,
         IReadOnlyList<string> BindAddressTokens,
         int BindPortTls,
         string LogDirectory,
@@ -37,10 +46,82 @@ namespace VectorNNTPD.BackFillerService.Configuration
         BackFillerListenerRuntimeOptions Listener,
         BackFillerArticleRetentionRuntimeOptions ArticleRetention,
         BackFillerRabbitMqRuntimeOptions RabbitMq,
-        IReadOnlyList<string> CertificateDomainNames,
         NntpDbRuntimeOptions NntpDb,
         TimeSpan AccountRefreshInterval,
-        BackFillerNntpRuntimeOptions Nntp);
+        BackFillerNntpRuntimeOptions Nntp)
+    {
+        /// <summary>Canonical DNS suffix. Updated by <see cref="ApplySharedDnsIdentity"/>.</summary>
+        internal string DnsSuffix => DnsIdentity.DnsSuffix;
+
+        /// <summary>Generated FQDN. Updated by <see cref="ApplySharedDnsIdentity"/>.</summary>
+        internal string Fqdn => DnsIdentity.Fqdn;
+
+        /// <summary>Certificate DNS identities for <see cref="Fqdn"/>. Updated by <see cref="ApplySharedDnsIdentity"/>.</summary>
+        internal IReadOnlyList<string> CertificateDomainNames => DnsIdentity.CertificateDomainNames;
+
+        /// <summary>
+        /// Replaces the provisional config-file DNS identity with the authoritative values from
+        /// <c>nntpsharedconfig</c>. Mutates <see cref="DnsIdentity"/> in place.
+        /// </summary>
+        /// <param name="dnsSuffix">Shared-configuration DNS suffix (canonicalized before store).</param>
+        /// <param name="fqdn">Already-validated application FQDN for this server id and suffix.</param>
+        /// <param name="includeNewsHostnameInCertificate">
+        /// When <see langword="true"/>, certificate identities include the news hostname convention.
+        /// </param>
+        internal void ApplySharedDnsIdentity(
+            string dnsSuffix,
+            string fqdn,
+            bool includeNewsHostnameInCertificate) =>
+            DnsIdentity.Apply(dnsSuffix, fqdn, includeNewsHostnameInCertificate);
+    }
+
+    /// <summary>
+    /// Mutable DNS identity for <see cref="BackFillerRuntimeOptions"/>. Shared by <c>with</c> copies of the snapshot.
+    /// </summary>
+    internal sealed class BackFillerRuntimeDnsIdentity
+    {
+        /// <summary>Creates the provisional identity from validated config-file values.</summary>
+        /// <param name="dnsSuffix">Canonical DNS suffix.</param>
+        /// <param name="fqdn">Generated FQDN.</param>
+        /// <param name="certificateDomainNames">Certificate DNS identities for <paramref name="fqdn"/>.</param>
+        internal BackFillerRuntimeDnsIdentity(
+            string dnsSuffix,
+            string fqdn,
+            IReadOnlyList<string> certificateDomainNames)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(dnsSuffix);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            ArgumentNullException.ThrowIfNull(certificateDomainNames);
+            DnsSuffix = dnsSuffix;
+            Fqdn = fqdn;
+            CertificateDomainNames = certificateDomainNames;
+        }
+
+        /// <summary>Canonical DNS suffix.</summary>
+        internal string DnsSuffix { get; private set; }
+
+        /// <summary>Generated FQDN.</summary>
+        internal string Fqdn { get; private set; }
+
+        /// <summary>Certificate DNS identities for <see cref="Fqdn"/>.</summary>
+        internal IReadOnlyList<string> CertificateDomainNames { get; private set; }
+
+        /// <summary>Replaces the provisional identity with shared-configuration values.</summary>
+        /// <param name="dnsSuffix">Shared-configuration DNS suffix.</param>
+        /// <param name="fqdn">Already-validated application FQDN.</param>
+        /// <param name="includeNewsHostnameInCertificate">Whether certificate identities include the news hostname.</param>
+        internal void Apply(
+            string dnsSuffix,
+            string fqdn,
+            bool includeNewsHostnameInCertificate)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(dnsSuffix);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            DnsSuffix = ApplicationFqdn.CanonicalizeDnsSuffix(dnsSuffix);
+            Fqdn = fqdn;
+            CertificateDomainNames = CertificateIdentities.ForFqdn(fqdn, includeNewsHostnameInCertificate);
+        }
+    }
 
     /// <summary>Validated shutdown policy captured in the runtime snapshot.</summary>
     /// <param name="GracePeriod">Complete application shutdown budget. Also drives host <c>ShutdownTimeout</c>.</param>

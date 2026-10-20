@@ -240,8 +240,7 @@ namespace VectorNNTPD.Common.Acme
             {
                 try
                 {
-                    Interlocked.Increment(ref _renewalWaitsStarted);
-                    await Task.Delay(RenewalCheckInterval, _time, cancellationToken).ConfigureAwait(false);
+                    await WaitRenewalIntervalAsync(cancellationToken).ConfigureAwait(false);
                     if (Volatile.Read(ref _renewalFaultsToInject) > 0
                         && Interlocked.Decrement(ref _renewalFaultsToInject) >= 0)
                     {
@@ -276,6 +275,29 @@ namespace VectorNNTPD.Common.Acme
                     Interlocked.Increment(ref _renewalChecksCompleted);
                 }
             }
+        }
+
+        /// <summary>
+        /// Arms a one-shot renewal timer on <see cref="_time"/>, then increments <see cref="_renewalWaitsStarted"/>.
+        /// The counter advances only after the timer is registered so observers waiting on
+        /// <see cref="RenewalWaitsStarted"/> can safely advance a manual clock without racing
+        /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>'s internal timer creation.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the wait when the renewal loop is stopped.</param>
+        /// <returns>A task that completes when the interval elapses or <paramref name="cancellationToken"/> is cancelled.</returns>
+        private async Task WaitRenewalIntervalAsync(CancellationToken cancellationToken)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                static state => ((TaskCompletionSource)state!).TrySetCanceled(),
+                completion);
+            using ITimer timer = _time.CreateTimer(
+                static state => ((TaskCompletionSource)state!).TrySetResult(),
+                completion,
+                RenewalCheckInterval,
+                Timeout.InfiniteTimeSpan);
+            Interlocked.Increment(ref _renewalWaitsStarted);
+            await completion.Task.ConfigureAwait(false);
         }
 
         /// <summary>

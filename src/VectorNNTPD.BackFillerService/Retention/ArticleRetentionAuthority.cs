@@ -85,8 +85,12 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// <summary>Per-entry cap on openable RequestIds, from 1 through 256 inclusive.</summary>
         private readonly int _maxOpenableRequestIdsPerArticle;
 
-        /// <summary>Listener host copied onto each newly retained entry. Existing entries keep the value from their admission.</summary>
-        private readonly string _fqdn;
+        /// <summary>
+        /// Supplies the listener host for newly retained entries when no per-endpoint FQDN is passed.
+        /// Reads the live runtime identity so a post-<c>nntpsharedconfig</c> FQDN update is observed.
+        /// Existing entries keep the value from their admission.
+        /// </summary>
+        private readonly Func<string> _fqdn;
 
         /// <summary>TLS listener port copied onto each newly retained entry. Existing entries keep the value from their admission.</summary>
         private readonly int _bindPort;
@@ -122,16 +126,17 @@ namespace VectorNNTPD.BackFillerService.Retention
 
         /// <summary>Creates the authority from validated runtime options.</summary>
         /// <param name="runtime">
-        /// Host snapshot. <see cref="BackFillerRuntimeOptions.ArticleRetention"/>,
-        /// <see cref="BackFillerRuntimeOptions.Fqdn"/>, and <see cref="BackFillerRuntimeOptions.BindPortTls"/>
-        /// are forwarded to the explicit constructor.
+        /// Host snapshot. <see cref="BackFillerRuntimeOptions.ArticleRetention"/> and
+        /// <see cref="BackFillerRuntimeOptions.BindPortTls"/> are snapshotted;
+        /// <see cref="BackFillerRuntimeOptions.Fqdn"/> is read on each admission fallback so a shared-config
+        /// identity update is observed.
         /// </param>
         /// <param name="time">Clock for admission timestamps, TTL, and sweep.</param>
         /// <param name="logger">Retention logger. Article bodies are not written.</param>
         /// <exception cref="ArgumentNullException">
         /// <paramref name="runtime"/>, <paramref name="time"/>, or <paramref name="logger"/> is <see langword="null"/>.
         /// </exception>
-        /// <exception cref="ArgumentException"><see cref="BackFillerRuntimeOptions.Fqdn"/> is null or whitespace.</exception>
+        /// <exception cref="ArgumentException"><see cref="BackFillerRuntimeOptions.Fqdn"/> is null or whitespace at construction.</exception>
         /// <exception cref="ArgumentOutOfRangeException">
         /// The retention policy or <see cref="BackFillerRuntimeOptions.BindPortTls"/> fails the explicit constructor.
         /// </exception>
@@ -141,7 +146,7 @@ namespace VectorNNTPD.BackFillerService.Retention
             ILogger<ArticleRetentionAuthority> logger)
             : this(
                 (runtime ?? throw new ArgumentNullException(nameof(runtime))).ArticleRetention,
-                runtime.Fqdn,
+                () => runtime.Fqdn,
                 runtime.BindPortTls,
                 time,
                 logger)
@@ -171,9 +176,41 @@ namespace VectorNNTPD.BackFillerService.Retention
             int bindPort,
             TimeProvider time,
             ILogger logger)
+            : this(retention, () => fqdn, bindPort, time, logger)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+        }
+
+        /// <summary>Creates the authority with a live FQDN provider (host runtime identity).</summary>
+        /// <param name="retention">Capacity, TTL, sweep interval, and per-article RequestId bound.</param>
+        /// <param name="fqdn">
+        /// Supplies the fallback listener host on each admission. Invoked only when no per-endpoint FQDN is passed.
+        /// Must return a non-whitespace value when invoked.
+        /// </param>
+        /// <param name="bindPort">TLS listener port stored on every newly retained entry. Inclusive range 1 through 65535.</param>
+        /// <param name="time">Clock for admission timestamps, TTL, and sweep.</param>
+        /// <param name="logger">Retention logger. Article bodies are not written.</param>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="retention"/>, <paramref name="fqdn"/>, <paramref name="time"/>, or <paramref name="logger"/> is <see langword="null"/>.
+        /// </exception>
+        /// <exception cref="ArgumentException">The value returned by <paramref name="fqdn"/> at construction is null or whitespace.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// <see cref="BackFillerArticleRetentionRuntimeOptions.MaximumRetainedPayloadBytes"/> is not positive,
+        /// <see cref="BackFillerArticleRetentionRuntimeOptions.RetentionTtl"/> or
+        /// <see cref="BackFillerArticleRetentionRuntimeOptions.SweepInterval"/> is not positive,
+        /// <see cref="BackFillerArticleRetentionRuntimeOptions.MaxOpenableRequestIdsPerArticle"/> is outside 1 through 256,
+        /// or <paramref name="bindPort"/> is outside 1 through 65535.
+        /// </exception>
+        private ArticleRetentionAuthority(
+            BackFillerArticleRetentionRuntimeOptions retention,
+            Func<string> fqdn,
+            int bindPort,
+            TimeProvider time,
+            ILogger logger)
         {
             ArgumentNullException.ThrowIfNull(retention);
-            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            ArgumentNullException.ThrowIfNull(fqdn);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn());
             ArgumentNullException.ThrowIfNull(time);
             ArgumentNullException.ThrowIfNull(logger);
             if (retention.MaximumRetainedPayloadBytes <= 0)
@@ -293,7 +330,7 @@ namespace VectorNNTPD.BackFillerService.Retention
             string? endpointFqdn = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
-            var admittedFqdn = string.IsNullOrWhiteSpace(endpointFqdn) ? _fqdn : endpointFqdn;
+            var admittedFqdn = string.IsNullOrWhiteSpace(endpointFqdn) ? _fqdn() : endpointFqdn;
             // ThrowIfEqual changes both the message and ActualValue, so replacing the existing ArgumentOutOfRangeException would be a
             // behavioral change for no functional benefit
 #pragma warning disable CA1512 // Use ArgumentOutOfRangeException throw helper

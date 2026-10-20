@@ -346,7 +346,7 @@ namespace VectorNNTPD.BackFillerService.Accounts
             }
         }
 
-        /// <summary>Copies one shared snapshot onto the live BackFiller, ACME, and RabbitMQ options.</summary>
+        /// <summary>Copies one shared snapshot onto the live BackFiller, ACME, RabbitMQ, and runtime identity.</summary>
         /// <param name="shared">Snapshot captured for this refresh.</param>
         /// <param name="fqdn">FQDN already checked for that same snapshot.</param>
         /// <remarks>
@@ -354,7 +354,8 @@ namespace VectorNNTPD.BackFillerService.Accounts
         /// <see cref="NntpSharedConfiguration.CopyRabbitMqCredentialsTo"/>. The application FQDN is assigned
         /// after the copy because the snapshot copy does not set it. BackFiller-owned option fields that
         /// mirror directory, renewal, zone, and suffix are assigned separately. Hosts, virtual host, and TLS
-        /// settings are left unchanged.
+        /// settings are left unchanged. <see cref="BackFillerRuntimeOptions.ApplySharedDnsIdentity"/> updates the
+        /// provisional config-file FQDN on the singleton runtime snapshot in place.
         /// </remarks>
         private void Project(NntpSharedConfiguration shared, string fqdn)
         {
@@ -367,6 +368,11 @@ namespace VectorNNTPD.BackFillerService.Accounts
             var acme = _acmeOptions.Value;
             shared.CopyAcmeDnsTo(acme);
             acme.Fqdn = fqdn;
+
+            _runtime.ApplySharedDnsIdentity(
+                shared.DnsSuffix,
+                fqdn,
+                acme.IncludeNewsHostnameInCertificate);
 
             var rabbit = _rabbitMq.Value;
             shared.CopyRabbitMqCredentialsTo(rabbit);
