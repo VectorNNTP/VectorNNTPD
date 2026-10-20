@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using Serilog.Debugging;
 using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
@@ -467,6 +468,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <remarks>
         /// Handlers run one at a time outside <see cref="_gate"/>. An exception from one subscriber is logged and
         /// does not prevent later subscribers from running, and does not invalidate the published generation.
+        /// Logging of a subscriber failure is also contained so a diagnostic failure cannot fail connect or recover.
         /// </remarks>
         private void RaiseConnectionReplaced(long generation, bool isReplacement)
         {
@@ -477,9 +479,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
 
             var args = new RabbitMqConnectionReplacedEventArgs(generation, isReplacement);
-            foreach (var subscriber in handlers.GetInvocationList())
+            foreach (var handler in handlers.GetInvocationList()
+                         .Cast<EventHandler<RabbitMqConnectionReplacedEventArgs>>())
             {
-                var handler = (EventHandler<RabbitMqConnectionReplacedEventArgs>)subscriber;
                 try
                 {
                     handler(this, args);
@@ -487,11 +489,30 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
                 catch (Exception ex)
                 {
-                    RabbitMqLogMessages.ConnectionReplacedHandlerFailed(
-                        _logger,
-                        ex,
-                        generation,
-                        DescribeConnectionReplacedSubscriber(handler));
+                    try
+                    {
+                        RabbitMqLogMessages.ConnectionReplacedHandlerFailed(
+                            _logger,
+                            ex,
+                            generation,
+                            DescribeConnectionReplacedSubscriber(handler));
+                    }
+                    // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
+                    catch (Exception logFailure)
+                    {
+                        try
+                        {
+                            SelfLog.WriteLine(
+                                "ConnectionReplaced handler failure log failed after generation {0}: {1}",
+                                generation,
+                                logFailure);
+                        }
+                        // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
+                        catch (Exception)
+                        {
+                            // Handler and its diagnostic log are both best-effort after Publish.
+                        }
+                    }
                 }
             }
         }
