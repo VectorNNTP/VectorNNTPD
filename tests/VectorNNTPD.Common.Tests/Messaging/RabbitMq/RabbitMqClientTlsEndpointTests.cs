@@ -225,7 +225,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             var san = new SubjectAlternativeNameBuilder();
             san.AddDnsName(dnsName);
             request.CertificateExtensions.Add(san.Build());
-            var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+            using var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
             return X509CertificateLoader.LoadPkcs12(
                 cert.Export(X509ContentType.Pfx),
                 password: null,
@@ -240,33 +240,26 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             X509Certificate2 serverCertificate,
             CancellationToken cancellationToken)
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            try
-            {
-                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-                var serverTask = AcceptAndCaptureSniAsync(listener, serverCertificate, cancellationToken);
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var serverTask = AcceptAndCaptureSniAsync(listener, serverCertificate, cancellationToken);
 
-                using var client = new TcpClient();
-                await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(false);
-                await using var clientStream = new SslStream(
-                    client.GetStream(),
-                    leaveInnerStreamOpen: false,
-                    userCertificateValidationCallback: static (_, _, _, _) => true);
-                var clientOptions = new SslClientAuthenticationOptions
-                {
-                    TargetHost = clientSsl.ServerName,
-                    EnabledSslProtocols = clientSsl.Version,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                };
-                await clientStream.AuthenticateAsClientAsync(clientOptions, cancellationToken).ConfigureAwait(false);
-
-                return await serverTask.ConfigureAwait(false);
-            }
-            finally
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(false);
+            await using var clientStream = new SslStream(
+                client.GetStream(),
+                leaveInnerStreamOpen: false,
+                userCertificateValidationCallback: static (_, _, _, _) => true);
+            var clientOptions = new SslClientAuthenticationOptions
             {
-                listener.Stop();
-            }
+                TargetHost = clientSsl.ServerName,
+                EnabledSslProtocols = clientSsl.Version,
+                CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
+            };
+            await clientStream.AuthenticateAsClientAsync(clientOptions, cancellationToken).ConfigureAwait(false);
+
+            return await serverTask.ConfigureAwait(false);
         }
 
         /// <summary>
@@ -298,11 +291,9 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         /// <summary>Binds an ephemeral local TCP port and returns its number after closing the socket.</summary>
         private static int GetUnusedTcpPort()
         {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return port;
+            return ((IPEndPoint)listener.LocalEndpoint).Port;
         }
     }
 }
