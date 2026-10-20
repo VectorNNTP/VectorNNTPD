@@ -590,7 +590,7 @@ namespace VectorNNTPD.Common.Tests.Dns
                         UdpReceiveResult datagram = await _udp.ReceiveAsync(_cts.Token).ConfigureAwait(false);
                         Interlocked.Increment(ref _queriesReceived);
                         byte[] buffer = datagram.Buffer;
-                        var remote = (IPEndPoint)datagram.RemoteEndPoint;
+                        IPEndPoint remote = datagram.RemoteEndPoint;
 
                         // Handle off the receive loop so concurrent queries are not serialized behind
                         // a slow or waiting script callback.
