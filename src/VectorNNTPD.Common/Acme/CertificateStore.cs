@@ -470,8 +470,8 @@ namespace VectorNNTPD.Common.Acme
         /// </returns>
         private bool TryDeleteCurrentPointer(string pointerPath)
         {
-            AtomicFile.TryDelete(pointerPath);
             ICertificateStoreFileAccess io = FileAccessForTests ?? RealCertificateStoreFileAccess.Instance;
+            io.TryDelete(pointerPath);
             try
             {
                 return !io.FileExists(pointerPath);
@@ -601,6 +601,13 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>Returns the length in bytes of <paramref name="path"/>.</summary>
         long GetFileLength(string path);
+
+        /// <summary>
+        /// Best-effort delete of <paramref name="path"/>.
+        /// Implementations may ignore <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>.
+        /// </summary>
+        /// <param name="path">File to delete when present.</param>
+        void TryDelete(string path);
     }
 
     /// <summary>Default <see cref="ICertificateStoreFileAccess"/> backed by <see cref="File"/> / <see cref="FileInfo"/>.</summary>
@@ -617,5 +624,8 @@ namespace VectorNNTPD.Common.Acme
 
         /// <inheritdoc />
         public long GetFileLength(string path) => new FileInfo(path).Length;
+
+        /// <inheritdoc />
+        public void TryDelete(string path) => AtomicFile.TryDelete(path);
     }
 }

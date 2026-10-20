@@ -273,23 +273,32 @@ namespace VectorNNTPD.Common.Tests.Acme
             string incompleteId = Guid.NewGuid().ToString("N");
             string incompleteDir = AcmePaths.GenerationDir(dir.Path, Fqdn, incompleteId);
             Directory.CreateDirectory(incompleteDir);
-            File.WriteAllBytes(AcmePaths.GenerationCertificatePaths(dir.Path, Fqdn, incompleteId).PfxPath, [0x01]);
+            byte[] incompletePfx = [0x01];
+            File.WriteAllBytes(AcmePaths.GenerationCertificatePaths(dir.Path, Fqdn, incompleteId).PfxPath, incompletePfx);
             string pointerPath = AcmePaths.CurrentGenerationPointerPath(dir.Path, Fqdn);
             File.WriteAllText(pointerPath, incompleteId + "\n");
-            File.SetAttributes(pointerPath, FileAttributes.ReadOnly);
 
-            try
-            {
-                var ex = Assert.Throws<AcmeStorageException>(() => store.Recover());
-                Assert.Equal("current_pointer_delete_failed", ex.Category);
-                Assert.Contains(incompleteId, ex.Message, StringComparison.Ordinal);
-                Assert.True(File.Exists(pointerPath));
-                Assert.True(Directory.Exists(incompleteDir));
-            }
-            finally
-            {
-                File.SetAttributes(pointerPath, FileAttributes.Normal);
-            }
+            store.FileAccessForTests = new FaultingFileAccess(
+                RealCertificateStoreFileAccess.Instance,
+                tryDelete: path =>
+                {
+                    if (string.Equals(path, pointerPath, StringComparison.Ordinal))
+                    {
+                        // Simulate a failed pointer delete without relying on OS file attributes.
+                        return;
+                    }
+
+                    AtomicFile.TryDelete(path);
+                });
+
+            var ex = Assert.Throws<AcmeStorageException>(() => store.Recover());
+            Assert.Equal("current_pointer_delete_failed", ex.Category);
+            Assert.Contains(incompleteId, ex.Message, StringComparison.Ordinal);
+            Assert.True(File.Exists(pointerPath));
+            Assert.Equal(incompleteId, File.ReadAllText(pointerPath).Trim());
+            Assert.True(Directory.Exists(incompleteDir));
+            Assert.True(incompletePfx.AsSpan().SequenceEqual(
+                File.ReadAllBytes(AcmePaths.GenerationCertificatePaths(dir.Path, Fqdn, incompleteId).PfxPath)));
         }
 
         /// <summary>
@@ -314,13 +323,11 @@ namespace VectorNNTPD.Common.Tests.Acme
                 RealCertificateStoreFileAccess.Instance,
                 fileExists: path =>
                 {
-                    if (string.Equals(path, pointerPath, StringComparison.Ordinal))
+                    // First matching check: ReadCurrentPointerState. Later: TryDeleteCurrentPointer verification.
+                    if (string.Equals(path, pointerPath, StringComparison.Ordinal)
+                        && Interlocked.Increment(ref pointerExistsChecks) >= 2)
                     {
-                        // First check: ReadCurrentPointerState. Later check: TryDeleteCurrentPointer verification.
-                        if (Interlocked.Increment(ref pointerExistsChecks) >= 2)
-                        {
-                            throw new IOException("post-delete exists inspection failed");
-                        }
+                        throw new IOException("post-delete exists inspection failed");
                     }
 
                     return File.Exists(path);
@@ -480,17 +487,20 @@ namespace VectorNNTPD.Common.Tests.Acme
             private readonly Func<string, bool>? _fileExists;
             private readonly Func<string, string>? _readAllText;
             private readonly Func<string, long>? _getFileLength;
+            private readonly Action<string>? _tryDelete;
 
             public FaultingFileAccess(
                 ICertificateStoreFileAccess inner,
                 Func<string, bool>? fileExists = null,
                 Func<string, string>? readAllText = null,
-                Func<string, long>? getFileLength = null)
+                Func<string, long>? getFileLength = null,
+                Action<string>? tryDelete = null)
             {
                 _inner = inner;
                 _fileExists = fileExists;
                 _readAllText = readAllText;
                 _getFileLength = getFileLength;
+                _tryDelete = tryDelete;
             }
 
             public bool FileExists(string path) => _fileExists?.Invoke(path) ?? _inner.FileExists(path);
@@ -498,6 +508,17 @@ namespace VectorNNTPD.Common.Tests.Acme
             public string ReadAllText(string path) => _readAllText?.Invoke(path) ?? _inner.ReadAllText(path);
 
             public long GetFileLength(string path) => _getFileLength?.Invoke(path) ?? _inner.GetFileLength(path);
+
+            public void TryDelete(string path)
+            {
+                if (_tryDelete is not null)
+                {
+                    _tryDelete(path);
+                    return;
+                }
+
+                _inner.TryDelete(path);
+            }
         }
     }
 }
