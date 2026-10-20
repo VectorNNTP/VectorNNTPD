@@ -40,7 +40,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
         }
 
         /// <summary>
-        /// Validates identity, TLS port, ACME, logging, shutdown, listener, NNTP establishment concurrency, account refresh, retention, systemd, and the RabbitMQ drain cross-check.
+        /// Validates identity, TLS port, ACME, logging, shutdown, listener, NNTP establishment concurrency, account refresh, host physical memory, retention, systemd, and the RabbitMQ drain cross-check.
         /// </summary>
         /// <param name="name">Named-options name. Not consulted; every instance is validated the same way.</param>
         /// <param name="options">Bound BackFiller options.</param>
@@ -48,7 +48,8 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <exception cref="ArgumentNullException"><paramref name="options"/> is null, or the RabbitMQ options value passed to the drain cross-check is null.</exception>
         /// <remarks>
         /// Invalid configuration is returned as failure messages and is not thrown.
-        /// A physical-memory probe failure becomes one retention failure message.
+        /// A physical-memory probe failure or a host below
+        /// <see cref="BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes"/> fails startup.
         /// This method does not bind sockets, create directories, or connect to MySQL, RabbitMQ, or Cloudflare.
         /// </remarks>
         public ValidateOptionsResult Validate(string? name, BackFillerOptions options)
@@ -334,15 +335,17 @@ namespace VectorNNTPD.BackFillerService.Configuration
             }
         }
 
-        /// <summary>Appends retention range failures and the physical-memory ceiling failure.</summary>
+        /// <summary>Appends retention range failures, the host physical-memory prerequisite, and the retention ceiling failure.</summary>
         /// <param name="options">Options whose <see cref="BackFillerOptions.ArticleRetention"/> section is checked.</param>
         /// <param name="failures">Failure list to append. Not cleared.</param>
         /// <remarks>
         /// A maximum below 1 returns before the other checks. TTL and sweep must be 1–60 seconds.
         /// Openable request ids must be 1–256. Those range checks run before the memory probe.
-        /// Any exception from <see cref="IPhysicalMemoryProvider.GetTotalPhysicalMemoryBytes"/> adds one message and returns.
-        /// Otherwise, the configured gibibytes must not exceed 80 per cent of total physical memory, rounded down to whole gibibytes
-        /// with a floor of 1, and must not exceed the largest <see cref="int"/> whose product with
+        /// Any exception from <see cref="IPhysicalMemoryProvider.GetTotalPhysicalMemoryBytes"/> adds one host-memory
+        /// failure and returns without assuming the minimum is met.
+        /// Detected RAM below <see cref="BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes"/> fails startup.
+        /// Otherwise, the configured gibibytes must not exceed 80 per cent of total physical memory, truncated down to
+        /// whole gibibytes with no artificial floor, and must not exceed the largest <see cref="int"/> whose product with
         /// <see cref="BackFillerArticleRetentionOptions.BytesPerGibibyte"/> fits in <see cref="long"/>.
         /// </remarks>
         private void ValidateArticleRetention(BackFillerOptions options, List<string> failures)
@@ -377,14 +380,19 @@ namespace VectorNNTPD.BackFillerService.Configuration
             // codeql[cs/catch-of-all-exceptions] Validation must report every rejected value and continue checking the remaining options.
             catch (Exception)
             {
-                failures.Add("BackFiller:ArticleRetention:MaximumRetainedPayloadGigabytes cannot be validated because total physical memory could not be determined.");
+                failures.Add(
+                    $"The host must have at least {BackFillerArticleRetentionOptions.MinimumPhysicalMemoryGibibytes} GiB ({BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes} bytes) of physical RAM, but total physical memory could not be determined.");
                 return;
             }
 
-            var maximumPolicyGigabytes = Math.Max(
-                1,
-                (int)(totalPhysicalMemoryBytes * BackFillerArticleRetentionOptions.PhysicalMemoryCeilingRatio
-                      / BackFillerArticleRetentionOptions.BytesPerGibibyte));
+            if (totalPhysicalMemoryBytes < BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes)
+            {
+                failures.Add(
+                    $"The host must have at least {BackFillerArticleRetentionOptions.MinimumPhysicalMemoryGibibytes} GiB ({BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes} bytes) of physical RAM; detected {totalPhysicalMemoryBytes} bytes.");
+                return;
+            }
+
+            var maximumPolicyGigabytes = ComputePhysicalMemoryRetentionCeilingGigabytes(totalPhysicalMemoryBytes);
             if (retention.MaximumRetainedPayloadGigabytes > maximumPolicyGigabytes)
             {
                 failures.Add(
@@ -397,6 +405,15 @@ namespace VectorNNTPD.BackFillerService.Configuration
                 failures.Add($"BackFiller:ArticleRetention:MaximumRetainedPayloadGigabytes must be less than or equal to {maxSupportedGigabytes}.");
             }
         }
+
+        /// <summary>
+        /// Truncates 80% of <paramref name="totalPhysicalMemoryBytes"/> down to whole gibibytes with no floor.
+        /// </summary>
+        /// <param name="totalPhysicalMemoryBytes">Detected total physical RAM in bytes.</param>
+        /// <returns>Maximum allowed <see cref="BackFillerArticleRetentionOptions.MaximumRetainedPayloadGigabytes"/>.</returns>
+        internal static int ComputePhysicalMemoryRetentionCeilingGigabytes(long totalPhysicalMemoryBytes) =>
+            (int)(totalPhysicalMemoryBytes * BackFillerArticleRetentionOptions.PhysicalMemoryCeilingRatio
+                  / BackFillerArticleRetentionOptions.BytesPerGibibyte);
 
         /// <summary>
         /// Appends a failure when the RabbitMQ shutdown drain is longer than the BackFiller grace period.

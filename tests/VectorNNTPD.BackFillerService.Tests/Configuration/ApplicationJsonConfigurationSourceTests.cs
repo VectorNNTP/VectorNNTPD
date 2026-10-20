@@ -265,6 +265,42 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         }
 
         /// <summary>
+        /// Shipped <c>VectorNNTPD.BackFillerService.json</c> retention matches the C# default and is valid on an 8 GiB host.
+        /// </summary>
+        [Fact]
+        public void Shipped_backfiller_retention_matches_default_and_is_valid_on_minimum_physical_memory_host()
+        {
+            var path = RepositoryFiles.Under(
+                "src",
+                "VectorNNTPD.BackFillerService",
+                "VectorNNTPD.BackFillerService.json");
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile(path, optional: false, reloadOnChange: false)
+                .Build();
+
+            var shipped = new BackFillerOptions();
+            configuration.GetSection(BackFillerOptions.SectionName).Bind(shipped);
+
+            Assert.Equal(4, shipped.ArticleRetention.MaximumRetainedPayloadGigabytes);
+            Assert.Equal(
+                new BackFillerArticleRetentionOptions().MaximumRetainedPayloadGigabytes,
+                shipped.ArticleRetention.MaximumRetainedPayloadGigabytes);
+            Assert.True(
+                shipped.ArticleRetention.MaximumRetainedPayloadGigabytes
+                <= BackFillerOptionsValidator.ComputePhysicalMemoryRetentionCeilingGigabytes(
+                    BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes));
+
+            var options = BackFillerTestOptions.CreateValid();
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes =
+                shipped.ArticleRetention.MaximumRetainedPayloadGigabytes;
+            var result = BackFillerTestOptions
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(
+                    BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes))
+                .Validate(null, options);
+            Assert.True(result.Succeeded, string.Join("; ", result.Failures ?? []));
+        }
+
+        /// <summary>
         /// Resolves the BackFiller build output for the same platform and configuration as this test assembly.
         /// </summary>
         /// <param name="repositoryRoot">Repository root that contains <c>src</c>.</param>

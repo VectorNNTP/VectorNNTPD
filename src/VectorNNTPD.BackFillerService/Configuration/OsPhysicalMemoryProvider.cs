@@ -5,12 +5,14 @@ using System.Runtime.Versioning;
 namespace VectorNNTPD.BackFillerService.Configuration
 {
     /// <summary>
-    /// Resolves total physical RAM from the operating system for startup validation.
+    /// Resolves total physical RAM from the operating system for host and retention startup validation.
     /// </summary>
     /// <remarks>
     /// Linux reads <c>/proc/meminfo</c> <c>MemTotal</c> (kB × 1024).
     /// Windows uses <c>GlobalMemoryStatusEx</c> <c>ullTotalPhys</c>.
     /// There is no GC, available-memory, or cgroup fallback.
+    /// <see cref="BackFillerOptionsValidator"/> requires at least
+    /// <see cref="BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes"/>.
     /// </remarks>
     internal sealed partial class OsPhysicalMemoryProvider : IPhysicalMemoryProvider
     {

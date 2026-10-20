@@ -166,13 +166,19 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         public void Eighty_percent_guard_uses_injected_physical_memory_not_gc()
         {
             var options = BackFillerTestOptions.CreateValid();
-            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 8;
+            // 8 GiB injected host → truncated 80% ceiling is 6 GiB; retention of 7 must fail the ceiling check.
+            options.ArticleRetention.MaximumRetainedPayloadGigabytes = 7;
             var result = BackFillerTestOptions
-                .CreateValidator(memory: new FakePhysicalMemoryProvider(4L * 1024 * 1024 * 1024))
+                .CreateValidator(memory: new FakePhysicalMemoryProvider(BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes))
                 .Validate(null, options);
 
             Assert.True(result.Failed);
-            Assert.Contains(result.Failures!, static f => f.Contains("physical-memory", StringComparison.Ordinal));
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("80% physical-memory ceiling (6 GiB)", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                result.Failures!,
+                static f => f.Contains("of physical RAM; detected", StringComparison.Ordinal));
         }
 
         /// <summary>
