@@ -214,7 +214,7 @@ Semantics (tests: `Parse_BodyLineCount_MatchesParserLineWalk`):
 
 Terminators: CR, LF, or CRLF (`FindLineTerminator` / `AdvancePastTerminator`). The last unterminated fragment counts as one line.
 
-Materialization copies body lines and inserts one leading `.` on each line whose first content byte is `.`. That does not add a line, so the destuffed body line count stays valid for canonical ArtData. Overview `:lines` can use `ArtLines` without another body scan. `:bytes` is the stuffed `ArtSize`.
+Materialization copies body lines and inserts one leading `.` on each line whose first content byte is `.`. `ArticleBodyWireStuffer` uses the same CR, LF, and CRLF line ends as that walk, so a bare CR before a dot-leading line is stuffed. That does not add a line, so the destuffed body line count stays valid for canonical ArtData. Overview `:lines` can use `ArtLines` without another body scan. `:bytes` is the stuffed `ArtSize`. Delivery framing still requires exclusive CRLF; a retained article that used bare CR or bare LF is not frameable.
 
 ---
 
