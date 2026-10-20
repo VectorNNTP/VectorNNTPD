@@ -150,6 +150,120 @@ namespace VectorNNTPD.BackFillerService.Tests.Core
             await manager.StopAsync(CancellationToken.None);
         }
 
+        /// <summary>
+        /// A service that waits past the shared shutdown budget causes <see cref="TimeoutException"/> identifying that service and budget.
+        /// </summary>
+        [Fact]
+        public async Task StopAsync_reports_timeout_when_shutdown_budget_expires()
+        {
+            var budget = TimeSpan.FromMilliseconds(40);
+            var service = new CancellationAwareService("slow-stop");
+            var manager = CreateManager([service], budget);
+
+            await manager.StartAsync(CancellationToken.None);
+
+            var timeout = await Assert.ThrowsAsync<TimeoutException>(
+                () => manager.StopAsync(CancellationToken.None));
+
+            Assert.Contains("slow-stop", timeout.Message, StringComparison.Ordinal);
+            Assert.Contains(budget.ToString(), timeout.Message, StringComparison.Ordinal);
+            Assert.Empty(manager.StartedServices);
+        }
+
+        /// <summary>
+        /// Caller cancellation during stop is rethrown as <see cref="OperationCanceledException"/> and is not a budget timeout.
+        /// </summary>
+        [Fact]
+        public async Task StopAsync_caller_cancellation_is_not_classified_as_budget_timeout()
+        {
+            var stopEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var service = new CancellationAwareService("cooperative", stopEntered);
+            var manager = CreateManager([service], TimeSpan.FromSeconds(30));
+            await manager.StartAsync(CancellationToken.None);
+
+            using var caller = new CancellationTokenSource();
+            var stopTask = manager.StopAsync(caller.Token);
+            await stopEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            caller.Cancel();
+
+            var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopTask);
+            Assert.IsNotType<TimeoutException>(canceled);
+            Assert.Empty(manager.StartedServices);
+        }
+
+        /// <summary>
+        /// Unrelated stop failures remain collected in <see cref="AggregateException"/>.
+        /// </summary>
+        [Fact]
+        public async Task StopAsync_collects_unrelated_service_exceptions()
+        {
+            var service = new FaultingStopService("broken", new InvalidOperationException("stop boom"));
+            var manager = CreateManager([service], TimeSpan.FromSeconds(30));
+            await manager.StartAsync(CancellationToken.None);
+
+            var aggregate = await Assert.ThrowsAsync<AggregateException>(() => manager.StopAsync(CancellationToken.None));
+            Assert.Contains(
+                aggregate.InnerExceptions,
+                static ex => ex is InvalidOperationException { Message: "stop boom" });
+            Assert.Empty(manager.StartedServices);
+        }
+
+        /// <summary>
+        /// After the budget expires on the first stopped service, later services are still stopped and only one timeout is reported.
+        /// </summary>
+        [Fact]
+        public async Task StopAsync_aggregates_budget_timeout_across_remaining_services_once()
+        {
+            var budget = TimeSpan.FromMilliseconds(40);
+            var first = new CancellationAwareService("first");
+            var second = new CancellationAwareService("second");
+            var manager = CreateManager([first, second], budget);
+            await manager.StartAsync(CancellationToken.None);
+
+            // Reverse stop order: second is offered the budget first.
+            var timeout = await Assert.ThrowsAsync<TimeoutException>(() => manager.StopAsync(CancellationToken.None));
+            Assert.Contains("second", timeout.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("first", timeout.Message, StringComparison.Ordinal);
+            Assert.Empty(manager.StartedServices);
+            Assert.True(first.StopObserved);
+            Assert.True(second.StopObserved);
+        }
+
+        /// <summary>
+        /// Normal stop within the budget succeeds and clears started services.
+        /// </summary>
+        [Fact]
+        public async Task StopAsync_succeeds_when_services_stop_within_budget()
+        {
+            var order = new List<string>();
+            var service = new TrackingService("quick", order);
+            var manager = CreateManager([service], TimeSpan.FromSeconds(30));
+            await manager.StartAsync(CancellationToken.None);
+            await manager.StopAsync(CancellationToken.None);
+            Assert.Equal(["start:quick", "stop:quick"], order);
+            Assert.Empty(manager.StartedServices);
+        }
+
+        /// <summary>
+        /// Builds a manager with a custom shutdown budget for cancellation/timeout tests.
+        /// </summary>
+        private static BackFillerApplicationServiceManager CreateManager(
+            IEnumerable<IApplicationService> services,
+            TimeSpan shutdownBudget)
+        {
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                BackFillerTestOptions.CreateValid(),
+                BackFillerTestOptions.CreateValidNntpDb());
+            runtime = runtime with
+            {
+                Shutdown = runtime.Shutdown with { GracePeriod = shutdownBudget },
+            };
+            return new BackFillerApplicationServiceManager(
+                services,
+                runtime,
+                NullLogger<BackFillerApplicationServiceManager>.Instance);
+        }
+
         /// <summary>Waits for the next UnexpectedServiceTermination event or fails if none arrives within two seconds.</summary>
         /// <param name="manager">Manager whose termination event is subscribed.</param>
         private static async Task<(string ServiceName, Exception? Exception)> AwaitUnexpectedTerminationAsync(
@@ -232,6 +346,85 @@ namespace VectorNNTPD.BackFillerService.Tests.Core
                 _order.Add("stop:" + Name);
                 return Task.CompletedTask;
             }
+        }
+
+        /// <summary>
+        /// Stop waits until the supplied token is canceled, then throws <see cref="OperationCanceledException"/>.
+        /// </summary>
+        private sealed class CancellationAwareService : IApplicationService
+        {
+            /// <summary>Optional signal completed when <see cref="StopAsync"/> begins waiting.</summary>
+            private readonly TaskCompletionSource? _stopEntered;
+
+            /// <summary>Creates a service that blocks in <see cref="StopAsync"/> until canceled.</summary>
+            /// <param name="name">Logical service name.</param>
+            /// <param name="stopEntered">When set, completed as soon as stop begins waiting on the token.</param>
+            internal CancellationAwareService(string name, TaskCompletionSource? stopEntered = null)
+            {
+                Name = name;
+                _stopEntered = stopEntered;
+            }
+
+            /// <inheritdoc />
+            public string Name { get; }
+
+            /// <inheritdoc />
+            public Task? Execution => null;
+
+            /// <summary>True after <see cref="StopAsync"/> has been entered.</summary>
+            internal bool StopObserved { get; private set; }
+
+            /// <inheritdoc />
+            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+            /// <inheritdoc />
+            public async Task StopAsync(CancellationToken cancellationToken)
+            {
+                StopObserved = true;
+                _stopEntered?.TrySetResult();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = cancellationToken.Register(
+                    static state =>
+                    {
+                        var (source, token) = ((TaskCompletionSource, CancellationToken))state!;
+                        source.TrySetCanceled(token);
+                    },
+                    (completion, cancellationToken));
+                await completion.Task.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>Throws a configured exception from <see cref="StopAsync"/>.</summary>
+        private sealed class FaultingStopService : IApplicationService
+        {
+            /// <summary>Exception thrown from <see cref="StopAsync"/>.</summary>
+            private readonly Exception _stopException;
+
+            /// <summary>Creates a service whose stop fails with <paramref name="stopException"/>.</summary>
+            /// <param name="name">Logical service name.</param>
+            /// <param name="stopException">Failure raised from stop.</param>
+            internal FaultingStopService(string name, Exception stopException)
+            {
+                Name = name;
+                _stopException = stopException;
+            }
+
+            /// <inheritdoc />
+            public string Name { get; }
+
+            /// <inheritdoc />
+            public Task? Execution => null;
+
+            /// <inheritdoc />
+            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+            /// <inheritdoc />
+            public Task StopAsync(CancellationToken cancellationToken) => Task.FromException(_stopException);
         }
     }
 }
