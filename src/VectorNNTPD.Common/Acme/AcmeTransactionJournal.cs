@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -12,9 +11,11 @@ namespace VectorNNTPD.Common.Acme
     /// The journal is one file, <c>journal/{fqdn}.json</c>. Each certificate request
     /// is a transaction that accumulates events for the complete ACME lifecycle.
     /// Historical transactions are retained indefinitely. Same-FQDN writers are
-    /// serialized in-process and across processes by an exclusive lock on
-    /// <c>{journalPath}.lock</c>. Distinct FQDN files do not share a lock.
-    /// Writes use <see cref="AtomicFile"/> so a crash cannot leave a partial journal.
+    /// serialized in-process and across processes solely by an exclusive
+    /// <see cref="FileShare.None"/> lock on <c>{journalPath}.lock</c>; waiters do not
+    /// hold an in-process gate while acquiring that file lock. Distinct FQDN files
+    /// do not share a lock. Writes use <see cref="AtomicFile"/> so a crash cannot
+    /// leave a partial journal.
     /// </remarks>
     internal sealed class AcmeTransactionJournal
     {
@@ -62,9 +63,6 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>Issuance failed.</summary>
         public const string EventCertificateIssuanceFailed = "certificate_issuance_failed";
-
-        /// <summary>In-process lock per journal path so same-FQDN writers do not interleave before the file lock.</summary>
-        private static readonly ConcurrentDictionary<string, object> FileGates = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Normalized certificate FQDN stored in and required by the journal file.</summary>
         private readonly string _fqdn;
@@ -428,19 +426,23 @@ namespace VectorNNTPD.Common.Acme
                 cancellationToken);
         }
 
-        /// <summary>Runs <paramref name="action"/> under the in-process gate and the exclusive <c>.lock</c> file.</summary>
+        /// <summary>
+        /// Runs <paramref name="action"/> while holding the exclusive <c>.lock</c> file for this journal path.
+        /// </summary>
         /// <typeparam name="T">Result of <paramref name="action"/>.</typeparam>
         /// <param name="action">Work that reads or writes the journal. It runs on the caller thread.</param>
         /// <param name="cancellationToken">Cancels waiting for the file lock.</param>
         /// <returns>The value returned by <paramref name="action"/>.</returns>
+        /// <remarks>
+        /// Serialization is provided solely by <see cref="AcmeExclusiveFileLock"/> (<see cref="FileShare.None"/>).
+        /// No in-process monitor is held while waiting for the cross-process lock, so one stuck or
+        /// cancelled waiter cannot wedge other same-path writers in this process. The file lock is
+        /// held for the complete read/modify/write performed by <paramref name="action"/>.
+        /// </remarks>
         private T WithGate<T>(Func<T> action, CancellationToken cancellationToken = default)
         {
-            var gate = FileGates.GetOrAdd(Path.GetFullPath(_journalPath), static _ => new object());
-            lock (gate)
-            {
-                using var fileLock = AcmeExclusiveFileLock.Acquire(_journalLockPath, cancellationToken);
-                return action();
-            }
+            using var fileLock = AcmeExclusiveFileLock.Acquire(_journalLockPath, cancellationToken);
+            return action();
         }
 
         /// <summary>
