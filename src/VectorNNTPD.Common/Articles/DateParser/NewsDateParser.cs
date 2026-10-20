@@ -6,9 +6,17 @@ namespace VectorNNTPD.Common.Articles.DateParser
     /// Parses raw article date-header values into a canonical UTC instant without heap strings.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Input is inspected as bytes. The BCL <see cref="DateTimeOffset"/> parsers require UTF-16,
     /// so accepted printable-ASCII bytes are copied into a stackalloc char buffer. That copy is
     /// not <c>Encoding.GetString</c> and does not allocate.
+    /// </para>
+    /// <para>
+    /// RFC 5322 allows second <c>60</c> for a leap second (time-of-day through <c>23:59:60</c>).
+    /// The BCL rejects that value, so a matching <c>:59:60</c> is rewritten to <c>:59:00</c>,
+    /// parsed, then advanced by one minute to the following minute's second <c>00</c>.
+    /// Minute <c>60</c> and second greater than <c>60</c> are not leap seconds and stay rejected.
+    /// </para>
     /// </remarks>
     internal static partial class NewsDateParser
     {
@@ -158,9 +166,107 @@ namespace VectorNNTPD.Common.Articles.DateParser
                 return true;
             }
 
+            if (TryRewriteLeapSecondSixty(working[..workingLength]))
+            {
+                CopyAsciiBytesToChars(working[..workingLength], parseChars);
+                // Numeric ±hhmm offsets often succeed only on TryQuickParse; abbreviations are already ±hh:mm.
+                if (TryExactParse(parseChars[..workingLength], out utc)
+                    || TryQuickParse(parseChars[..workingLength], out utc))
+                {
+                    utc = utc.AddMinutes(1);
+                    return true;
+                }
+            }
+
             failure = DateParseFailureReason.ParseFailed;
             return false;
         }
+
+        /// <summary>
+        /// When the time-of-day contains a leap-second <c>:59:60</c> with hour <c>00</c>–<c>23</c>,
+        /// rewrites the seconds field to <c>00</c> in place so BCL parsing can accept the value.
+        /// </summary>
+        /// <param name="buffer">Normalized date bytes after timezone abbreviation substitution.</param>
+        /// <returns>
+        /// <see langword="true"/> when <c>:59:60</c> was rewritten to <c>:59:00</c>.
+        /// The caller must add one minute after a successful parse.
+        /// </returns>
+        /// <remarks>
+        /// Does not rewrite minute <c>60</c> (<c>23:60:00</c>) or second values greater than <c>60</c>.
+        /// </remarks>
+        private static bool TryRewriteLeapSecondSixty(Span<byte> buffer)
+        {
+            // Minimum shape: one hour digit + ":59:60".
+            ReadOnlySpan<byte> marker = ":59:60"u8;
+            if (buffer.Length < marker.Length + 1)
+            {
+                return false;
+            }
+
+            var idx = buffer.LastIndexOf(marker);
+            if (idx < 0)
+            {
+                return false;
+            }
+
+            var hourEnd = idx;
+            if (hourEnd == 0 || !IsAsciiDigit(buffer[hourEnd - 1]))
+            {
+                return false;
+            }
+
+            var hourStart = hourEnd - 1;
+            if (hourStart > 0 && IsAsciiDigit(buffer[hourStart - 1]))
+            {
+                hourStart--;
+            }
+
+            // Reject three or more digits before ":59:60" (not an hour field).
+            if (hourStart > 0 && IsAsciiDigit(buffer[hourStart - 1]))
+            {
+                return false;
+            }
+
+            if (hourStart > 0)
+            {
+                var previous = buffer[hourStart - 1];
+                if (previous is not ((byte)' ' or (byte)'\t' or (byte)'T' or (byte)'t'))
+                {
+                    return false;
+                }
+            }
+
+            var hour = buffer[hourStart] - (byte)'0';
+            if (hourEnd - hourStart == 2)
+            {
+                hour = (hour * 10) + (buffer[hourStart + 1] - (byte)'0');
+            }
+
+            if (hour is < 0 or > 23)
+            {
+                return false;
+            }
+
+            var after = idx + marker.Length;
+            if (after < buffer.Length)
+            {
+                var next = buffer[after];
+                if (next is not ((byte)' ' or (byte)'\t' or (byte)'+' or (byte)'-')
+                    && !IsAsciiLetter(next))
+                {
+                    return false;
+                }
+            }
+
+            buffer[idx + 4] = (byte)'0';
+            buffer[idx + 5] = (byte)'0';
+            return true;
+        }
+
+        /// <summary>Returns whether <paramref name="value"/> is an ASCII decimal digit.</summary>
+        /// <param name="value">Byte to test.</param>
+        /// <returns><see langword="true"/> for <c>0x30</c>–<c>0x39</c>.</returns>
+        private static bool IsAsciiDigit(byte value) => (uint)(value - (byte)'0') <= 9;
 
         /// <summary>
         /// Writes the canonical UTC RFC 5322 form <c>ddd, dd MMM yyyy HH:mm:ss +0000</c> as ASCII bytes.

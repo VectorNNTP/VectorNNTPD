@@ -423,6 +423,124 @@ namespace VectorNNTPD.Common.Tests.Articles.DateParser
         }
 
         /// <summary>
+        /// RFC 5322 leap second <c>23:59:60 +0000</c> is accepted and canonicalized to the following UTC minute's second <c>00</c>.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenLeapSecondAtUtc_RollsForwardToNextMinute()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sat, 31 Dec 2016 23:59:60 +0000"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc), utc);
+            Assert.Equal("Sun, 01 Jan 2017 00:00:00 +0000", Format(utc));
+        }
+
+        /// <summary>
+        /// A leap second with a non-zero numeric offset converts to UTC before the one-minute roll-forward.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenLeapSecondWithPositiveOffset_ConvertsThenRollsForward()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sat, 31 Dec 2016 23:59:60 +0200"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2016, 12, 31, 22, 0, 0, DateTimeKind.Utc), utc);
+            Assert.Equal("Sat, 31 Dec 2016 22:00:00 +0000", Format(utc));
+        }
+
+        /// <summary>
+        /// Ordinary seconds immediately before the leap-second instant remain unchanged.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenSecondIs59_DoesNotRollForward()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sat, 31 Dec 2016 23:59:59 +0000"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2016, 12, 31, 23, 59, 59, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// The UTC minute after the leap second parses as an ordinary second <c>00</c>.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenSecondIs00AfterLeap_ParsesNormally()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sun, 01 Jan 2017 00:00:00 +0000"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// An obsolete two-digit-year leap second is accepted with the same roll-forward canonicalization.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenObsoleteLeapSecond_RollsForwardToNextMinute()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sat, 31 Dec 16 23:59:60 +0000"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// A leap second expressed with a <c>GMT</c> abbreviation rolls forward after zero-offset substitution.
+        /// </summary>
+        [Fact]
+        public void TryGetCanonicalUtc_WhenLeapSecondWithGmt_RollsForwardToNextMinute()
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                "Sat, 31 Dec 2016 23:59:60 GMT"u8,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2017, 1, 1, 0, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// Minute <c>60</c>, second greater than <c>60</c>, an invalid hour, and a malformed offset stay parse failures.
+        /// </summary>
+        /// <param name="value">Malformed date text.</param>
+        [Theory]
+        [InlineData("Fri, 23 Aug 2024 23:60:00 +0000")]
+        [InlineData("Fri, 23 Aug 2024 12:34:61 +0000")]
+        [InlineData("Fri, 23 Aug 2024 24:00:00 +0000")]
+        [InlineData("Fri, 23 Aug 2024 12:00:00 +2400")]
+        public void TryGetCanonicalUtc_WhenTimeOrOffsetOutOfRange_Rejects(string value)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes(value),
+                out _,
+                out var failure);
+
+            Assert.False(accepted);
+            Assert.Equal(DateParseFailureReason.ParseFailed, failure);
+        }
+
+        /// <summary>
         /// Documented single-digit <c>UTC±N</c> forms and their minutes east of UTC.
         /// </summary>
         /// <returns>Pairs of token and offset minutes.</returns>
