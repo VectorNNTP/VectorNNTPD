@@ -14,6 +14,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
     /// This type does not own the connection after <see cref="ConnectAsync"/> returns.
     /// Client automatic recovery and topology recovery stay disabled so
     /// <see cref="RabbitMqService"/> remains the only lifecycle owner.
+    /// When TLS is enabled, each configured host is dialed as an <see cref="AmqpTcpEndpoint"/> with its own
+    /// <see cref="SslOption.ServerName"/> so failover does not reuse <c>Hosts[0]</c> as SNI.
     /// </remarks>
     internal sealed class RabbitMqClientConnectionFactory : IRabbitMqConnectionFactory
     {
@@ -44,7 +46,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
             var runtime = options.ToRuntimeOptions();
             var factory = CreateClientFactory(runtime, connectionName);
-            var connection = await factory.CreateConnectionAsync(runtime.Hosts, cancellationToken).ConfigureAwait(false);
+            // Per-endpoint SslOption.ServerName: string-host CreateConnectionAsync shares one factory Ssl
+            // across endpoints, so failover would reuse Hosts[0] as SNI for every dial.
+            var endpoints = CreateAmqpTcpEndpoints(runtime);
+            var connection = await factory.CreateConnectionAsync(endpoints, cancellationToken).ConfigureAwait(false);
             try
             {
                 return new RabbitMqClientConnection(connection, runtime.VirtualHost, _logger);
@@ -59,6 +64,11 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary>
         /// Builds a RabbitMQ.Client factory with application-managed recovery disabled.
         /// </summary>
+        /// <remarks>
+        /// When TLS is enabled, <see cref="ConnectionFactory.Ssl"/> carries protocol defaults only.
+        /// Per-host SNI and certificate identity come from <see cref="CreateAmqpTcpEndpoints"/>;
+        /// do not set a shared <see cref="SslOption.ServerName"/> on this factory.
+        /// </remarks>
         internal static ConnectionFactory CreateClientFactory(
             RabbitMqRuntimeOptions options,
             string connectionName)
@@ -97,11 +107,51 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             if (options.EnableSsl)
             {
                 factory.Ssl.Version = SslProtocols.Tls12 | SslProtocols.Tls13;
-                factory.Ssl.ServerName = options.Hosts.Count > 0 ? options.Hosts[0] : string.Empty;
             }
 
             PopulateClientProperties(factory);
             return factory;
+        }
+
+        /// <summary>
+        /// Builds one <see cref="AmqpTcpEndpoint"/> per configured host, with an independent TLS identity when SSL is enabled.
+        /// </summary>
+        /// <param name="options">Validated runtime options whose <see cref="RabbitMqRuntimeOptions.Hosts"/> are dialed in library order.</param>
+        /// <returns>Endpoints whose TLS <see cref="SslOption.ServerName"/> matches the dialed hostname (never a shared factory name).</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+        /// <remarks>
+        /// Each TLS-enabled endpoint owns a distinct <see cref="SslOption"/> instance so concurrent or sequential
+        /// dials cannot race on <see cref="SslOption.ServerName"/>. The configured hostname is used for SNI and
+        /// certificate validation; ports are not included. When SSL is disabled, endpoints use the library default
+        /// (disabled) SSL options.
+        /// </remarks>
+        internal static IReadOnlyList<AmqpTcpEndpoint> CreateAmqpTcpEndpoints(RabbitMqRuntimeOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(options);
+
+            var endpoints = new AmqpTcpEndpoint[options.Hosts.Count];
+            for (var i = 0; i < options.Hosts.Count; i++)
+            {
+                var host = options.Hosts[i];
+                if (options.EnableSsl)
+                {
+                    // New SslOption per host: AmqpTcpEndpoint stores the reference; sharing would reintroduce
+                    // the Hosts[0] SNI bug under failover and any concurrent dial of the same factory list.
+                    var ssl = new SslOption
+                    {
+                        Enabled = true,
+                        Version = SslProtocols.Tls12 | SslProtocols.Tls13,
+                        ServerName = host,
+                    };
+                    endpoints[i] = new AmqpTcpEndpoint(host, options.Port, ssl);
+                }
+                else
+                {
+                    endpoints[i] = new AmqpTcpEndpoint(host, options.Port);
+                }
+            }
+
+            return endpoints;
         }
 
         /// <summary>
