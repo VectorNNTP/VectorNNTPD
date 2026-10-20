@@ -11,6 +11,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
     /// <summary>
     /// ACME HTTP transport: directory cache, nonce pool, JWS POST, badNonce / transient retries.
     /// Creates an <see cref="HttpClient"/> per request via <see cref="IHttpClientFactory"/>.
+    /// State-changing POSTs are not replayed after an ambiguous transmission outcome.
     /// </summary>
     internal sealed class AcmeHttpTransport
     {
@@ -100,7 +101,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
         /// <returns>The directory document.</returns>
         private async Task<AcmeDirectoryResource> FetchDirectoryAsync(CancellationToken cancellationToken)
         {
-            AcmeResponse<AcmeDirectoryResource> response = await SendWithRetryAsync(
+            AcmeResponse<AcmeDirectoryResource> response = await SendUnsignedWithRetryAsync(
                 () => new HttpRequestMessage(HttpMethod.Get, _directoryUri),
                 AcmeJsonContext.Default.AcmeDirectoryResource,
                 cancellationToken).ConfigureAwait(false);
@@ -108,15 +109,23 @@ namespace VectorNNTPD.Common.Acme.Protocol
             return response.Content ?? throw new AcmeCaException("The ACME directory response was empty.");
         }
 
-        /// <summary>POSTs a JWS-signed payload, retrying on badNonce.</summary>
+        /// <summary>
+        /// POSTs a JWS-signed payload. Fresh nonces are signed for each attempt.
+        /// <see cref="AcmeRequestSemantics.StateChanging"/> does not replay after an ambiguous outcome;
+        /// <see cref="AcmeErrorTypes.BadNonce"/> may still re-sign because that response proves rejection.
+        /// </summary>
         /// <typeparam name="T">Deserialized success body. Unused when the body is empty.</typeparam>
         /// <param name="key">Account key that signs the JWS.</param>
         /// <param name="keyId">Account URL (<c>kid</c>). <see langword="null"/> sends the JWK instead, used for <c>newAccount</c>.</param>
         /// <param name="url">Request URL, also the JWS <c>url</c> field.</param>
         /// <param name="payload">JSON payload. An empty string is POST-as-GET.</param>
         /// <param name="typeInfo">Source-generated metadata for <typeparamref name="T"/>.</param>
+        /// <param name="semantics">Retry policy for this operation.</param>
         /// <param name="cancellationToken">Cancels nonce fetch and the POST.</param>
         /// <returns>The successful response.</returns>
+        /// <exception cref="AcmeAmbiguousOutcomeException">
+        /// Thrown for state-changing POSTs when transmission may have succeeded without a trustworthy response.
+        /// </exception>
         /// <exception cref="AcmeCaException">Thrown when badNonce persists for <see cref="MaxBadNonceRetries"/> attempts, or the CA rejects the request.</exception>
         internal async Task<AcmeResponse<T>> PostAsync<T>(
             AcmeAccountKey key,
@@ -124,33 +133,89 @@ namespace VectorNNTPD.Common.Acme.Protocol
             Uri url,
             string payload,
             JsonTypeInfo<T> typeInfo,
+            AcmeRequestSemantics semantics,
             CancellationToken cancellationToken)
         {
-            Exception? lastError = null;
+            bool allowTransientRetry = semantics is AcmeRequestSemantics.SafeRead or AcmeRequestSemantics.IdempotentWrite;
 
-            for (int attempt = 0; attempt < MaxBadNonceRetries; attempt++)
+            for (int transientAttempt = 0; ; transientAttempt++)
             {
-                string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
-                string jws = JsonWebSignature.Encode(key, url, nonce, keyId, payload);
+                Exception? lastBadNonce = null;
 
-                try
+                for (int badNonceAttempt = 0; badNonceAttempt < MaxBadNonceRetries; badNonceAttempt++)
                 {
-                    return await SendWithRetryAsync(() => CreateJwsRequest(url, jws, accept: null), typeInfo, cancellationToken)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
+                    string jws = JsonWebSignature.Encode(key, url, nonce, keyId, payload);
+
+                    AcmeSendOutcome<T> outcome = await SendJwsOnceAsync(url, jws, accept: null, typeInfo, cancellationToken)
                         .ConfigureAwait(false);
-                }
-                catch (AcmeCaException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
-                {
-                    lastError = ex;
-                    AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
-                }
-            }
 
-            throw new AcmeCaException(
-                $"The certificate authority repeatedly rejected the replay nonce for '{url}'.",
-                lastError ?? new AcmeCaException("badNonce"));
+                    switch (outcome.Kind)
+                    {
+                        case AcmeSendKind.Success:
+                            return outcome.Response!;
+
+                        case AcmeSendKind.BadNonce:
+                            lastBadNonce = outcome.Exception;
+                            AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
+                            continue;
+
+                        case AcmeSendKind.Fatal:
+                            throw outcome.Exception!;
+
+                        case AcmeSendKind.Ambiguous:
+                        case AcmeSendKind.TransientHttp:
+                            if (!allowTransientRetry)
+                            {
+                                AcmeLogMessages.AcmeAmbiguousOutcome(_logger, url);
+                                throw CreateAmbiguousException(url, outcome);
+                            }
+
+                            if (transientAttempt >= MaxTransientRetries)
+                            {
+                                InvalidateDirectory();
+                                throw outcome.Exception
+                                    ?? new AcmeCaException(
+                                        $"The request to '{url}' failed after {transientAttempt + 1} attempts.",
+                                        outcome.TransportException!);
+                            }
+
+                            TimeSpan delay = outcome.RetryDelay
+                                ?? TimeSpan.FromSeconds(Math.Pow(2, transientAttempt));
+                            if (delay <= TimeSpan.Zero || delay > MaxRetryDelay)
+                            {
+                                throw outcome.Exception
+                                    ?? new AcmeCaException($"The request to '{url}' failed with a non-retryable delay.");
+                            }
+
+                            if (outcome.Kind == AcmeSendKind.TransientHttp)
+                            {
+                                AcmeLogMessages.AcmeServerErrorRetry(_logger, outcome.StatusCode ?? 0, delay);
+                            }
+                            else
+                            {
+                                AcmeLogMessages.AcmeTransportRetry(_logger, delay, outcome.TransportException!);
+                            }
+
+                            await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
+                            goto NextTransientAttempt;
+
+                        default:
+                            throw new InvalidOperationException($"Unexpected ACME send kind '{outcome.Kind}'.");
+                    }
+                }
+
+                throw new AcmeCaException(
+                    $"The certificate authority repeatedly rejected the replay nonce for '{url}'.",
+                    lastBadNonce ?? new AcmeCaException("badNonce"));
+
+            NextTransientAttempt:
+                ;
+            }
         }
 
-        /// <summary>POST-as-GET (empty JWS payload).</summary>
+        /// <summary>POST-as-GET (empty JWS payload) with <see cref="AcmeRequestSemantics.SafeRead"/> retries.</summary>
         /// <typeparam name="T">Deserialized success body.</typeparam>
         /// <param name="key">Account key that signs the JWS.</param>
         /// <param name="keyId">Account URL (<c>kid</c>). Required.</param>
@@ -164,7 +229,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
             Uri url,
             JsonTypeInfo<T> typeInfo,
             CancellationToken cancellationToken) =>
-            PostAsync(key, keyId, url, string.Empty, typeInfo, cancellationToken);
+            PostAsync(key, keyId, url, string.Empty, typeInfo, AcmeRequestSemantics.SafeRead, cancellationToken);
 
         /// <summary>POST-as-GET returning the raw body (certificate PEM chain).</summary>
         /// <param name="key">Account key that signs the JWS.</param>
@@ -181,27 +246,71 @@ namespace VectorNNTPD.Common.Acme.Protocol
             string accept,
             CancellationToken cancellationToken)
         {
-            for (int attempt = 0; attempt < MaxBadNonceRetries; attempt++)
+            for (int transientAttempt = 0; ; transientAttempt++)
             {
-                string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
-                string jws = JsonWebSignature.Encode(key, url, nonce, keyId, string.Empty);
+                Exception? lastBadNonce = null;
 
-                try
+                for (int badNonceAttempt = 0; badNonceAttempt < MaxBadNonceRetries; badNonceAttempt++)
                 {
-                    AcmeResponse<object> response = await SendWithRetryAsync<object>(
-                        () => CreateJwsRequest(url, jws, accept),
-                        typeInfo: null,
-                        cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string nonce = await TakeNonceAsync(cancellationToken).ConfigureAwait(false);
+                    string jws = JsonWebSignature.Encode(key, url, nonce, keyId, string.Empty);
 
-                    return new AcmeRawResponse(response.RawBody, response.Links);
+                    AcmeSendOutcome<object> outcome = await SendJwsOnceAsync<object>(
+                        url, jws, accept, typeInfo: null, cancellationToken).ConfigureAwait(false);
+
+                    switch (outcome.Kind)
+                    {
+                        case AcmeSendKind.Success:
+                            return new AcmeRawResponse(outcome.Response!.RawBody, outcome.Response.Links);
+                        case AcmeSendKind.BadNonce:
+                            lastBadNonce = outcome.Exception;
+                            AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
+                            continue;
+                        case AcmeSendKind.Fatal:
+                            throw outcome.Exception!;
+                        case AcmeSendKind.Ambiguous:
+                        case AcmeSendKind.TransientHttp:
+                            if (transientAttempt >= MaxTransientRetries)
+                            {
+                                InvalidateDirectory();
+                                throw outcome.Exception
+                                    ?? new AcmeCaException(
+                                        $"The request to '{url}' failed after {transientAttempt + 1} attempts.",
+                                        outcome.TransportException!);
+                            }
+
+                            TimeSpan delay = outcome.RetryDelay
+                                ?? TimeSpan.FromSeconds(Math.Pow(2, transientAttempt));
+                            if (delay <= TimeSpan.Zero || delay > MaxRetryDelay)
+                            {
+                                throw outcome.Exception
+                                    ?? new AcmeCaException($"The request to '{url}' failed with a non-retryable delay.");
+                            }
+
+                            if (outcome.Kind == AcmeSendKind.TransientHttp)
+                            {
+                                AcmeLogMessages.AcmeServerErrorRetry(_logger, outcome.StatusCode ?? 0, delay);
+                            }
+                            else
+                            {
+                                AcmeLogMessages.AcmeTransportRetry(_logger, delay, outcome.TransportException!);
+                            }
+
+                            await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
+                            goto NextTransient;
+                        default:
+                            throw new InvalidOperationException($"Unexpected ACME send kind '{outcome.Kind}'.");
+                    }
                 }
-                catch (AcmeCaException ex) when (ex.ErrorType == AcmeErrorTypes.BadNonce)
-                {
-                    AcmeLogMessages.AcmeBadNonceRetry(_logger, url);
-                }
+
+                throw new AcmeCaException(
+                    $"The certificate authority repeatedly rejected the replay nonce for '{url}'.",
+                    lastBadNonce ?? new AcmeCaException("badNonce"));
+
+            NextTransient:
+                ;
             }
-
-            throw new AcmeCaException($"The certificate authority repeatedly rejected the replay nonce for '{url}'.");
         }
 
         /// <summary>
@@ -280,16 +389,24 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>
-        /// Sends a request and retries transport failures and HTTP 500/502/503/504.
-        /// <see cref="AcmeErrorTypes.BadNonce"/> is not retried here.
-        /// HTTP 404 invalidates the directory cache. Caller cancellation is not retried.
+        /// Sends one JWS POST and classifies the outcome. Does not retry.
+        /// Caller cancellation is never classified as ambiguous.
         /// </summary>
-        /// <typeparam name="T">Deserialized success body.</typeparam>
-        /// <param name="requestFactory">Builds a fresh request for each attempt. The method disposes it.</param>
-        /// <param name="typeInfo">Deserializer metadata. <see langword="null"/> or an empty body leaves <see cref="AcmeResponse{T}.Content"/> at its default.</param>
-        /// <param name="cancellationToken">Cancels the send and any retry delay.</param>
-        /// <returns>The successful response, including raw body and link metadata.</returns>
-        private async Task<AcmeResponse<T>> SendWithRetryAsync<T>(
+        private async Task<AcmeSendOutcome<T>> SendJwsOnceAsync<T>(
+            Uri url,
+            string jws,
+            string? accept,
+            JsonTypeInfo<T>? typeInfo,
+            CancellationToken cancellationToken)
+        {
+            using HttpRequestMessage request = CreateJwsRequest(url, jws, accept);
+            return await SendOnceAsync(request, typeInfo, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Sends an unsigned request (directory GET) with the same transient retry policy as safe reads.
+        /// </summary>
+        private async Task<AcmeResponse<T>> SendUnsignedWithRetryAsync<T>(
             Func<HttpRequestMessage> requestFactory,
             JsonTypeInfo<T>? typeInfo,
             CancellationToken cancellationToken)
@@ -297,73 +414,135 @@ namespace VectorNNTPD.Common.Acme.Protocol
             for (int attempt = 0; ; attempt++)
             {
                 using HttpRequestMessage request = requestFactory();
-                HttpResponseMessage response;
+                AcmeSendOutcome<T> outcome = await SendOnceAsync(request, typeInfo, cancellationToken).ConfigureAwait(false);
 
-                try
+                switch (outcome.Kind)
                 {
-                    using HttpClient client = CreateClient();
-                    response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
-                                           && !cancellationToken.IsCancellationRequested)
-                {
-                    if (attempt >= MaxTransientRetries)
-                    {
-                        InvalidateDirectory();
-                        throw new AcmeCaException(
-                            $"The request to '{request.RequestUri}' failed after {attempt + 1} attempts.",
-                            ex);
-                    }
-
-                    TimeSpan backoff = TimeSpan.FromSeconds(Math.Pow(2, attempt));
-                    AcmeLogMessages.AcmeTransportRetry(_logger, backoff, ex);
-                    await Task.Delay(backoff, _time, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                using (response)
-                {
-                    CaptureNonce(response);
-                    string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-                    DateTimeOffset? retryAfter = ParseRetryAfter(response);
-
-                    if (response.IsSuccessStatusCode)
-                    {
-                        T? content = typeInfo is null || body.Length == 0 ? default : Deserialize(body, typeInfo);
-                        return new AcmeResponse<T>(
-                            response.StatusCode,
-                            content,
-                            response.Headers.Location,
-                            ParseLinks(response),
-                            body,
-                            retryAfter);
-                    }
-
-                    AcmeProblem? problem = TryParseProblem(body);
-
-                    if (response.StatusCode == HttpStatusCode.NotFound)
-                    {
-                        InvalidateDirectory();
-                    }
-
-                    if (attempt < MaxTransientRetries && ShouldRetry(response.StatusCode, problem))
-                    {
-                        TimeSpan delay = retryAfter is { } retryAt
-                            ? retryAt - _time.GetUtcNow()
-                            : TimeSpan.FromSeconds(Math.Pow(2, attempt));
-
-                        if (delay > TimeSpan.Zero && delay <= MaxRetryDelay)
+                    case AcmeSendKind.Success:
+                        return outcome.Response!;
+                    case AcmeSendKind.Fatal:
+                        throw outcome.Exception!;
+                    case AcmeSendKind.Ambiguous:
+                    case AcmeSendKind.TransientHttp:
+                        if (attempt >= MaxTransientRetries)
                         {
-                            AcmeLogMessages.AcmeServerErrorRetry(_logger, (int)response.StatusCode, delay);
-                            await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
-                            continue;
+                            InvalidateDirectory();
+                            throw outcome.Exception
+                                ?? new AcmeCaException(
+                                    $"The request to '{request.RequestUri}' failed after {attempt + 1} attempts.",
+                                    outcome.TransportException!);
                         }
-                    }
 
-                    throw CreateException(response.StatusCode, problem, retryAfter, request.RequestUri, body);
+                        TimeSpan delay = outcome.RetryDelay ?? TimeSpan.FromSeconds(Math.Pow(2, attempt));
+                        if (delay <= TimeSpan.Zero || delay > MaxRetryDelay)
+                        {
+                            throw outcome.Exception
+                                ?? new AcmeCaException($"The request to '{request.RequestUri}' failed with a non-retryable delay.");
+                        }
+
+                        if (outcome.Kind == AcmeSendKind.TransientHttp)
+                        {
+                            AcmeLogMessages.AcmeServerErrorRetry(_logger, outcome.StatusCode ?? 0, delay);
+                        }
+                        else
+                        {
+                            AcmeLogMessages.AcmeTransportRetry(_logger, delay, outcome.TransportException!);
+                        }
+
+                        await Task.Delay(delay, _time, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    default:
+                        throw new InvalidOperationException($"Unexpected ACME send kind '{outcome.Kind}'.");
                 }
             }
+        }
+
+        /// <summary>
+        /// Performs a single HTTP send and classifies success, badNonce, fatal protocol errors,
+        /// retryable HTTP 5xx, or an ambiguous transport outcome. Does not retry.
+        /// </summary>
+        private async Task<AcmeSendOutcome<T>> SendOnceAsync<T>(
+            HttpRequestMessage request,
+            JsonTypeInfo<T>? typeInfo,
+            CancellationToken cancellationToken)
+        {
+            HttpResponseMessage response;
+            try
+            {
+                using HttpClient client = CreateClient();
+                response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                // HttpClient may have transmitted the request; absence of a response is not proof of rejection.
+                return AcmeSendOutcome<T>.Ambiguous(ex);
+            }
+
+            using (response)
+            {
+                CaptureNonce(response);
+                string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                DateTimeOffset? retryAfter = ParseRetryAfter(response);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    T? content = typeInfo is null || body.Length == 0 ? default : Deserialize(body, typeInfo);
+                    return AcmeSendOutcome<T>.Success(new AcmeResponse<T>(
+                        response.StatusCode,
+                        content,
+                        response.Headers.Location,
+                        ParseLinks(response),
+                        body,
+                        retryAfter));
+                }
+
+                AcmeProblem? problem = TryParseProblem(body);
+
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    InvalidateDirectory();
+                }
+
+                if (problem?.Type == AcmeErrorTypes.BadNonce)
+                {
+                    return AcmeSendOutcome<T>.BadNonce(
+                        CreateException(response.StatusCode, problem, retryAfter, request.RequestUri, body));
+                }
+
+                if (ShouldRetry(response.StatusCode, problem))
+                {
+                    TimeSpan? delay = retryAfter is { } retryAt ? retryAt - _time.GetUtcNow() : null;
+                    return AcmeSendOutcome<T>.TransientHttp(
+                        (int)response.StatusCode,
+                        delay,
+                        CreateException(response.StatusCode, problem, retryAfter, request.RequestUri, body));
+                }
+
+                return AcmeSendOutcome<T>.Fatal(
+                    CreateException(response.StatusCode, problem, retryAfter, request.RequestUri, body));
+            }
+        }
+
+        /// <summary>Builds <see cref="AcmeAmbiguousOutcomeException"/> from a classified send failure.</summary>
+        private static AcmeAmbiguousOutcomeException CreateAmbiguousException<T>(Uri url, AcmeSendOutcome<T> outcome)
+        {
+            string message =
+                $"The ACME request to '{url}' may have been accepted, but no trustworthy response was received. The request will not be replayed.";
+            if (outcome.TransportException is not null)
+            {
+                return new AcmeAmbiguousOutcomeException(message, url, outcome.TransportException);
+            }
+
+            if (outcome.Exception is not null)
+            {
+                return new AcmeAmbiguousOutcomeException(message, url, outcome.Exception);
+            }
+
+            return new AcmeAmbiguousOutcomeException(message, url);
         }
 
         /// <summary>
@@ -371,7 +550,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
         /// </summary>
         /// <param name="statusCode">HTTP status.</param>
         /// <param name="problem">Parsed problem, or <see langword="null"/> when the body was not a problem document.</param>
-        /// <returns><see langword="true"/> when another attempt may be made.</returns>
+        /// <returns><see langword="true"/> when another attempt may be made for safe/idempotent operations.</returns>
         private static bool ShouldRetry(HttpStatusCode statusCode, AcmeProblem? problem)
         {
             if (problem?.Type == AcmeErrorTypes.BadNonce)
@@ -389,12 +568,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         /// Builds <see cref="AcmeCaRateLimitException"/> for HTTP 429 or <see cref="AcmeErrorTypes.RateLimited"/>;
         /// otherwise <see cref="AcmeCaException"/>.
         /// </summary>
-        /// <param name="statusCode">HTTP status.</param>
-        /// <param name="problem">Parsed problem, or <see langword="null"/>.</param>
-        /// <param name="retryAfter">Absolute Retry-After time, or <see langword="null"/>.</param>
-        /// <param name="requestUri">Request URI included in the message.</param>
-        /// <param name="body">Raw body. Used as detail only when no problem detail exists, truncated to 512 characters.</param>
-        /// <returns>The exception to throw. It is not thrown by this method.</returns>
         private static AcmeCaException CreateException(
             HttpStatusCode statusCode,
             AcmeProblem? problem,
@@ -416,10 +589,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Deserializes a success body. A <see cref="JsonException"/> becomes <see cref="AcmeCaException"/>.</summary>
-        /// <typeparam name="T">Body type.</typeparam>
-        /// <param name="body">Response text.</param>
-        /// <param name="typeInfo">Source-generated metadata.</param>
-        /// <returns>The deserialized value, which may be <see langword="null"/>.</returns>
         private static T? Deserialize<T>(string body, JsonTypeInfo<T> typeInfo)
         {
             try
@@ -433,8 +602,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Parses a problem document. An empty body or invalid JSON returns <see langword="null"/>.</summary>
-        /// <param name="body">Response text.</param>
-        /// <returns>The problem, or <see langword="null"/> when it cannot be read.</returns>
         private static AcmeProblem? TryParseProblem(string body)
         {
             if (body.Length == 0)
@@ -453,7 +620,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Pushes every non-empty <c>Replay-Nonce</c> header value onto <see cref="_nonces"/>.</summary>
-        /// <param name="response">Response that may contain the header.</param>
         private void CaptureNonce(HttpResponseMessage response)
         {
             if (!response.Headers.TryGetValues("Replay-Nonce", out IEnumerable<string>? values))
@@ -473,8 +639,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         /// <summary>
         /// Converts <c>Retry-After</c> to an absolute UTC time using <see cref="_time"/> when the header is a delta.
         /// </summary>
-        /// <param name="response">Response that may contain the header.</param>
-        /// <returns>The absolute time, or <see langword="null"/> when the header is absent.</returns>
         private DateTimeOffset? ParseRetryAfter(HttpResponseMessage response)
         {
             RetryConditionHeaderValue? header = response.Headers.RetryAfter;
@@ -492,8 +656,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Parses RFC 8288 <c>Link</c> headers into absolute URL and relation pairs. Malformed entries are skipped.</summary>
-        /// <param name="response">Response that may contain Link headers.</param>
-        /// <returns>The parsed links. Empty when the header is absent.</returns>
         private static List<AcmeLink> ParseLinks(HttpResponseMessage response)
         {
             if (!response.Headers.TryGetValues("Link", out IEnumerable<string>? values))
@@ -524,8 +686,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Splits a Link header on commas that are outside angle brackets.</summary>
-        /// <param name="value">One Link header value, which may contain several links.</param>
-        /// <returns>The comma-separated segments, including empty segments when present.</returns>
         private static IEnumerable<string> SplitLinkHeader(string value)
         {
             int depth = 0;
@@ -555,8 +715,6 @@ namespace VectorNNTPD.Common.Acme.Protocol
         }
 
         /// <summary>Reads the <c>rel</c> parameter. Returns an empty string when it is absent.</summary>
-        /// <param name="parameters">The text after the closing angle bracket of one link.</param>
-        /// <returns>The relation token with surrounding quotes removed.</returns>
         private static string ExtractRelation(string parameters)
         {
             foreach (string part in parameters.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -574,6 +732,87 @@ namespace VectorNNTPD.Common.Acme.Protocol
             }
 
             return string.Empty;
+        }
+
+        /// <summary>Classification of a single HTTP attempt.</summary>
+        private enum AcmeSendKind
+        {
+            /// <summary>Successful ACME response.</summary>
+            Success,
+
+            /// <summary>CA returned <see cref="AcmeErrorTypes.BadNonce"/>; the signed request was rejected.</summary>
+            BadNonce,
+
+            /// <summary>Definitive protocol or client error that must not be retried as a transient.</summary>
+            Fatal,
+
+            /// <summary>HTTP 5xx that safe/idempotent operations may retry with a fresh request.</summary>
+            TransientHttp,
+
+            /// <summary>Transport failure or timeout after the request may have been transmitted.</summary>
+            Ambiguous,
+        }
+
+        /// <summary>Result of <see cref="SendOnceAsync{T}"/>.</summary>
+        /// <typeparam name="T">Deserialized body type.</typeparam>
+        private sealed class AcmeSendOutcome<T>
+        {
+            private AcmeSendOutcome(
+                AcmeSendKind kind,
+                AcmeResponse<T>? response,
+                AcmeCaException? exception,
+                Exception? transportException,
+                int? statusCode,
+                TimeSpan? retryDelay)
+            {
+                Kind = kind;
+                Response = response;
+                Exception = exception;
+                TransportException = transportException;
+                StatusCode = statusCode;
+                RetryDelay = retryDelay;
+            }
+
+            /// <summary>Outcome kind.</summary>
+            internal AcmeSendKind Kind { get; }
+
+            /// <summary>Success response when <see cref="Kind"/> is <see cref="AcmeSendKind.Success"/>.</summary>
+            internal AcmeResponse<T>? Response { get; }
+
+            /// <summary>Protocol exception for badNonce, fatal, or transient HTTP failures.</summary>
+            internal AcmeCaException? Exception { get; }
+
+            /// <summary>Underlying transport exception for ambiguous outcomes.</summary>
+            internal Exception? TransportException { get; }
+
+            /// <summary>HTTP status for transient HTTP failures.</summary>
+            internal int? StatusCode { get; }
+
+            /// <summary>Suggested delay before a safe/idempotent retry.</summary>
+            internal TimeSpan? RetryDelay { get; }
+
+            /// <summary>Creates a success outcome.</summary>
+            internal static AcmeSendOutcome<T> Success(AcmeResponse<T> response) =>
+                new(AcmeSendKind.Success, response, null, null, null, null);
+
+            /// <summary>Creates a badNonce outcome.</summary>
+            internal static AcmeSendOutcome<T> BadNonce(AcmeCaException exception) =>
+                new(AcmeSendKind.BadNonce, null, exception, null, null, null);
+
+            /// <summary>Creates a fatal protocol outcome.</summary>
+            internal static AcmeSendOutcome<T> Fatal(AcmeCaException exception) =>
+                new(AcmeSendKind.Fatal, null, exception, null, null, null);
+
+            /// <summary>Creates a transient HTTP 5xx outcome.</summary>
+            /// <param name="statusCode">HTTP status.</param>
+            /// <param name="retryDelay">Retry-After delay when present; <see langword="null"/> selects exponential backoff.</param>
+            /// <param name="exception">Exception describing the 5xx response.</param>
+            internal static AcmeSendOutcome<T> TransientHttp(int statusCode, TimeSpan? retryDelay, AcmeCaException exception) =>
+                new(AcmeSendKind.TransientHttp, null, exception, null, statusCode, retryDelay);
+
+            /// <summary>Creates an ambiguous transport outcome.</summary>
+            internal static AcmeSendOutcome<T> Ambiguous(Exception transportException) =>
+                new(AcmeSendKind.Ambiguous, null, null, transportException, null, null);
         }
     }
 }

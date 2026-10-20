@@ -105,4 +105,37 @@ namespace VectorNNTPD.Common.Acme.Protocol
         /// <summary>Gets when the request may be retried, when the authority supplied Retry-After.</summary>
         private DateTimeOffset? RetryAfter { get; }
     }
+
+    /// <summary>
+    /// A state-changing ACME request may have been accepted by the CA, but no trustworthy response was observed.
+    /// Callers must recover via known resource URLs or the account orders list instead of replaying the JWS.
+    /// </summary>
+    internal sealed class AcmeAmbiguousOutcomeException : AcmeCaException
+    {
+        /// <summary>
+        /// Records an uncertain remote outcome for <paramref name="requestUri"/> without an inner exception.
+        /// </summary>
+        /// <param name="message">Operator-safe summary. Must not include JWS bodies, keys, or credentials.</param>
+        /// <param name="requestUri">Request URL that may have been processed.</param>
+        internal AcmeAmbiguousOutcomeException(string message, Uri? requestUri)
+            : base(message)
+        {
+            RequestUri = requestUri;
+        }
+
+        /// <summary>
+        /// Records an uncertain remote outcome for <paramref name="requestUri"/> caused by <paramref name="innerException"/>.
+        /// </summary>
+        /// <param name="message">Operator-safe summary. Must not include JWS bodies, keys, or credentials.</param>
+        /// <param name="requestUri">Request URL that may have been processed.</param>
+        /// <param name="innerException">Transport or timeout failure that left the outcome uncertain.</param>
+        internal AcmeAmbiguousOutcomeException(string message, Uri? requestUri, Exception innerException)
+            : base(message, innerException)
+        {
+            RequestUri = requestUri;
+        }
+
+        /// <summary>Gets the request URL whose remote outcome is uncertain.</summary>
+        internal Uri? RequestUri { get; }
+    }
 }

@@ -9,6 +9,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
         ReadCommentHandling = JsonCommentHandling.Skip)]
     [JsonSerializable(typeof(AcmeDirectoryResource))]
     [JsonSerializable(typeof(AcmeAccountResource))]
+    [JsonSerializable(typeof(AcmeOrdersListResource))]
     [JsonSerializable(typeof(AcmeOrderResource))]
     [JsonSerializable(typeof(AcmeAuthorizationResource))]
     [JsonSerializable(typeof(AcmeChallengeResource))]

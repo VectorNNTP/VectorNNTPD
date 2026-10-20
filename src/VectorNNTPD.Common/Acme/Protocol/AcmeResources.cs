@@ -323,6 +323,17 @@ namespace VectorNNTPD.Common.Acme.Protocol
         public AcmeIdentifier? Identifier { get; set; }
     }
 
+    /// <summary>ACME account orders list (RFC 8555 §7.1.2.1).</summary>
+    internal sealed class AcmeOrdersListResource
+    {
+        /// <summary>
+        /// Account <c>orders</c> URL array. <see langword="null"/> when the field is absent or JSON null.
+        /// Order recovery after an ambiguous <c>newOrder</c> scans this list; an incomplete page is a recovery limit.
+        /// </summary>
+        [JsonPropertyName("orders")]
+        public IReadOnlyList<Uri>? Orders { get; set; }
+    }
+
     /// <summary>Empty JSON body (successful POST with no resource).</summary>
     internal sealed class AcmeEmptyResource;
 

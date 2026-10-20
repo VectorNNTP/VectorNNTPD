@@ -263,5 +263,17 @@ namespace VectorNNTPD.Common.Acme
             Level = LogLevel.Debug,
             Message = "ACME server status={StatusCode}; retrying in {Delay}")]
         internal static partial void AcmeServerErrorRetry(ILogger logger, int StatusCode, TimeSpan Delay);
+
+        /// <summary>
+        /// Written when a state-changing ACME POST may have been accepted but no trustworthy response was observed.
+        /// The client must recover without replaying the same request.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="Url">Request URL whose remote outcome is uncertain.</param>
+        [LoggerMessage(
+            EventId = 1923,
+            Level = LogLevel.Warning,
+            Message = "ACME request to {Url} may have been accepted; outcome is uncertain and the request will not be replayed")]
+        internal static partial void AcmeAmbiguousOutcome(ILogger logger, Uri Url);
     }
 }

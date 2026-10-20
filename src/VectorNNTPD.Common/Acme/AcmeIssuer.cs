@@ -240,7 +240,8 @@ namespace VectorNNTPD.Common.Acme
                         .ConfigureAwait(false);
                     finalizeUrl = readyOrder.Finalize ?? finalizeUrl;
 
-                    _ = await acme.FinalizeOrderAsync(finalizeUrl, csr, cancellationToken).ConfigureAwait(false);
+                    _ = await acme.FinalizeOrderAsync(order.Location, finalizeUrl, csr, cancellationToken)
+                        .ConfigureAwait(false);
                     AcmeOrderResource validOrder = await acme.WaitForOrderAsync(
                             order.Location,
                             timeout: TimeSpan.FromMinutes(3),
