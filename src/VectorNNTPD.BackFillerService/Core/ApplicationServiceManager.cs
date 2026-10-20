@@ -235,19 +235,25 @@ namespace VectorNNTPD.BackFillerService.Core
         /// Thrown when a lifecycle operation is already in progress.
         /// </exception>
         /// <exception cref="OperationCanceledException">
-        /// Thrown when <paramref name="cancellationToken"/> is canceled while waiting for <see cref="_gate"/>.
-        /// Execution watching is left running in that case.
+        /// Thrown when <paramref name="cancellationToken"/> is canceled while waiting for <see cref="_gate"/>,
+        /// or when the caller cancels after the gate is acquired and at least one service stop observed that cancel.
+        /// Execution watching is left running only when the gate wait itself is canceled.
+        /// </exception>
+        /// <exception cref="TimeoutException">
+        /// Thrown when the shared shutdown budget expires while stopping a service and the caller token is not canceled.
         /// </exception>
         /// <exception cref="AggregateException">
         /// Thrown when one or more services throw a non-cancellation exception from
-        /// <see cref="IApplicationService.StopAsync"/>. Cancellation of an individual stop is logged and
-        /// is not an inner exception. The started service is still removed.
+        /// <see cref="IApplicationService.StopAsync"/>, or when a budget timeout is combined with other stop failures.
+        /// Caller cancellation of an individual stop is not an inner exception. The started service is still removed.
         /// </exception>
         /// <remarks>
         /// Execution watching is stopped after the gate is acquired and before services are stopped.
-        /// Stopping when nothing has started completes without throwing. A canceled or budget-expired
-        /// individual stop does not fail this method by itself; later services are still stopped with the
-        /// same linked token.
+        /// Stopping when nothing has started completes without throwing. When the linked budget token cancels
+        /// and the caller token has not, the first such service contributes a <see cref="TimeoutException"/>;
+        /// later services still receive the canceled token and are logged as aborted after budget. When the
+        /// caller token is canceled, stops are logged as canceled and this method rethrows that cancellation
+        /// after the remaining services are offered a stop (matching Common's precedence: caller cancel over budget).
         /// </remarks>
         internal async Task StopAsync(CancellationToken cancellationToken)
         {
@@ -272,6 +278,8 @@ namespace VectorNNTPD.BackFillerService.Core
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(_shutdownBudget);
                 var failures = new List<Exception>();
+                var externallyCanceled = false;
+                var budgetTimedOut = false;
                 for (var i = toStop.Length - 1; i >= 0; i--)
                 {
                     var service = toStop[i];
@@ -280,14 +288,33 @@ namespace VectorNNTPD.BackFillerService.Core
                     {
                         await service.StopAsync(timeoutCts.Token).ConfigureAwait(false);
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        // Caller cancel takes precedence when both the budget timer and the caller fire together.
+                        externallyCanceled = true;
+                        ApplicationServiceManagerLogMessages.ServiceStopCanceled(_logger, service.Name);
+                    }
+                    catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+                    {
+                        if (!budgetTimedOut)
+                        {
+                            budgetTimedOut = true;
+                            ApplicationServiceManagerLogMessages.GracefulShutdownTimedOut(
+                                _logger,
+                                _shutdownBudget,
+                                service.Name);
+                            failures.Add(new TimeoutException(
+                                $"Graceful shutdown timed out after {_shutdownBudget} while stopping '{service.Name}'."));
+                        }
+                        else
+                        {
+                            ApplicationServiceManagerLogMessages.ServiceStopAbortedAfterBudget(_logger, service.Name);
+                        }
+                    }
+                    catch (Exception ex)
                     {
                         ApplicationServiceManagerLogMessages.ServiceStopFailed(_logger, ex, service.Name);
                         failures.Add(ex);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        ApplicationServiceManagerLogMessages.ServiceStopCanceled(_logger, service.Name);
                     }
                     finally
                     {
@@ -296,6 +323,16 @@ namespace VectorNNTPD.BackFillerService.Core
                             _started.Remove(service);
                         }
                     }
+                }
+
+                if (externallyCanceled)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                if (failures is [TimeoutException timeoutEx])
+                {
+                    throw timeoutEx;
                 }
 
                 if (failures.Count > 0)

@@ -8,7 +8,7 @@ The worker consumes RabbitMQ Article Work, retrieves articles from upstream NNTP
 
 `BackFillerApplicationHostedService` is the Generic Host adapter. It starts and stops `ApplicationServiceManager`.
 
-`ApplicationServiceManager` starts registered `IApplicationService` instances in registration order. On startup failure it stops the services that already started (rollback) and leaves the manager idle so start can be tried again. Stop runs in reverse order. One `BackFillerShutdownOptions.GracePeriodSeconds` budget covers the whole stop or rollback loop. It is not granted separately to each service. Overlapping start and stop throw `InvalidOperationException` before waiting on the manager gate.
+`ApplicationServiceManager` starts registered `IApplicationService` instances in registration order. On startup failure it stops the services that already started (rollback) and leaves the manager idle so start can be tried again. Stop runs in reverse order. One `BackFillerShutdownOptions.GracePeriodSeconds` budget covers the whole stop or rollback loop. It is not granted separately to each service. When that budget expires while a service is stopping and the caller has not cancelled, `StopAsync` fails with `TimeoutException` (a non-zero process exit). Caller cancellation of shutdown is not classified as a budget timeout. Overlapping start and stop throw `InvalidOperationException` before waiting on the manager gate.
 
 After start, non-null `IApplicationService.Execution` tasks are watched. A fault, a successful completion, or cancellation of that execution raises `UnexpectedServiceTermination`. `BackFillerApplicationHostedService` marks `BackFillerApplicationHealth` unhealthy and calls `IHostApplicationLifetime.StopApplication`.
 

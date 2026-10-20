@@ -100,6 +100,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             new CloudflareDnsException("dns update failed"),
             new InvalidOperationException("host exploded"),
             new OperationCanceledException("startup canceled"),
+            new TimeoutException("Graceful shutdown timed out after 00:00:30 while stopping 'listener'."),
         ];
     }
 }

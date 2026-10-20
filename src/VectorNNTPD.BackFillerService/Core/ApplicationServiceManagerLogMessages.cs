@@ -56,12 +56,37 @@ namespace VectorNNTPD.BackFillerService.Core
         internal static partial void ServiceStopFailed(ILogger logger, Exception exception, string serviceName);
 
         /// <summary>
-        /// Written when a service stop throws <see cref="OperationCanceledException"/> during coordinated shutdown.
+        /// Written when a service stop throws <see cref="OperationCanceledException"/> because the caller token was canceled.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="serviceName">Name of the service whose stop was canceled.</param>
         [LoggerMessage(EventId = 7, Level = LogLevel.Warning, Message = "Application service {ServiceName} stop was canceled")]
         internal static partial void ServiceStopCanceled(ILogger logger, string serviceName);
+
+        /// <summary>
+        /// Written when a service stop throws <see cref="OperationCanceledException"/> because the shutdown budget elapsed,
+        /// and this is the first service to cross the budget.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="timeout">Configured shutdown grace period.</param>
+        /// <param name="serviceName">Name of the service whose stop was canceled by the budget.</param>
+        [LoggerMessage(
+            EventId = 11,
+            Level = LogLevel.Error,
+            Message = "Graceful shutdown timed out after {Timeout} while stopping application service {ServiceName}")]
+        internal static partial void GracefulShutdownTimedOut(ILogger logger, TimeSpan timeout, string serviceName);
+
+        /// <summary>
+        /// Written when a later service is offered an already-canceled stop token after the budget was exhausted,
+        /// and that stop throws cancellation.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="serviceName">Name of the service whose stop was aborted.</param>
+        [LoggerMessage(
+            EventId = 12,
+            Level = LogLevel.Warning,
+            Message = "Application service {ServiceName} stop aborted after graceful shutdown budget was already exhausted")]
+        internal static partial void ServiceStopAbortedAfterBudget(ILogger logger, string serviceName);
 
         /// <summary>
         /// Written when a service stop throws during startup rollback. Rollback swallows this exception.
