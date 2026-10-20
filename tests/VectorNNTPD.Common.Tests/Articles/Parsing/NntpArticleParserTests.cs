@@ -388,7 +388,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
             Assert.Equal("Fri, 23 Aug 2024 05:30:10 +0000", Encoding.ASCII.GetString(record.Date));
 
             OverviewArticleV1 overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
-            Assert.Equal(Encoding.ASCII.GetString(record.Date), overview.Date);
+            Assert.True(record.Date.SequenceEqual(overview.Date));
 
             byte[] artData = record.ArtData.Span[..record.ArtSize].ToArray();
             ArticleCanonicalTransferMeta meta = ArticleCanonicalTransferMeta.FromRecord(record, created.SelectedDateHeaderName);
@@ -2525,7 +2525,12 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
             ArticleRecordCreateResult created = ArticleRecordFactory.TryCreate(parser, article);
             Assert.True(created.IsAccepted);
             OverviewArticleV1 overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(created.Record));
-            Assert.Equal(groups, overview.Newsgroups);
+            Assert.Equal(groups.Length, overview.Newsgroups.Count);
+            for (int i = 0; i < groups.Length; i++)
+            {
+                Assert.Equal(Encoding.ASCII.GetBytes(groups[i]), overview.Newsgroups[i]);
+            }
+
             return created.Record;
         }
 
