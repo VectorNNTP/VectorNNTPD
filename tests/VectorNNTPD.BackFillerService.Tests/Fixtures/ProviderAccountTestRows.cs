@@ -10,14 +10,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
 
         /// <summary>Builds a provider row. Defaults are Giganews, news.example.test:563, SSL, four connections, and <see cref="SecretPassword"/>.</summary>
         internal static ProviderAccountRow Create(
-            string backbone = "Giganews",
-            string hostname = "news.example.test",
-            int port = 563,
-            int maxConnections = 4,
-            string username = "nntp-user",
+            string? backbone = "Giganews",
+            string? hostname = "news.example.test",
+            int? port = 563,
+            int? maxConnections = 4,
+            string? username = "nntp-user",
             string? password = SecretPassword,
-            string useSsl = "y",
-            byte keepAlive = 0)
+            string? useSsl = "y",
+            byte? keepAlive = 0)
         {
             return new ProviderAccountRow(
                 backbone,
@@ -25,7 +25,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
                 keepAlive,
                 maxConnections,
                 username,
-                password!,
+                password,
                 port,
                 useSsl);
         }
