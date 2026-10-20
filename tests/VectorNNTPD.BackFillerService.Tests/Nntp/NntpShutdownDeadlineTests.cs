@@ -788,33 +788,54 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// <summary>
         /// A replenish delay that never fires does not hold replacement after the shutdown token is cancelled.
         /// </summary>
+        /// <remarks>
+        /// Responsive servers keep this case on the replenish-timer invariant alone.
+        /// Stalled QUIT and shared-budget coverage stay in
+        /// <see cref="Many_stalled_sessions_share_one_shutdown_budget"/> and the other replacement drain tests.
+        /// Completing under <see cref="SharedShutdownCeiling"/> is well below the fifteen-second replenish interval.
+        /// </remarks>
         [Fact]
         public async Task Replacement_does_not_wait_for_a_replenish_delay_that_ignores_its_timer()
         {
             const int sessions = 2;
             var factory = new ScriptedNntpTransportFactory();
-            var servers = EnqueueStalledQuitServers(factory, sessions);
+            var servers = EnqueueReadyServers(factory, sessions);
             var clock = new NeverFiringTimeProvider();
             var pool = NntpSessionPoolTests.CreatePool(
                 factory,
                 max: sessions,
                 time: clock,
                 shutdownGrace: SharedBudget);
+            var dispose = Task.CompletedTask;
             try
             {
                 await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
                 await WaitUntilAsync(() => clock.TimersCreated >= 1);
 
-                var elapsed = await MeasureAsync(() => pool.DrainAndDisposeAsync(CancellationToken.None), servers);
-                Report("replacement-replenish", SharedBudget, sessions, providers: 1, QuitStarts(servers), elapsed);
+                var started = Stopwatch.GetTimestamp();
+                dispose = pool.DrainAndDisposeAsync(CancellationToken.None);
+                await dispose.WaitAsync(SharedShutdownCeiling);
+                var elapsed = Stopwatch.GetElapsedTime(started);
+                Report("replacement-replenish", SharedBudget, sessions, providers: 1, quitStarted: 0, elapsed);
 
                 AssertWithinCeiling(elapsed);
+                Assert.True(
+                    elapsed < TimeSpan.FromSeconds(15),
+                    $"elapsed {elapsed.TotalMilliseconds:0} ms must stay below the replenish interval");
                 Assert.All(servers, static server => Assert.Equal(1, server.ClientStreamDisposeCount));
                 Assert.Equal(0, pool.LiveSessionCount);
             }
             finally
             {
-                Release(servers);
+                try
+                {
+                    await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                catch (TimeoutException)
+                {
+                    // Observed so an abandoned drain cannot outlive the test. The original failure stands.
+                }
+
                 await pool.DisposeAsync();
             }
         }
