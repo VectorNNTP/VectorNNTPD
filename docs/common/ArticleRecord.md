@@ -265,6 +265,10 @@ ddd, dd MMM yyyy HH:mm:ss +0000
 
 Example from parser tests: `Fri, 23 Aug 2024 07:30:10 +0200` resolves to `Fri, 23 Aug 2024 05:30:10 +0000`. The materializer overwrites only the winning header’s **value** bytes (not the header name). If Injection-Date won, that value is rewritten; `Fields.Date` then points at that rewritten Injection-Date value.
 
+### Leap seconds
+
+RFC 5322 allows second `60` so a leap second can appear in the time-of-day (the valid range is `00:00:00` through `23:59:60`). .NET `DateTimeOffset` parsing rejects that second. The parser accepts a leap second only when the minutes field is `59` and the seconds field is exactly `60` (for example `Sat, 31 Dec 2016 23:59:60 +0000`, including obsolete two-digit-year forms the parser already supports). It rewrites that second to `00`, parses with the existing paths, converts the offset to UTC, then advances one minute so the canonical instant is the following minute’s second `00` (that example becomes `Sun, 01 Jan 2017 00:00:00 +0000`). Minute `60` (for example `23:60:00`) and second values greater than `60` (for example `12:34:61`) are not leap seconds and remain parse failures.
+
 ### Timezone abbreviations
 
 The parser replaces one trailing ASCII letter token, length 2 through 8, with a fixed offset. It does not consult the machine timezone database. RFC 1036 §2.1.2 names `CST` as a North American news-date abbreviation. The local RFC text does not give its numeric offset. The `-06:00` mapping is the Issue #164 convention. `CDT` stays `-05:00`. China Standard Time is the distinct token `BJT` (`+08:00`). `PST` is Pacific `-08:00`; the Philippines are `PHT`. `BST` is British Summer Time `+01:00`, not Bangladesh. `IST` remains the existing India Standard Time mapping `+05:30`; Irish and Israel Standard Time share those letters and are not distinguished.
