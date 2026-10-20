@@ -89,7 +89,7 @@ namespace VectorNNTPD.Common.Dns
         /// <param name="recordName">TXT owner name, used only in the timeout log.</param>
         /// <param name="queryPacket">Query built by <see cref="DnsQueryBuilder"/>.</param>
         /// <param name="logger">Optional timeout logger.</param>
-        /// <param name="cancellationToken">Cancels the exchange. Caller cancellation propagates from <see cref="DnsUdpExchange.QueryAsync"/>.</param>
+        /// <param name="cancellationToken">Cancels the exchange. Caller cancellation propagates from <see cref="DnsUdpExchange.QueryAsync(IPAddress, byte[], int, CancellationToken)"/>.</param>
         /// <returns>Response bytes, or null when the exchange timed out or failed.</returns>
         private static async Task<byte[]?> TryUdpQueryAsync(
             IPAddress nameserver,
