@@ -15,7 +15,8 @@ namespace VectorNNTPD.Common.Acme
     /// <para>
     /// <b>TXT visibility (product contract):</b> requires the expected token on every reachable authoritative
     /// address that answers successfully (intersection of successful answers). Unreachable or failed servers
-    /// are skipped and do not vote.
+    /// are skipped and do not vote. Live queries require AA=1, a matching question/answer owner name, and
+    /// exact TXT character-string bytes (no trim or quote stripping).
     /// </para>
     /// <para>
     /// Bootstrap/recursive DNS is used only to discover apex NS names and resolve NS A/AAAA via
@@ -110,8 +111,8 @@ namespace VectorNNTPD.Common.Acme
                         : await AuthoritativeTxtClient
                             .QueryTxtAsync(server.Address, name.TrimEnd('.'), cancellationToken, _logger)
                             .ConfigureAwait(false);
+                    // Exact wire/presentation bytes from the parser; do not trim or strip quotes.
                     var values = raw
-                        .Select(static t => t.Trim())
                         .Where(static t => t.Length > 0)
                         .ToHashSet(StringComparer.Ordinal);
                     intersection = intersection is null

@@ -97,6 +97,26 @@ namespace VectorNNTPD.Common.Dns
         }
 
         /// <summary>
+        /// Returns whether two presentation-form DNS names are equal under DNS case-insensitive comparison.
+        /// </summary>
+        /// <remarks>
+        /// Trailing root dots are ignored. Comparison is label-boundary preserving (ordinal ignore-case on
+        /// the full dotted string); suffix or substring matches are not treated as equal.
+        /// </remarks>
+        /// <param name="left">First name.</param>
+        /// <param name="right">Second name.</param>
+        /// <returns><see langword="true"/> when the names denote the same DNS owner.</returns>
+        internal static bool NamesEqual(string left, string right)
+        {
+            ArgumentNullException.ThrowIfNull(left);
+            ArgumentNullException.ThrowIfNull(right);
+
+            ReadOnlySpan<char> a = left.AsSpan().TrimEnd('.');
+            ReadOnlySpan<char> b = right.AsSpan().TrimEnd('.');
+            return a.Equals(b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// Advances <paramref name="offset"/> past a DNS name encoding (labels or a compression pointer).
         /// </summary>
         /// <remarks>
