@@ -466,9 +466,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <param name="generation">Installed connection generation.</param>
         /// <param name="isReplacement"><see langword="true"/> when a prior generation existed.</param>
         /// <remarks>
-        /// Handlers run one at a time outside <see cref="_gate"/>. An exception from one subscriber is logged and
+        /// Handlers run one at a time outside <see cref="_gate"/>. A non-fatal exception from one subscriber is logged and
         /// does not prevent later subscribers from running, and does not invalidate the published generation.
-        /// Logging of a subscriber failure is also contained so a diagnostic failure cannot fail connect or recover.
+        /// Logging of a subscriber failure is also contained so a non-fatal diagnostic failure cannot fail connect or recover.
+        /// <see cref="ExceptionHelpers.IsFatal"/> failures propagate.
         /// </remarks>
         private void RaiseConnectionReplaced(long generation, bool isReplacement)
         {
@@ -486,8 +487,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 {
                     handler(this, args);
                 }
-                // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     try
                     {
@@ -497,8 +497,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                             generation,
                             DescribeConnectionReplacedSubscriber(handler));
                     }
-                    // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
-                    catch (Exception logFailure)
+                    catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
                     {
                         try
                         {
@@ -507,8 +506,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                                 generation,
                                 logFailure);
                         }
-                        // codeql[cs/catch-of-all-exceptions] Subscriber failures must not fail an already-published connection generation.
-                        catch (Exception)
+                        catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
                         {
                             // Handler and its diagnostic log are both best-effort after Publish.
                         }

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
 using VectorNNTPD.BackFillerService.Logging;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -2876,23 +2877,13 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
         /// <summary>Reports whether <paramref name="exception"/> must leave an observer or supervisor boundary.</summary>
         /// <param name="exception">Failure from a subscriber, logger, or replenishment pass.</param>
-        /// <returns>
-        /// <see langword="true"/> for <see cref="OutOfMemoryException"/>, <see cref="StackOverflowException"/>,
-        /// <see cref="AccessViolationException"/>, <see cref="AppDomainUnloadedException"/>,
-        /// <see cref="BadImageFormatException"/>, and <see cref="CannotUnloadAppDomainException"/>.
-        /// </returns>
+        /// <returns>The same value as <see cref="ExceptionHelpers.IsFatal"/>.</returns>
         /// <remarks>
-        /// Subscriber and logger failures are an open set, so the contained failures are every other exception.
-        /// These six are the process-integrity failures that must not be logged and continued.
-        /// <see cref="StackOverflowException"/> is not reliably catchable; the check documents the policy when a runtime surfaces it.
+        /// Delegates to the shared process-integrity policy so pool observers and RabbitMQ notification
+        /// boundaries cannot drift apart.
         /// </remarks>
         private static bool IsProcessIntegrityFailure(Exception exception) =>
-            exception is OutOfMemoryException
-                or StackOverflowException
-                or AccessViolationException
-                or AppDomainUnloadedException
-                or BadImageFormatException
-                or CannotUnloadAppDomainException;
+            ExceptionHelpers.IsFatal(exception);
 
         /// <summary>Reserves the lowest unused connection number from 1 through the current max.</summary>
         /// <returns>The reserved one-based slot.</returns>

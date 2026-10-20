@@ -602,6 +602,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// A short replacement drain finishes on its own grace while a registry shutdown is still inside a longer deadline.
         /// Cancelling the registry caller then ends that shutdown without adopting the replacement budget.
         /// </summary>
+        /// <remarks>
+        /// Wall-clock acceptance is one standalone two-second QUIT allowance, not <see cref="SharedShutdownCeiling"/>.
+        /// Concurrent registry <c>CancelAfter</c> load can delay the replacement timer past 1200 ms without multiplying
+        /// session budgets or adopting the registry's ten-second deadline. Four serial two-second QUITs or a ten-second
+        /// shared registry budget would still fail this bound.
+        /// </remarks>
         [Fact]
         public async Task Replacement_deadline_stays_independent_of_registry_shutdown()
         {
@@ -630,11 +636,31 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await WaitUntilAsync(() => QuitStarts(registryServers) >= 1);
                 Assert.False(stop.IsCompleted);
 
-                var elapsed = await MeasureAsync(() => pool.DrainAndDisposeAsync(CancellationToken.None), poolServers);
-                Report("replacement-beside-stop", SharedBudget, sessions: 4, providers: 1, QuitStarts(poolServers), elapsed);
-                AssertWithinCeiling(elapsed);
+                // Measure with a QuitAllowance safety bound: SharedShutdownCeiling is for uncontended scale tests.
+                var started = Stopwatch.GetTimestamp();
+                var dispose = pool.DrainAndDisposeAsync(CancellationToken.None);
+                TimeSpan elapsed;
+                try
+                {
+                    await dispose.WaitAsync(TimeSpan.FromSeconds(2));
+                    elapsed = Stopwatch.GetElapsedTime(started);
+                }
+                catch
+                {
+                    Release(poolServers);
+                    await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+                    throw;
+                }
+
+                var quitStarted = QuitStarts(poolServers);
+                Report("replacement-beside-stop", SharedBudget, sessions: 4, providers: 1, quitStarted, elapsed);
+                Assert.True(
+                    elapsed < TimeSpan.FromSeconds(2),
+                    $"elapsed {elapsed.TotalMilliseconds:0} ms must stay below one standalone QuitAllowance");
                 Assert.False(stop.IsCompleted);
-                Assert.InRange(QuitStarts(poolServers), 1, NntpShutdownWork.Parallelism);
+                Assert.InRange(quitStarted, 1, NntpShutdownWork.Parallelism);
+                Assert.Equal(quitStarted, CountQuit(poolLogger));
+                AssertQuitCancelledByToken(poolLogger.Messages, quitStarted);
                 Assert.All(poolServers, static server => Assert.Equal(1, server.ClientStreamDisposeCount));
 
                 await caller.CancelAsync();

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -258,12 +259,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     {
                         await action(items[index]).ConfigureAwait(false);
                     }
-                    catch (Exception ex) when (ex is not OutOfMemoryException
-                        and not StackOverflowException
-                        and not AccessViolationException
-                        and not AppDomainUnloadedException
-                        and not BadImageFormatException
-                        and not CannotUnloadAppDomainException)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         faults.Enqueue(ex);
                     }
