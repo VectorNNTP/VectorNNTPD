@@ -26,12 +26,12 @@ There is no application-level RabbitMQ connection pool. `MinConnections` and `Ma
 
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
-| `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query) |
+| `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query). When TLS is enabled, each host is dialed with that hostname as the TLS SNI / certificate identity (not `Hosts[0]` for every endpoint). |
 | `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
 | `Username` | string | _(none)_ | **yes** | Broker username. Maximum 45 characters. Never log |
 | `Password` | string | _(none)_ | **yes** | Broker password. Maximum 45 characters. Never commit or log |
 | `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
-| `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS |
+| `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS (TLS 1.2 and 1.3) |
 | `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
 | `SocketTimeoutSeconds` | int | `30` | **yes** | Socket read/write timeout (`5–600`) |
 | `RequestedChannelMax` | int | `2047` | **yes** | Requested channel limit per connection (`1–65535`) |
