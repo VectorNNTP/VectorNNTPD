@@ -68,7 +68,7 @@ namespace VectorNNTPD.Common.Tests.Logging
             Assert.Equal(1, inner.DisposeCount);
         }
 
-        /// <summary>A timer flush failure is self-logged, and dispose retries that flush and then propagates it.</summary>
+        /// <summary>A timer flush failure is self-logged, and dispose retries that flush without rethrowing.</summary>
         [Fact]
         public void Timer_callback_contains_a_flush_failure()
         {
@@ -80,12 +80,9 @@ namespace VectorNNTPD.Common.Tests.Logging
 
             Assert.Contains("timer callback failed", diagnostic, StringComparison.Ordinal);
             Assert.Contains("timer flush", diagnostic, StringComparison.Ordinal);
-            var disposeDiagnostic = SelfLogCapture.Capture(() =>
-            {
-                var error = Assert.Throws<IOException>(sink.Dispose);
-                Assert.Equal("timer flush", error.Message);
-            });
+            var disposeDiagnostic = SelfLogCapture.Capture(sink.Dispose);
             Assert.Contains("failed during disposal", disposeDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("timer flush", disposeDiagnostic, StringComparison.Ordinal);
             Assert.Equal(2, inner.FlushCount);
             Assert.Equal(1, inner.DisposeCount);
             AssertTimerDisposed(sink);
@@ -113,7 +110,7 @@ namespace VectorNNTPD.Common.Tests.Logging
             AssertTimerDisposed(sink);
         }
 
-        /// <summary>A final flush failure still disposes the inner sink and the timer.</summary>
+        /// <summary>A final flush failure is self-logged and still disposes the inner sink and the timer.</summary>
         [Fact]
         public void Final_flush_failure_still_disposes_the_sink_and_timer()
         {
@@ -121,34 +118,32 @@ namespace VectorNNTPD.Common.Tests.Logging
             using var sink = new PeriodicFileFlushSink(inner, TimeSpan.FromHours(1));
             sink.Emit(Event("marker"));
 
-            var diagnostic = SelfLogCapture.Capture(() =>
-            {
-                var ex = Assert.Throws<IOException>(sink.Dispose);
-                Assert.Equal("final flush", ex.Message);
-            });
+            var diagnostic = SelfLogCapture.Capture(sink.Dispose);
 
             Assert.Contains("failed during disposal", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("final flush", diagnostic, StringComparison.Ordinal);
             Assert.Equal(1, inner.DisposeCount);
             AssertTimerDisposed(sink);
         }
 
-        /// <summary>An inner-sink dispose failure still disposes the timer, and the dispose exception propagates.</summary>
+        /// <summary>An inner-sink dispose failure is self-logged and still disposes the timer.</summary>
         [Fact]
         public void Inner_sink_disposal_failure_still_disposes_the_timer()
         {
             var inner = new FaultingFlushSink { DisposeException = new InvalidOperationException("sink dispose") };
             var sink = new PeriodicFileFlushSink(inner, TimeSpan.FromHours(1));
 
-            var ex = Assert.Throws<InvalidOperationException>(sink.Dispose);
+            var diagnostic = SelfLogCapture.Capture(sink.Dispose);
 
-            Assert.Equal("sink dispose", ex.Message);
+            Assert.Contains("sink disposal failed", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("sink dispose", diagnostic, StringComparison.Ordinal);
             Assert.Equal(1, inner.DisposeCount);
             AssertTimerDisposed(sink);
         }
 
-        /// <summary>When flush and dispose both fail, the flush exception is thrown and the dispose failure is self-logged.</summary>
+        /// <summary>When flush and dispose both fail, both failures are self-logged and neither escapes Dispose.</summary>
         [Fact]
-        public void Flush_failure_stays_primary_when_disposal_also_fails()
+        public void Flush_and_dispose_failures_are_both_self_logged()
         {
             var inner = new FaultingFlushSink
             {
@@ -158,12 +153,10 @@ namespace VectorNNTPD.Common.Tests.Logging
             var sink = new PeriodicFileFlushSink(inner, TimeSpan.FromHours(1));
             sink.Emit(Event("marker"));
 
-            var diagnostic = SelfLogCapture.Capture(() =>
-            {
-                var ex = Assert.Throws<IOException>(sink.Dispose);
-                Assert.Equal("primary flush", ex.Message);
-            });
+            var diagnostic = SelfLogCapture.Capture(sink.Dispose);
 
+            Assert.Contains("failed during disposal", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("primary flush", diagnostic, StringComparison.Ordinal);
             Assert.Contains("sink disposal failed", diagnostic, StringComparison.Ordinal);
             Assert.Contains("secondary dispose", diagnostic, StringComparison.Ordinal);
             Assert.Equal(1, inner.DisposeCount);

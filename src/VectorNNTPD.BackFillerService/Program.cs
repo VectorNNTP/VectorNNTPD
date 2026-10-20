@@ -16,7 +16,7 @@ internal class Program
     /// </param>
     /// <returns>
     /// Zero when the host stops cleanly or startup smoke completes. <see cref="BackFillerProcessBoundary.FailureExitCode"/>
-    /// when the host throws, or when logger shutdown fails after a clean run.
+    /// when the host throws. Logger shutdown failures do not change a clean exit.
     /// </returns>
     /// <remarks>
     /// Content root is <see cref="AppContext.BaseDirectory"/>. A host exception is logged and does not escape.
@@ -98,8 +98,8 @@ internal class Program
 /// failures, configuration validation, and cancellation, is logged and becomes exit code
 /// <see cref="FailureExitCode"/>. A failure while writing that log is reported through <see cref="SelfLog"/>
 /// and still returns <see cref="FailureExitCode"/>. Logger shutdown runs after that result is chosen.
-/// A shutdown failure replaces a success code with <see cref="FailureExitCode"/> and is only written to
-/// <see cref="SelfLog"/> when the host already failed. Console restoration still runs after either outcome.
+/// A logger-shutdown failure is written only to <see cref="SelfLog"/> and never changes the chosen exit code,
+/// including when the host stopped cleanly. Console restoration still runs after either outcome.
 /// </remarks>
 internal static class BackFillerProcessBoundary
 {
@@ -155,8 +155,7 @@ internal static class BackFillerProcessBoundary
     /// </summary>
     /// <param name="exitCode">Result already chosen for the host run. Zero means the host stopped cleanly.</param>
     /// <returns>
-    /// <paramref name="exitCode"/> when logger shutdown succeeds. <see cref="FailureExitCode"/> when shutdown
-    /// fails after a clean host run. The original failure code when shutdown fails after a host failure.
+    /// <paramref name="exitCode"/> unchanged. Logger shutdown failures are recorded on <see cref="SelfLog"/> only.
     /// </returns>
     internal static Task<int> FinishAsync(int exitCode) =>
         FinishAsync(
@@ -168,9 +167,9 @@ internal static class BackFillerProcessBoundary
     /// Runs <paramref name="closeAndFlush"/> and then <paramref name="restoreConsole"/>.
     /// </summary>
     /// <param name="exitCode">Result already chosen for the host run.</param>
-    /// <param name="closeAndFlush">Logger shutdown. A throw is contained.</param>
+    /// <param name="closeAndFlush">Logger shutdown. A throw is contained and does not change <paramref name="exitCode"/>.</param>
     /// <param name="restoreConsole">Console restoration. It runs even when <paramref name="closeAndFlush"/> throws.</param>
-    /// <returns>The exit code described by <see cref="FinishAsync(int)"/>.</returns>
+    /// <returns><paramref name="exitCode"/> unchanged.</returns>
     internal static async Task<int> FinishAsync(int exitCode, Func<Task> closeAndFlush, Action restoreConsole)
     {
         ArgumentNullException.ThrowIfNull(closeAndFlush);
@@ -182,7 +181,7 @@ internal static class BackFillerProcessBoundary
         // codeql[cs/catch-of-all-exceptions] Logger shutdown must not replace the process result or skip console restoration.
         catch (Exception ex)
         {
-            exitCode = ObserveShutdownFailure(exitCode, ex);
+            ObserveShutdownFailure(exitCode, ex);
         }
         finally
         {
@@ -209,30 +208,27 @@ internal static class BackFillerProcessBoundary
     }
 
     /// <summary>
-    /// Records <paramref name="exception"/> without discarding a host failure that was already observed.
+    /// Records a logger-shutdown failure on <see cref="SelfLog"/> without changing <paramref name="exitCode"/>.
     /// </summary>
-    /// <param name="exitCode">Exit code chosen before logger shutdown.</param>
+    /// <param name="exitCode">Exit code chosen before logger shutdown. Used only to select the diagnostic text.</param>
     /// <param name="exception">Failure from logger shutdown.</param>
-    /// <returns>
-    /// <see cref="FailureExitCode"/> when <paramref name="exitCode"/> is zero; otherwise <paramref name="exitCode"/>.
-    /// </returns>
-    private static int ObserveShutdownFailure(int exitCode, Exception exception)
+    /// <remarks>
+    /// Does not call <see cref="ObserveHostFailure(Exception)"/>: that path writes through Serilog's fatal logger,
+    /// which may re-enter a failing file sink. SelfLog is the only safe channel once logger disposal has failed.
+    /// </remarks>
+    private static void ObserveShutdownFailure(int exitCode, Exception exception)
     {
-        if (exitCode == 0)
-        {
-            return ObserveHostFailure(exception);
-        }
-
+        var message = exitCode == 0
+            ? "BackFiller logger shutdown failed after a clean host run: {0}"
+            : "BackFiller logger shutdown failed after a host failure: {0}";
         try
         {
-            SelfLog.WriteLine("BackFiller logger shutdown failed after a host failure: {0}", exception);
+            SelfLog.WriteLine(message, exception);
         }
-        // codeql[cs/catch-of-all-exceptions] A secondary shutdown diagnostic must not replace the host failure result.
+        // codeql[cs/catch-of-all-exceptions] A secondary shutdown diagnostic must not replace the process result.
         catch (Exception)
         {
-            // The original host failure code remains the process result.
+            // The chosen exit code remains the process result.
         }
-
-        return exitCode;
     }
 }

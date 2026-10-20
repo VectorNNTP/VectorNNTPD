@@ -38,22 +38,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.Contains("host failure log failed", diagnostic, StringComparison.Ordinal);
         }
 
-        /// <summary>Logger close failure after exit code 0 still yields failure exit code; console restore still runs once.</summary>
+        /// <summary>Logger close failure after exit code 0 keeps success and records SelfLog; console restore still runs once.</summary>
         [Fact]
-        public async Task Logger_shutdown_failure_after_a_clean_run_returns_the_failure_exit_code()
+        public async Task Logger_shutdown_failure_after_a_clean_run_keeps_exit_code_zero()
         {
             var restored = 0;
 
-            var code = await BackFillerProcessBoundary.FinishAsync(
-                exitCode: 0,
-                () => throw new NotSupportedException("close boom"),
-                () => restored++);
+            var diagnostic = await TestSelfLog.CaptureAsync(async () =>
+            {
+                var code = await BackFillerProcessBoundary.FinishAsync(
+                    exitCode: 0,
+                    () => throw new IOException("final flush boom"),
+                    () => restored++);
+                Assert.Equal(0, code);
+            });
 
-            Assert.Equal(BackFillerProcessBoundary.FailureExitCode, code);
             Assert.Equal(1, restored);
+            Assert.Contains("logger shutdown failed after a clean host run", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("final flush boom", diagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("host terminated unexpectedly", diagnostic, StringComparison.Ordinal);
         }
 
-        /// <summary>When the process already failed, logger shutdown failure must not downgrade the exit code.</summary>
+        /// <summary>When the process already failed, logger shutdown failure must not change or replace the exit code.</summary>
         [Fact]
         public async Task Logger_shutdown_failure_keeps_an_existing_host_failure_code()
         {
@@ -63,14 +69,29 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             {
                 var code = await BackFillerProcessBoundary.FinishAsync(
                     BackFillerProcessBoundary.FailureExitCode,
-                    () => throw new NotSupportedException("close boom"),
+                    () => throw new IOException("final flush boom"),
                     () => restored++);
                 Assert.Equal(BackFillerProcessBoundary.FailureExitCode, code);
             });
 
             Assert.Equal(1, restored);
             Assert.Contains("logger shutdown failed after a host failure", diagnostic, StringComparison.Ordinal);
-            Assert.Contains("close boom", diagnostic, StringComparison.Ordinal);
+            Assert.Contains("final flush boom", diagnostic, StringComparison.Ordinal);
+        }
+
+        /// <summary>Successful logger close and console restore leave a clean exit code unchanged.</summary>
+        [Fact]
+        public async Task Successful_logger_shutdown_keeps_a_clean_exit_code()
+        {
+            var restored = 0;
+
+            var code = await BackFillerProcessBoundary.FinishAsync(
+                exitCode: 0,
+                () => Task.CompletedTask,
+                () => restored++);
+
+            Assert.Equal(0, code);
+            Assert.Equal(1, restored);
         }
 
         /// <summary>Console restore failure after a clean run leaves exit code 0 and records self-log diagnostics.</summary>
