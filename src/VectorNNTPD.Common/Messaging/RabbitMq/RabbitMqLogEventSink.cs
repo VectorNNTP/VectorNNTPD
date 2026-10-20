@@ -252,6 +252,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                         QueueCapacity);
                 }
             }
+            // codeql[cs/catch-of-all-exceptions] Application formatters may throw arbitrary managed exceptions; contain them at the Serilog sink boundary via SelfLog. Process-integrity failures are excluded by the filter.
             catch (Exception ex) when (IsContainedCallerFailure(ex))
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink publication failed: {0}", ex.Message);
@@ -348,8 +349,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 DrainDiscardingRemaining();
             }
-            // codeql[cs/catch-of-all-exceptions] Worker failures must not become unobserved task exceptions; SelfLog is the diagnostic channel.
-            catch (Exception ex)
+            catch (Exception ex) when (!IsProcessIntegrityFailure(ex)) // codeql[cs/catch-of-all-exceptions] Unexpected worker faults must SelfLog and drain; they must not become unobserved task exceptions.
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink publication worker failed: {0}", ex.Message);
                 DrainDiscardingRemaining();
@@ -581,9 +581,13 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// failures are excluded so they still tear down the process.
         /// </remarks>
         private static bool IsContainedCallerFailure(Exception exception) =>
-            exception is not OutOfMemoryException
-            and not StackOverflowException
-            and not AccessViolationException;
+            !IsProcessIntegrityFailure(exception);
+
+        /// <summary>True for failures that must tear down the process rather than be contained by the sink.</summary>
+        private static bool IsProcessIntegrityFailure(Exception exception) =>
+            exception is OutOfMemoryException
+            or StackOverflowException
+            or AccessViolationException;
 
         /// <summary>Fully prepared log publication captured before enqueue.</summary>
         /// <param name="Body">UTF-8 formatted payload.</param>

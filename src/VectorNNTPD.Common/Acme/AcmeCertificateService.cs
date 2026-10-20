@@ -50,6 +50,12 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Faults the next renewal iterations should throw before contacting the manager. Zero in production.</summary>
         private int _renewalFaultsToInject;
 
+        /// <summary>
+        /// When set by tests, completed after the next renewal check finishes (success or contained failure).
+        /// Cleared when signaled so later checks do not complete a stale waiter.
+        /// </summary>
+        private TaskCompletionSource? _nextRenewalCheckSignal;
+
         /// <summary>Manager created during a TLS-enabled start. <see langword="null"/> when TLS is disabled or start has not created it.</summary>
         private CertificateManager? _manager;
 
@@ -104,6 +110,17 @@ namespace VectorNNTPD.Common.Acme
         {
             get => Volatile.Read(ref _renewalFaultsToInject);
             set => Volatile.Write(ref _renewalFaultsToInject, value);
+        }
+
+        /// <summary>
+        /// Arms <paramref name="signal"/> to complete when the next renewal check finishes.
+        /// Replaces any previously armed signal without completing it.
+        /// </summary>
+        /// <param name="signal">Completion source observed by tests after advancing the renewal clock.</param>
+        internal void NotifyOnNextRenewalCheckForTests(TaskCompletionSource signal)
+        {
+            ArgumentNullException.ThrowIfNull(signal);
+            Volatile.Write(ref _nextRenewalCheckSignal, signal);
         }
 
         /// <summary>Stable service name <c>AcmeCertificate</c> read by the host application-service adapter.</summary>
@@ -261,7 +278,7 @@ namespace VectorNNTPD.Common.Acme
                     }
 
                     _observation?.OnObserved(_manager.EvaluateExisting(now), renewed);
-                    Interlocked.Increment(ref _renewalChecksCompleted);
+                    NoteRenewalCheckCompleted();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -272,9 +289,16 @@ namespace VectorNNTPD.Common.Acme
                 {
                     AcmeLogMessages.RenewalCheckFailed(_logger, AcmeFailureSanitizer.Sanitize(ex));
                     ObserveFailure();
-                    Interlocked.Increment(ref _renewalChecksCompleted);
+                    NoteRenewalCheckCompleted();
                 }
             }
+        }
+
+        /// <summary>Increments <see cref="_renewalChecksCompleted"/> and releases any armed test signal.</summary>
+        private void NoteRenewalCheckCompleted()
+        {
+            Interlocked.Increment(ref _renewalChecksCompleted);
+            Interlocked.Exchange(ref _nextRenewalCheckSignal, null)?.TrySetResult();
         }
 
         /// <summary>
