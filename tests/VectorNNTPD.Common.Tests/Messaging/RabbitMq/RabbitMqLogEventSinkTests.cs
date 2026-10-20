@@ -124,7 +124,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             await using var harness = await Harness.StartAsync();
             harness.Factory.LastConnection!.PublishException = new InvalidOperationException("publish failed");
             using var sink = CreateSink(harness.Service, new FixedFormatter("payload"));
-            var selfLog = new StringWriter();
+            using var selfLog = new StringWriter();
             await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
@@ -162,7 +162,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             var formatter = new ReentrantFormatter(() => sink!.Emit(Event(DateTimeOffset.UtcNow)), "outer");
             sink = CreateSink(harness.Service, formatter);
             using var _ = sink;
-            var selfLog = new StringWriter();
+            using var selfLog = new StringWriter();
             await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
@@ -216,7 +216,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         {
             await using var harness = await Harness.StartAsync(start: false);
             using var sink = CreateSink(harness.Service, new FixedFormatter("skipped"));
-            var selfLog = new StringWriter();
+            using var selfLog = new StringWriter();
             await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
@@ -283,7 +283,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             const int capacity = 4;
             using var sink = CreateSink(harness.Service, new FixedFormatter("overflow"), queueCapacity: capacity);
             Assert.Equal(capacity, sink.QueueCapacity);
-            var selfLog = new StringWriter();
+            using var selfLog = new StringWriter();
             await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
@@ -322,6 +322,28 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             });
         }
 
+        /// <summary>Two sink instances do not share re-entrancy depth; concurrent emits on each remain independent.</summary>
+        [Fact]
+        public async Task Emit_ReentrancyGuard_IsIsolatedPerSinkInstance()
+        {
+            await using var harness = await Harness.StartAsync();
+            using var first = CreateSink(harness.Service, new FixedFormatter("first"));
+            using var second = CreateSink(harness.Service, new FixedFormatter("second"));
+            RabbitMqLogEventSink? active = null;
+            var formatter = new ReentrantFormatter(() => active!.Emit(Event(DateTimeOffset.UtcNow)), "outer");
+            using var recursive = CreateSink(harness.Service, formatter);
+            active = recursive;
+
+            first.Emit(Event(DateTimeOffset.UtcNow));
+            second.Emit(Event(DateTimeOffset.UtcNow));
+            recursive.Emit(Event(DateTimeOffset.UtcNow));
+            await first.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await second.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await recursive.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.True(harness.Factory.LastConnection!.TotalPublications >= 3);
+        }
+
         /// <summary>A failed publication does not stop the worker from publishing a later event.</summary>
         [Fact]
         public async Task Emit_ContinuesAfterTransientPublishFailure()
@@ -344,7 +366,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         public async Task Dispose_RejectsNewEvents_AndDisposesChannelOnce()
         {
             await using var harness = await Harness.StartAsync();
-            var sink = CreateSink(harness.Service, new FixedFormatter("shutdown"));
+            using var sink = CreateSink(harness.Service, new FixedFormatter("shutdown"));
             sink.Emit(Event(DateTimeOffset.UtcNow));
             await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
             var channel = Assert.Single(harness.Factory.LastConnection!.PublishChannels);
@@ -379,6 +401,30 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         }
 
         /// <summary>
+        /// An Emit that begins before Dispose must not throw when Dispose returns while formatting is still running.
+        /// The re-entrancy guard must remain usable through Emit's finally (it is not disposed under active callers).
+        /// </summary>
+        [Fact]
+        public async Task Dispose_DuringActiveEmit_DoesNotThrowFromReentrancyGuard()
+        {
+            await using var harness = await Harness.StartAsync();
+            var enteredFormat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFormat = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var formatter = new BlockingFormatter(enteredFormat, releaseFormat, "held");
+            using var sink = CreateSink(harness.Service, formatter);
+
+            var emitTask = Task.Run(() => Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow))));
+            await enteredFormat.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var disposeError = Record.Exception(sink.Dispose);
+            Assert.Null(disposeError);
+
+            releaseFormat.TrySetResult();
+            var emitError = await emitTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Null(emitError);
+        }
+
+        /// <summary>
         /// When a confirm ignores cancellation, Dispose returns after the shutdown bound without disposing the
         /// channel under the worker; releasing the confirm later lets the worker dispose the channel once.
         /// </summary>
@@ -391,25 +437,31 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             harness.Factory.LastConnection!.ConfirmGate = confirm;
             harness.Factory.LastConnection.IgnoreConfirmCancellation = true;
             harness.Factory.LastConnection.OnPublish = () => entered.TrySetResult();
-            var sink = CreateSink(harness.Service, new FixedFormatter("stuck"));
-
-            sink.Emit(Event(DateTimeOffset.UtcNow));
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var channel = Assert.Single(harness.Factory.LastConnection.PublishChannels);
-            Assert.Equal(0, channel.DisposeCount);
-
-            var disposeTask = Task.Run(sink.Dispose);
-            await disposeTask.WaitAsync(TimeSpan.FromSeconds(10));
-            Assert.Equal(0, channel.DisposeCount);
-
-            confirm.TrySetResult();
-            using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (channel.DisposeCount == 0)
+            using var sink = CreateSink(harness.Service, new FixedFormatter("stuck"));
+            try
             {
-                await Task.Delay(10, safety.Token);
-            }
+                sink.Emit(Event(DateTimeOffset.UtcNow));
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var channel = Assert.Single(harness.Factory.LastConnection.PublishChannels);
+                Assert.Equal(0, channel.DisposeCount);
 
-            Assert.Equal(1, channel.DisposeCount);
+                var disposeTask = Task.Run(sink.Dispose);
+                await disposeTask.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(0, channel.DisposeCount);
+
+                confirm.TrySetResult();
+                using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (channel.DisposeCount == 0)
+                {
+                    await Task.Delay(10, safety.Token);
+                }
+
+                Assert.Equal(1, channel.DisposeCount);
+            }
+            finally
+            {
+                confirm.TrySetResult();
+            }
         }
 
         /// <summary>
@@ -497,6 +549,25 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                     reenter();
                 }
 
+                output.Write(text);
+            }
+        }
+
+        /// <summary>
+        /// Formatter that signals <paramref name="entered"/> then blocks until <paramref name="release"/> completes before writing.
+        /// </summary>
+        private sealed class BlockingFormatter(
+            TaskCompletionSource entered,
+            TaskCompletionSource release,
+            string text) : ITextFormatter
+        {
+            /// <inheritdoc />
+            public void Format(LogEvent logEvent, TextWriter output)
+            {
+                ArgumentNullException.ThrowIfNull(logEvent);
+                ArgumentNullException.ThrowIfNull(output);
+                entered.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
                 output.Write(text);
             }
         }

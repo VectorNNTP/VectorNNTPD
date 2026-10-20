@@ -62,7 +62,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 connection.DefaultPublishConfirmBehavior = FakePublishConfirmBehavior.Confirm;
                 connection.OnPublishChannelCreated = channel =>
                     channel.DisposeException = new NotSupportedException("channel dispose boom");
-                var sink = new RabbitMqLogEventSink(
+                using var sink = new RabbitMqLogEventSink(
                     service,
                     "logs",
                     "backfiller",

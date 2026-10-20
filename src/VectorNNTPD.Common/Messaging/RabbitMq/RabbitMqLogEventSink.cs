@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Threading.Channels;
+using RabbitMQ.Client.Exceptions;
 using Serilog.Core;
 using Serilog.Debugging;
 using Serilog.Events;
@@ -65,13 +66,18 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         internal const int DropDiagnosticInterval = 100;
 
         /// <summary>
-        /// Same-thread re-entrancy depth for the synchronous <see cref="Emit"/> path only.
-        /// <see cref="Emit"/> does not await, so a thread-static value cannot remain set across unrelated
-        /// asynchronous continuations. The publication worker does not use this guard; worker diagnostics
-        /// use <see cref="SelfLog"/> and must not write through Serilog into this sink.
+        /// Per-instance, per-thread re-entrancy depth for the synchronous <see cref="Emit"/> path.
+        /// Concurrent callers on other threads see an independent depth of zero. Distinct sink instances
+        /// do not share state. The publication worker does not use this guard; worker diagnostics use
+        /// <see cref="SelfLog"/> and must not write through Serilog into this sink.
         /// </summary>
-        [ThreadStatic]
-        private static int t_emitDepth;
+        /// <remarks>
+        /// Not disposed explicitly. <see cref="Dispose"/> can return while another thread is still inside
+        /// <see cref="Emit"/> after observing a pre-dispose snapshot of <see cref="_disposed"/>. Disposing
+        /// this guard underneath those callers would throw from <see cref="ThreadLocal{T}.Value"/> and escape
+        /// the logging boundary. The instance is reclaimed with the sink.
+        /// </remarks>
+        private readonly ThreadLocal<int> _emitDepth = new(static () => 0);
 
         /// <summary>Process connection owner. This sink does not dispose it and does not open its own connection.</summary>
         private readonly IRabbitMqService _rabbitMq;
@@ -208,13 +214,13 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 return;
             }
 
-            if (t_emitDepth > 0)
+            if (_emitDepth.Value > 0)
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink dropped a re-entrant log event.");
                 return;
             }
 
-            t_emitDepth++;
+            _emitDepth.Value++;
             try
             {
                 if (Volatile.Read(ref _disposed) == 1)
@@ -246,13 +252,13 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                         QueueCapacity);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (IsContainedCallerFailure(ex))
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink publication failed: {0}", ex.Message);
             }
             finally
             {
-                t_emitDepth--;
+                _emitDepth.Value--;
             }
         }
 
@@ -295,32 +301,24 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
             _writer.TryComplete();
 
-            try
-            {
-                if (!_worker.Wait(ShutdownTimeout))
-                {
-                    _workerCts.Cancel();
-                    if (!_worker.Wait(ShutdownTimeout))
-                    {
-                        SelfLog.WriteLine(
-                            "RabbitMqLogEventSink disposal timed out waiting for the publication worker; " +
-                            "the publish channel remains owned by the worker until it exits.");
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is AggregateException or ObjectDisposedException or OperationCanceledException)
-            {
-                SelfLog.WriteLine("RabbitMqLogEventSink disposal observed a worker failure: {0}", ex.Message);
-            }
-            finally
+            using (_workerCts)
             {
                 try
                 {
-                    _workerCts.Dispose();
+                    if (!_worker.Wait(ShutdownTimeout))
+                    {
+                        _workerCts.Cancel();
+                        if (!_worker.Wait(ShutdownTimeout))
+                        {
+                            SelfLog.WriteLine(
+                                "RabbitMqLogEventSink disposal timed out waiting for the publication worker; " +
+                                "the publish channel remains owned by the worker until it exits.");
+                        }
+                    }
                 }
-                catch (ObjectDisposedException)
+                catch (Exception ex) when (ex is AggregateException or ObjectDisposedException or OperationCanceledException)
                 {
-                    // Already disposed by a concurrent path.
+                    SelfLog.WriteLine("RabbitMqLogEventSink disposal observed a worker failure: {0}", ex.Message);
                 }
             }
         }
@@ -334,8 +332,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 {
                     while (_reader.TryRead(out var prepared))
                     {
-                        await PublishAsync(prepared, cancellationToken).ConfigureAwait(false);
-                        NoteCompleted();
+                        try
+                        {
+                            await PublishAsync(prepared, cancellationToken).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            // Always settle outstanding for the dequeued item, including cancel and unexpected faults.
+                            NoteCompleted();
+                        }
                     }
                 }
             }
@@ -351,6 +356,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
             finally
             {
+                // Stop accepting further events if this worker exits without Dispose having completed the writer.
+                _writer.TryComplete();
                 await DisposeChannelAsync().ConfigureAwait(false);
             }
         }
@@ -376,6 +383,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
+                    // Expected when disposal cancels the worker during the unavailable-broker backoff.
+                    SelfLog.WriteLine(
+                        "RabbitMqLogEventSink unavailable-broker backoff ended because disposal cancelled the worker.");
                 }
 
                 return;
@@ -386,7 +396,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 channel = await EnsureChannelAsync(handle, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is AlreadyClosedException
+                or OperationInterruptedException
+                or BrokerUnreachableException
+                or PublishException
+                or IOException
+                or ObjectDisposedException
+                or TimeoutException
+                or InvalidOperationException
+                or NotSupportedException)
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink publication failed: {0}", ex.Message);
                 return;
@@ -415,7 +433,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is AlreadyClosedException
+                or OperationInterruptedException
+                or BrokerUnreachableException
+                or PublishException
+                or IOException
+                or ObjectDisposedException
+                or TimeoutException
+                or InvalidOperationException
+                or NotSupportedException)
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink publication failed: {0}", ex.Message);
                 if (!channel.IsOpen)
@@ -458,7 +484,14 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 await created.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is ObjectDisposedException
+                or InvalidOperationException
+                or IOException
+                or NotSupportedException
+                or OperationCanceledException
+                or AlreadyClosedException
+                or OperationInterruptedException
+                or TimeoutException)
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink failed to dispose a publish channel: {0}", ex.Message);
             }
@@ -527,11 +560,30 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 await channel.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is ObjectDisposedException
+                or InvalidOperationException
+                or IOException
+                or NotSupportedException
+                or OperationCanceledException
+                or AlreadyClosedException
+                or OperationInterruptedException
+                or TimeoutException)
             {
                 SelfLog.WriteLine("RabbitMqLogEventSink failed to dispose a publish channel: {0}", ex.Message);
             }
         }
+
+        /// <summary>
+        /// True for failures that may be reported from the caller's <see cref="Emit"/> path without killing the process.
+        /// </summary>
+        /// <remarks>
+        /// Formatters are application-supplied and may throw arbitrary managed exceptions. Process-integrity
+        /// failures are excluded so they still tear down the process.
+        /// </remarks>
+        private static bool IsContainedCallerFailure(Exception exception) =>
+            exception is not OutOfMemoryException
+            and not StackOverflowException
+            and not AccessViolationException;
 
         /// <summary>Fully prepared log publication captured before enqueue.</summary>
         /// <param name="Body">UTF-8 formatted payload.</param>
