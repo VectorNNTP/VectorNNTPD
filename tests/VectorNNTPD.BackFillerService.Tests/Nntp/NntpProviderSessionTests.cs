@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
@@ -304,6 +305,50 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             var result = await session.ConnectAsync(factory, CancellationToken.None);
             Assert.Equal(ArticleRetrievalKind.AuthenticationFailure, result!.Kind);
             Assert.DoesNotContain(server.Commands, static command => command.StartsWith("AUTHINFO", StringComparison.Ordinal));
+            await session.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Mapper auth-disable (SQL NULL username or password) connects without AUTHINFO and remains usable.
+        /// </summary>
+        [Fact]
+        public async Task Mapper_auth_disabled_provider_connects_without_sending_authinfo()
+        {
+            var mapped = ProviderAccountMapper.Map(
+            [
+                ProviderAccountTestRows.Create(
+                    username: null,
+                    password: ProviderAccountTestRows.SecretPassword,
+                    port: 119,
+                    useSsl: "n"),
+            ]);
+            var provider = Assert.Single(mapped.Providers);
+            Assert.False(provider.RequiresAuthentication);
+            Assert.Null(provider.Password);
+
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            factory.Enqueue(server);
+            var session = new NntpProviderSession(
+                provider,
+                NntpSessionOptions.Default with
+                {
+                    CommandTimeout = TimeSpan.FromSeconds(2),
+                    ReceiveTimeout = TimeSpan.FromSeconds(2),
+                    ConnectTimeout = TimeSpan.FromSeconds(2),
+                },
+                NullLogger.Instance);
+
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+            Assert.Equal("CAPABILITIES", Assert.Single(server.Commands));
+            Assert.DoesNotContain(
+                server.Commands,
+                static command => command.StartsWith("AUTHINFO", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                ProviderAccountTestRows.SecretPassword,
+                string.Join('\n', server.Commands),
+                StringComparison.Ordinal);
+            Assert.True(session.IsReusable);
             await session.DisposeAsync();
         }
 

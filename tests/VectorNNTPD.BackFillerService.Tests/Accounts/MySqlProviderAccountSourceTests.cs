@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
+using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 using VectorNNTPD.Common.NntpDb;
 using VectorNNTPD.Common.Configuration;
 
@@ -52,6 +53,241 @@ namespace VectorNNTPD.BackFillerService.Tests.Accounts
             var ex = Assert.Throws<InvalidOperationException>(
                 () => MySqlProviderAccountSource.ParseKeepAlive(DBNull.Value));
             Assert.DoesNotContain("db-secret-xyz", ex.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Contract: TryParseKeepAlive returns null for SQL NULL and non-integers without throwing.
+        /// </summary>
+        [Fact]
+        public void TryParseKeepAlive_returns_null_for_sql_null_and_non_integers()
+        {
+            Assert.Null(MySqlProviderAccountSource.TryParseKeepAlive(DBNull.Value));
+            Assert.Null(MySqlProviderAccountSource.TryParseKeepAlive("keep"));
+            Assert.Equal((byte)7, MySqlProviderAccountSource.TryParseKeepAlive(7));
+        }
+
+        /// <summary>
+        /// Contract: MaterializeRow maps SQL NULL credentials to null without inventing empty strings.
+        /// </summary>
+        [Fact]
+        public void MaterializeRow_maps_sql_null_credentials_to_null()
+        {
+            var row = MySqlProviderAccountSource.MaterializeRow(
+                "Giganews",
+                "news.example.test",
+                (byte)0,
+                4,
+                DBNull.Value,
+                DBNull.Value,
+                563,
+                "y");
+
+            Assert.Null(row.Username);
+            Assert.Null(row.Password);
+            Assert.Equal("Giganews", row.Backbone);
+            Assert.Equal("news.example.test", row.Hostname);
+        }
+
+        /// <summary>
+        /// Contract: MaterializeRow maps SQL NULL required non-credential cells to null fields for mapper rejection.
+        /// </summary>
+        [Fact]
+        public void MaterializeRow_maps_sql_null_required_fields_to_null()
+        {
+            var row = MySqlProviderAccountSource.MaterializeRow(
+                DBNull.Value,
+                DBNull.Value,
+                DBNull.Value,
+                DBNull.Value,
+                "user",
+                "pass",
+                DBNull.Value,
+                DBNull.Value);
+
+            Assert.Null(row.Backbone);
+            Assert.Null(row.Hostname);
+            Assert.Null(row.KeepAliveSeconds);
+            Assert.Null(row.MaxConnections);
+            Assert.Null(row.Port);
+            Assert.Null(row.UseSslRaw);
+            Assert.Equal("user", row.Username);
+            Assert.Equal("pass", row.Password);
+        }
+
+        /// <summary>
+        /// Contract: unexpected cell types become null fields instead of throwing.
+        /// </summary>
+        [Fact]
+        public void MaterializeRow_maps_unexpected_types_to_null_without_throwing()
+        {
+            var row = MySqlProviderAccountSource.MaterializeRow(
+                123,
+                true,
+                "keep",
+                "max",
+                42,
+                Guid.NewGuid(),
+                "port",
+                9);
+
+            Assert.Null(row.Backbone);
+            Assert.Null(row.Hostname);
+            Assert.Null(row.KeepAliveSeconds);
+            Assert.Null(row.MaxConnections);
+            Assert.Null(row.Username);
+            Assert.Null(row.Password);
+            Assert.Null(row.Port);
+            Assert.Null(row.UseSslRaw);
+        }
+
+        /// <summary>
+        /// Contract: a mixed materialization set still maps valid rows after NULL/malformed cells.
+        /// </summary>
+        [Fact]
+        public void MaterializeRow_mixed_set_maps_through_provider_account_mapper()
+        {
+            var rows = new[]
+            {
+                MySqlProviderAccountSource.MaterializeRow(
+                    "Giganews",
+                    DBNull.Value,
+                    (byte)0,
+                    4,
+                    "user",
+                    "pass",
+                    563,
+                    "y"),
+                MySqlProviderAccountSource.MaterializeRow(
+                    "Eweka",
+                    "eweka.example.test",
+                    (byte)0,
+                    2,
+                    DBNull.Value,
+                    "pass",
+                    119,
+                    "n"),
+                MySqlProviderAccountSource.MaterializeRow(
+                    "Abavia",
+                    "abavia.example.test",
+                    (byte)0,
+                    3,
+                    "abavia-user",
+                    ProviderAccountTestRows.SecretPassword,
+                    563,
+                    "y"),
+            };
+
+            var mapped = ProviderAccountMapper.Map(rows);
+            Assert.Equal(2, mapped.Providers.Count);
+            Assert.Contains(mapped.Providers, static p => p.Backbone == "Eweka" && !p.RequiresAuthentication);
+            Assert.Contains(
+                mapped.Providers,
+                static p => p.Backbone == "Abavia"
+                    && p.RequiresAuthentication
+                    && p.Username == "abavia-user");
+            Assert.Contains(mapped.Rejected, static r => r.Backbone == "Giganews");
+        }
+
+        /// <summary>
+        /// Contract: ReadRowsAsync surfaces real DBNull cells, continues after a malformed row, and does not invent empty credentials.
+        /// </summary>
+        [Fact]
+        public async Task ReadRowsAsync_maps_dbnull_cells_and_continues_to_later_rows()
+        {
+            var names = new[]
+            {
+                "backbone",
+                "hostname",
+                "keepalive",
+                "maxconnections",
+                "password",
+                "port",
+                "username",
+                "usessl",
+            };
+            await using var reader = new SequenceDbDataReader(
+                names,
+                [
+                    "Giganews",
+                    DBNull.Value,
+                    (byte)0,
+                    4,
+                    "pass",
+                    563,
+                    "user",
+                    "y",
+                ],
+                [
+                    "Eweka",
+                    "eweka.example.test",
+                    (byte)0,
+                    2,
+                    ProviderAccountTestRows.SecretPassword,
+                    119,
+                    DBNull.Value,
+                    "n",
+                ],
+                [
+                    "Abavia",
+                    "abavia.example.test",
+                    (byte)0,
+                    3,
+                    ProviderAccountTestRows.SecretPassword,
+                    563,
+                    "abavia-user",
+                    "y",
+                ]);
+
+            var rows = await MySqlProviderAccountSource.ReadRowsAsync(reader, CancellationToken.None);
+            Assert.Equal(3, rows.Count);
+            Assert.Null(rows[0].Hostname);
+            Assert.Null(rows[1].Username);
+            Assert.Equal(ProviderAccountTestRows.SecretPassword, rows[1].Password);
+            Assert.Equal("abavia-user", rows[2].Username);
+
+            var mapped = ProviderAccountMapper.Map(rows);
+            Assert.Equal(2, mapped.Providers.Count);
+            Assert.Contains(mapped.Providers, static p => p.Backbone == "Eweka" && !p.RequiresAuthentication && p.Password is null);
+            Assert.Contains(
+                mapped.Providers,
+                static p => p.Backbone == "Abavia" && p.RequiresAuthentication && p.Username == "abavia-user");
+            Assert.Contains(mapped.Rejected, static r => r.Backbone == "Giganews" && r.Reason == "Hostname is required.");
+        }
+
+        /// <summary>
+        /// Contract: ReadRowsAsync propagates cancellation from ReadAsync without swallowing it as a row failure.
+        /// </summary>
+        [Fact]
+        public async Task ReadRowsAsync_propagates_cancellation()
+        {
+            var names = new[]
+            {
+                "backbone",
+                "hostname",
+                "keepalive",
+                "maxconnections",
+                "password",
+                "port",
+                "username",
+                "usessl",
+            };
+            await using var reader = new SequenceDbDataReader(
+                names,
+                [
+                    "Giganews",
+                    "news.example.test",
+                    (byte)0,
+                    4,
+                    "pass",
+                    563,
+                    "user",
+                    "y",
+                ]);
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => MySqlProviderAccountSource.ReadRowsAsync(reader, cts.Token));
         }
 
         /// <summary>

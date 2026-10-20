@@ -29,7 +29,7 @@ namespace VectorNNTPD.BackFillerService.Accounts
             {
                 if (!TryMap(row, out var provider, out var reason))
                 {
-                    rejected.Add(new RejectedProviderAccountRow(row.Backbone, reason));
+                    rejected.Add(new RejectedProviderAccountRow(row.Backbone ?? string.Empty, reason));
                     continue;
                 }
 
@@ -97,14 +97,21 @@ namespace VectorNNTPD.BackFillerService.Accounts
         /// <summary>
         /// Validates one row and builds a definition with <see cref="BackFillerProviderDefinition.MinSessions"/> set to zero.
         /// </summary>
-        /// <param name="row">Parsed row. Hostname and username are trimmed on success. Password is copied unchanged.</param>
+        /// <param name="row">
+        /// Parsed row. Hostname is trimmed on success.
+        /// When either credential is SQL <see langword="null"/>, authentication is disabled and both credential fields on the
+        /// definition are <see langword="null"/>. When both credentials are non-null, the username is trimmed and the password
+        /// is copied unchanged.
+        /// </param>
         /// <param name="provider">The definition when this method returns <see langword="true"/>; otherwise the default null assignment.</param>
         /// <param name="reason">Empty on success. On failure, a stable rejection sentence and <paramref name="provider"/> is not published.</param>
         /// <returns><see langword="true"/> when every field below is accepted.</returns>
         /// <remarks>
-        /// Rejects an unknown backbone, a missing hostname, username, or password, a port outside 1–65535,
-        /// <c>maxconnections</c> below 1, and a <c>usessl</c> value other than <c>y</c> or <c>n</c>.
-        /// <see cref="ProviderAccountRow.KeepAliveSeconds"/> is copied and is not range-checked again.
+        /// Rejects an unknown backbone, a missing hostname, a port outside 1–65535,
+        /// <c>maxconnections</c> below 1, a missing keepalive, and a <c>usessl</c> value other than <c>y</c> or <c>n</c>.
+        /// A SQL <see langword="null"/> username or password disables authentication without rejecting the row and
+        /// clears both runtime credential fields. A non-null empty, whitespace, or control-laden credential is still
+        /// rejected even when the other credential cell is SQL <see langword="null"/>.
         /// </remarks>
         private static bool TryMap(ProviderAccountRow row, out BackFillerProviderDefinition provider, out string reason)
         {
@@ -121,39 +128,26 @@ namespace VectorNNTPD.BackFillerService.Accounts
                 return false;
             }
 
-            if (row.Port is < 1 or > 65535)
+            if (row.Port is null or < 1 or > 65535)
             {
                 reason = "Port must be between 1 and 65535.";
                 return false;
             }
 
-            if (row.MaxConnections < 1)
+            if (row.MaxConnections is null or < 1)
             {
                 reason = "MaxConnections must be at least 1.";
                 return false;
             }
 
-            if (string.IsNullOrWhiteSpace(row.Username))
+            if (row.KeepAliveSeconds is null)
             {
-                reason = "Username is required.";
+                reason = "KeepAlive is required.";
                 return false;
             }
 
-            if (ContainsAsciiControlCharacters(row.Username))
+            if (!TryResolveCredentials(row.Username, row.Password, out var username, out var password, out reason))
             {
-                reason = "Username contains invalid control characters.";
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(row.Password))
-            {
-                reason = "Password is required.";
-                return false;
-            }
-
-            if (ContainsAsciiControlCharacters(row.Password))
-            {
-                reason = "Password contains invalid control characters.";
                 return false;
             }
 
@@ -166,13 +160,77 @@ namespace VectorNNTPD.BackFillerService.Accounts
             provider = new BackFillerProviderDefinition(
                 backbone,
                 row.Hostname.Trim(),
-                row.Port,
+                row.Port.Value,
                 useTls,
-                row.Username.Trim(),
-                row.Password,
+                username,
+                password,
                 MinSessions: 0,
-                MaxSessions: row.MaxConnections,
-                KeepAliveSeconds: row.KeepAliveSeconds);
+                MaxSessions: row.MaxConnections.Value,
+                KeepAliveSeconds: row.KeepAliveSeconds.Value);
+            reason = string.Empty;
+            return true;
+        }
+
+        /// <summary>
+        /// Resolves credential cells into the runtime authentication pair.
+        /// </summary>
+        /// <param name="username">Database username cell. <see langword="null"/> disables authentication.</param>
+        /// <param name="password">Database password cell. <see langword="null"/> disables authentication.</param>
+        /// <param name="resolvedUsername">Trimmed username when authentication is enabled; otherwise <see langword="null"/>.</param>
+        /// <param name="resolvedPassword">Password when authentication is enabled; otherwise <see langword="null"/>.</param>
+        /// <param name="reason">Rejection reason when a non-null credential is invalid.</param>
+        /// <returns><see langword="false"/> only when a non-null credential fails validation.</returns>
+        private static bool TryResolveCredentials(
+            string? username,
+            string? password,
+            out string? resolvedUsername,
+            out string? resolvedPassword,
+            out string reason)
+        {
+            resolvedUsername = null;
+            resolvedPassword = null;
+
+            // Validate any non-null credential cell before deciding auth mode. A present blank or
+            // control-laden value is still rejected even when the other credential is SQL NULL.
+            if (username is not null)
+            {
+                if (string.IsNullOrWhiteSpace(username))
+                {
+                    reason = "Username is required.";
+                    return false;
+                }
+
+                if (ContainsAsciiControlCharacters(username))
+                {
+                    reason = "Username contains invalid control characters.";
+                    return false;
+                }
+            }
+
+            if (password is not null)
+            {
+                if (string.IsNullOrWhiteSpace(password))
+                {
+                    reason = "Password is required.";
+                    return false;
+                }
+
+                if (ContainsAsciiControlCharacters(password))
+                {
+                    reason = "Password contains invalid control characters.";
+                    return false;
+                }
+            }
+
+            // SQL NULL on either credential disables authentication and drops both runtime values.
+            if (username is null || password is null)
+            {
+                reason = string.Empty;
+                return true;
+            }
+
+            resolvedUsername = username.Trim();
+            resolvedPassword = password;
             reason = string.Empty;
             return true;
         }
