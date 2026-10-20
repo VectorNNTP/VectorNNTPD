@@ -40,6 +40,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
 
             sink.Emit(Event(timestamp));
             sink.Emit(Event(timestamp.AddSeconds(1)));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(1, harness.Factory.ConnectCount);
             var channel = Assert.Single(harness.Factory.LastConnection!.PublishChannels);
@@ -86,6 +87,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             await using var harness = await Harness.StartAsync();
             using var sink = CreateSink(harness.Service, new FixedFormatter("one"));
             sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
             var first = harness.Factory.LastConnection!;
             var firstChannel = Assert.Single(first.PublishChannels);
 
@@ -96,6 +98,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             await replaced.Task.WaitAsync(safety.Token);
 
             sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(2, harness.Factory.ConnectCount);
             Assert.Equal(1, firstChannel.DisposeCount);
@@ -122,7 +125,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             harness.Factory.LastConnection!.PublishException = new InvalidOperationException("publish failed");
             using var sink = CreateSink(harness.Service, new FixedFormatter("payload"));
             var selfLog = new StringWriter();
-            await SelfLogCapture.RunAsync(() =>
+            await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
                 var probe = new List<LogEvent>();
@@ -132,6 +135,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                 {
                     var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
                     Assert.Null(error);
+                    await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.Empty(probe);
                     Assert.Contains("publication failed", selfLog.ToString(), StringComparison.Ordinal);
                     Assert.DoesNotContain(SecretPassword, selfLog.ToString(), StringComparison.Ordinal);
@@ -142,40 +146,65 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                     Serilog.Log.Logger = previous;
                     SelfLog.Disable();
                 }
-
-                return Task.CompletedTask;
             });
         }
 
         /// <summary>
-        /// Asserts that a publication callback which calls <see cref="RabbitMqLogEventSink.Emit(LogEvent)"/> again records only the outer publication, and that Serilog self-log contains <c>re-entrant</c>.
+        /// Asserts that a formatter which calls <see cref="RabbitMqLogEventSink.Emit(LogEvent)"/> again is dropped as re-entrant,
+        /// while the outer formatted payload is still published once.
         /// </summary>
         /// <returns>A task that completes when the assertions finish.</returns>
         [Fact]
-        public async Task Emit_DropsReentrantEvents()
+        public async Task Emit_DropsReentrantFormatterCalls()
         {
             await using var harness = await Harness.StartAsync();
             RabbitMqLogEventSink? sink = null;
-            harness.Factory.LastConnection!.OnPublish = () => sink!.Emit(Event(DateTimeOffset.UtcNow));
-            sink = CreateSink(harness.Service, new FixedFormatter("outer"));
+            var formatter = new ReentrantFormatter(() => sink!.Emit(Event(DateTimeOffset.UtcNow)), "outer");
+            sink = CreateSink(harness.Service, formatter);
             using var _ = sink;
             var selfLog = new StringWriter();
-            await SelfLogCapture.RunAsync(() =>
+            await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
                 try
                 {
                     sink.Emit(Event(DateTimeOffset.UtcNow));
-                    Assert.Single(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications);
+                    await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal("outer", Encoding.UTF8.GetString(Assert.Single(harness.Factory.LastConnection!.PublishChannels).Publications.Single().Body.Span));
                     Assert.Contains("re-entrant", selfLog.ToString(), StringComparison.Ordinal);
                 }
                 finally
                 {
                     SelfLog.Disable();
                 }
-
-                return Task.CompletedTask;
             });
+        }
+
+        /// <summary>
+        /// A synchronous publish callback that calls <see cref="RabbitMqLogEventSink.Emit(LogEvent)"/> is accepted
+        /// rather than misclassified as re-entrant, because the worker does not elevate the emit-depth guard.
+        /// </summary>
+        [Fact]
+        public async Task Emit_FromPublishCallback_IsAccepted()
+        {
+            await using var harness = await Harness.StartAsync();
+            RabbitMqLogEventSink? sink = null;
+            var nestedEmits = 0;
+            harness.Factory.LastConnection!.OnPublish = () =>
+            {
+                if (Interlocked.Increment(ref nestedEmits) == 1)
+                {
+                    sink!.Emit(Event(DateTimeOffset.UtcNow));
+                }
+            };
+            sink = CreateSink(harness.Service, new FixedFormatter("callback"));
+            using var _ = sink;
+
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(2, harness.Factory.LastConnection.TotalPublications);
+            Assert.Equal(2, nestedEmits);
         }
 
         /// <summary>
@@ -188,13 +217,14 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             await using var harness = await Harness.StartAsync(start: false);
             using var sink = CreateSink(harness.Service, new FixedFormatter("skipped"));
             var selfLog = new StringWriter();
-            await SelfLogCapture.RunAsync(() =>
+            await SelfLogCapture.RunAsync(async () =>
             {
                 SelfLog.Enable(selfLog);
                 try
                 {
                     var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
                     Assert.Null(error);
+                    await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.Equal(0, harness.Factory.ConnectCount);
                     Assert.Contains("not ready", selfLog.ToString(), StringComparison.Ordinal);
                 }
@@ -202,9 +232,184 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                 {
                     SelfLog.Disable();
                 }
-
-                return Task.CompletedTask;
             });
+        }
+
+        /// <summary>Concurrent Emit calls are accepted and all publish when capacity remains.</summary>
+        [Fact]
+        public async Task Emit_AcceptsConcurrentCallers_WithoutDroppingWhenCapacityRemains()
+        {
+            await using var harness = await Harness.StartAsync();
+            using var sink = CreateSink(harness.Service, new FixedFormatter("concurrent"), queueCapacity: 64);
+            const int count = 32;
+            var published = harness.Factory.LastConnection!.WaitForPublicationTotalAsync(count);
+            await Task.WhenAll(Enumerable.Range(0, count).Select(_ => Task.Run(() => sink.Emit(Event(DateTimeOffset.UtcNow)))));
+            await published.WaitAsync(TimeSpan.FromSeconds(5));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(0, sink.DroppedCount);
+            Assert.Equal(count, harness.Factory.LastConnection.TotalPublications);
+        }
+
+        /// <summary>Emit returns while a publisher confirm remains incomplete.</summary>
+        [Fact]
+        public async Task Emit_DoesNotBlockCaller_WhileConfirmIsPending()
+        {
+            await using var harness = await Harness.StartAsync();
+            var confirm = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Factory.LastConnection!.ConfirmGate = confirm;
+            harness.Factory.LastConnection.OnPublish = () => entered.TrySetResult();
+            using var sink = CreateSink(harness.Service, new FixedFormatter("pending"));
+
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Single(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications);
+
+            confirm.TrySetResult();
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Single(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications);
+        }
+
+        /// <summary>A full bounded queue rejects the newest event, keeps queued items, and rate-limits SelfLog.</summary>
+        [Fact]
+        public async Task Emit_DropsOverflow_WhenQueueIsFull_AndRateLimitsDiagnostics()
+        {
+            await using var harness = await Harness.StartAsync();
+            var confirm = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Factory.LastConnection!.ConfirmGate = confirm;
+            harness.Factory.LastConnection.OnPublish = () => firstEntered.TrySetResult();
+            const int capacity = 4;
+            using var sink = CreateSink(harness.Service, new FixedFormatter("overflow"), queueCapacity: capacity);
+            Assert.Equal(capacity, sink.QueueCapacity);
+            var selfLog = new StringWriter();
+            await SelfLogCapture.RunAsync(async () =>
+            {
+                SelfLog.Enable(selfLog);
+                try
+                {
+                    sink.Emit(Event(DateTimeOffset.UtcNow));
+                    await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(0, sink.DroppedCount);
+
+                    for (var i = 0; i < capacity; i++)
+                    {
+                        sink.Emit(Event(DateTimeOffset.UtcNow));
+                    }
+
+                    Assert.Equal(0, sink.DroppedCount);
+
+                    for (var i = 0; i < RabbitMqLogEventSink.DropDiagnosticInterval + 1; i++)
+                    {
+                        sink.Emit(Event(DateTimeOffset.UtcNow));
+                    }
+
+                    Assert.Equal(RabbitMqLogEventSink.DropDiagnosticInterval + 1, sink.DroppedCount);
+                    var diagnostics = selfLog.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                        .Count(static line => line.Contains("queue is full", StringComparison.Ordinal));
+                    Assert.Equal(2, diagnostics);
+
+                    confirm.TrySetResult();
+                    await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Equal(capacity + 1, harness.Factory.LastConnection.TotalPublications);
+                }
+                finally
+                {
+                    confirm.TrySetResult();
+                    SelfLog.Disable();
+                }
+            });
+        }
+
+        /// <summary>A failed publication does not stop the worker from publishing a later event.</summary>
+        [Fact]
+        public async Task Emit_ContinuesAfterTransientPublishFailure()
+        {
+            await using var harness = await Harness.StartAsync();
+            harness.Factory.LastConnection!.PublishException = new InvalidOperationException("publish failed");
+            using var sink = CreateSink(harness.Service, new FixedFormatter("retry"));
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            harness.Factory.LastConnection.PublishException = null;
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal("retry", Encoding.UTF8.GetString(Assert.Single(harness.Factory.LastConnection.PublishChannels).Publications.Single().Body.Span));
+        }
+
+        /// <summary>Dispose rejects new events and disposes the cached channel once.</summary>
+        [Fact]
+        public async Task Dispose_RejectsNewEvents_AndDisposesChannelOnce()
+        {
+            await using var harness = await Harness.StartAsync();
+            var sink = CreateSink(harness.Service, new FixedFormatter("shutdown"));
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var channel = Assert.Single(harness.Factory.LastConnection!.PublishChannels);
+
+            sink.Dispose();
+            var ignored = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
+            Assert.Null(ignored);
+            Assert.Equal(1, channel.DisposeCount);
+            Assert.Single(channel.Publications);
+            sink.Dispose();
+            Assert.Equal(1, channel.DisposeCount);
+        }
+
+        /// <summary>Dispose concurrent with Emit does not throw to the caller or leave the worker unobserved.</summary>
+        [Fact]
+        public async Task Dispose_RacesWithEmit_WithoutThrowingToCaller()
+        {
+            await using var harness = await Harness.StartAsync();
+            using var sink = CreateSink(harness.Service, new FixedFormatter("race"));
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var workers = Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
+            {
+                started.Task.GetAwaiter().GetResult();
+                var error = Record.Exception(() => sink.Emit(Event(DateTimeOffset.UtcNow)));
+                Assert.Null(error);
+            })).ToArray();
+
+            started.SetResult();
+            var disposeError = Record.Exception(sink.Dispose);
+            Assert.Null(disposeError);
+            await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        /// <summary>
+        /// When a confirm ignores cancellation, Dispose returns after the shutdown bound without disposing the
+        /// channel under the worker; releasing the confirm later lets the worker dispose the channel once.
+        /// </summary>
+        [Fact]
+        public async Task Dispose_UncooperativeConfirm_DoesNotDisposeChannelWhileInFlight()
+        {
+            await using var harness = await Harness.StartAsync();
+            var confirm = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            harness.Factory.LastConnection!.ConfirmGate = confirm;
+            harness.Factory.LastConnection.IgnoreConfirmCancellation = true;
+            harness.Factory.LastConnection.OnPublish = () => entered.TrySetResult();
+            var sink = CreateSink(harness.Service, new FixedFormatter("stuck"));
+
+            sink.Emit(Event(DateTimeOffset.UtcNow));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var channel = Assert.Single(harness.Factory.LastConnection.PublishChannels);
+            Assert.Equal(0, channel.DisposeCount);
+
+            var disposeTask = Task.Run(sink.Dispose);
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(0, channel.DisposeCount);
+
+            confirm.TrySetResult();
+            using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (channel.DisposeCount == 0)
+            {
+                await Task.Delay(10, safety.Token);
+            }
+
+            Assert.Equal(1, channel.DisposeCount);
         }
 
         /// <summary>
@@ -212,9 +417,13 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         /// </summary>
         /// <param name="service">Process connection owner passed to the sink.</param>
         /// <param name="formatter">Formatter the sink uses for each event payload.</param>
+        /// <param name="queueCapacity">Bounded queue capacity forwarded to the sink.</param>
         /// <returns>The constructed sink.</returns>
-        private static RabbitMqLogEventSink CreateSink(IRabbitMqService service, ITextFormatter formatter) =>
-            new(service, "logs", "backfiller", "VectorNNTPD.Common.Tests", formatter, RabbitMqLogEventSink.JsonContentType);
+        private static RabbitMqLogEventSink CreateSink(
+            IRabbitMqService service,
+            ITextFormatter formatter,
+            int queueCapacity = RabbitMqLogEventSink.DefaultQueueCapacity) =>
+            new(service, "logs", "backfiller", "VectorNNTPD.Common.Tests", formatter, RabbitMqLogEventSink.JsonContentType, queueCapacity);
 
         /// <summary>
         /// Builds an information-level event at <paramref name="timestamp"/> with a null exception, message template <c>marker</c>, and no properties.
@@ -264,6 +473,30 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             {
                 ArgumentNullException.ThrowIfNull(logEvent);
                 ArgumentNullException.ThrowIfNull(output);
+                output.Write(text);
+            }
+        }
+
+        /// <summary>
+        /// Formatter that invokes <paramref name="reenter"/> once before writing <paramref name="text"/>.
+        /// </summary>
+        /// <param name="reenter">Callback invoked from <see cref="Format"/> to exercise same-thread re-entrancy.</param>
+        /// <param name="text">Characters written after the re-entrant callback.</param>
+        private sealed class ReentrantFormatter(Action reenter, string text) : ITextFormatter
+        {
+            /// <summary>True after the first re-entrant callback so formatting cannot recurse unboundedly.</summary>
+            private int _reentered;
+
+            /// <inheritdoc />
+            public void Format(LogEvent logEvent, TextWriter output)
+            {
+                ArgumentNullException.ThrowIfNull(logEvent);
+                ArgumentNullException.ThrowIfNull(output);
+                if (Interlocked.Exchange(ref _reentered, 1) == 0)
+                {
+                    reenter();
+                }
+
                 output.Write(text);
             }
         }
@@ -405,6 +638,8 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                 {
                     connection.PublishException = LastConnection.PublishException;
                     connection.OnPublish = LastConnection.OnPublish;
+                    connection.ConfirmGate = LastConnection.ConfirmGate;
+                    connection.IgnoreConfirmCancellation = LastConnection.IgnoreConfirmCancellation;
                 }
 
                 LastConnection = connection;
@@ -458,16 +693,96 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             public Exception? PublishException { get; set; }
 
             /// <summary>
-            /// Callback invoked after a publication is recorded.
+            /// Callback invoked after a publication is recorded and before the confirm gate is awaited.
             /// </summary>
             /// <value>The callback, or <see langword="null"/> when no callback is registered.</value>
             public Action? OnPublish { get; set; }
+
+            /// <summary>
+            /// When set, <see cref="LoggingPublishChannel.PublishConfirmedAsync(RabbitMqConfirmedPublication, CancellationToken)"/>
+            /// records the publication then waits for this gate.
+            /// </summary>
+            public TaskCompletionSource? ConfirmGate { get; set; }
+
+            /// <summary>
+            /// When <see langword="true"/>, the confirm gate wait ignores the publish cancellation token so disposal
+            /// timeout behavior can be exercised.
+            /// </summary>
+            public bool IgnoreConfirmCancellation { get; set; }
 
             /// <summary>
             /// Publish channels created by <see cref="CreatePublishChannelAsync"/>.
             /// </summary>
             /// <value>The list of created channels. It starts empty.</value>
             public List<LoggingPublishChannel> PublishChannels { get; } = [];
+
+            /// <summary>Total publications recorded across every channel on this connection.</summary>
+            public int TotalPublications
+            {
+                get
+                {
+                    lock (_publicationGate)
+                    {
+                        return _totalPublications;
+                    }
+                }
+            }
+
+            /// <summary>Protects <see cref="_totalPublications"/> and publication waiters.</summary>
+            private readonly object _publicationGate = new();
+
+            /// <summary>Running total of recorded publications.</summary>
+            private int _totalPublications;
+
+            /// <summary>Waiters armed by <see cref="WaitForPublicationTotalAsync"/>.</summary>
+            private readonly List<(int Count, TaskCompletionSource Source)> _publicationWaiters = [];
+
+            /// <summary>Completes when <see cref="TotalPublications"/> reaches <paramref name="count"/>.</summary>
+            public Task WaitForPublicationTotalAsync(int count)
+            {
+                lock (_publicationGate)
+                {
+                    if (_totalPublications >= count)
+                    {
+                        return Task.CompletedTask;
+                    }
+
+                    var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _publicationWaiters.Add((count, source));
+                    return source.Task;
+                }
+            }
+
+            /// <summary>Records one publication toward <see cref="TotalPublications"/>.</summary>
+            internal void NotePublication()
+            {
+                List<TaskCompletionSource>? completed = null;
+                lock (_publicationGate)
+                {
+                    _totalPublications++;
+                    for (var i = _publicationWaiters.Count - 1; i >= 0; i--)
+                    {
+                        if (_totalPublications < _publicationWaiters[i].Count)
+                        {
+                            continue;
+                        }
+
+                        completed ??= [];
+                        completed.Add(_publicationWaiters[i].Source);
+                        _publicationWaiters.RemoveAt(i);
+                    }
+                }
+
+                if (completed is null)
+                {
+                    return;
+                }
+
+                foreach (var source in completed)
+                {
+                    source.TrySetResult();
+                }
+            }
 
             /// <summary>
             /// Raised by <see cref="SimulateLost"/> with reply code 320, reply text <c>lost</c>, and initiator <c>Peer</c>.
@@ -613,7 +928,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             /// Thrown when <see cref="LoggingConnection.PublishException"/> is not <see langword="null"/>.
             /// The thrown instance is that stored exception.
             /// </exception>
-            public Task PublishConfirmedAsync(RabbitMqConfirmedPublication publication, CancellationToken cancellationToken)
+            public async Task PublishConfirmedAsync(RabbitMqConfirmedPublication publication, CancellationToken cancellationToken)
             {
                 if (connection.PublishException is not null)
                 {
@@ -621,8 +936,19 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                 }
 
                 Publications.Add(publication);
+                connection.NotePublication();
                 connection.OnPublish?.Invoke();
-                return Task.CompletedTask;
+                if (connection.ConfirmGate is not null)
+                {
+                    if (connection.IgnoreConfirmCancellation)
+                    {
+                        await connection.ConfirmGate.Task.ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await connection.ConfirmGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
 
             /// <summary>

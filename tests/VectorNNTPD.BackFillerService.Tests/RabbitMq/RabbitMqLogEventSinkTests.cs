@@ -35,6 +35,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     RabbitMqLogEventSink.TextContentType);
 
                 var diagnostic = TestSelfLog.Capture(() => sink.Emit(Event()));
+                await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
                 Assert.Contains("publication failed", diagnostic, StringComparison.Ordinal);
                 Assert.Contains("format boom", diagnostic, StringComparison.Ordinal);
@@ -69,6 +70,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     new MessageTemplateTextFormatter("{Message}"),
                     RabbitMqLogEventSink.TextContentType);
                 sink.Emit(Event());
+                await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
                 var diagnostic = TestSelfLog.Capture(sink.Dispose);
 
