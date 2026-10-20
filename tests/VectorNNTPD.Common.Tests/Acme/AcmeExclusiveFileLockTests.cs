@@ -17,7 +17,7 @@ namespace VectorNNTPD.Common.Tests.Acme
         public void Held_lock_is_recognized_as_contention_not_immediate_failure()
         {
             using var dir = new TempStateDir();
-            var path = Path.Combine(dir.Path, "held.lock");
+            var path = Path.Join(dir.Path, "held.lock");
             using var held = AcmeExclusiveFileLock.Acquire(path);
 
             Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(path, out AcmeExclusiveFileLock? second));
@@ -33,7 +33,7 @@ namespace VectorNNTPD.Common.Tests.Acme
         public async Task Cancellation_while_waiting_for_held_lock_exits_promptly()
         {
             using var dir = new TempStateDir();
-            var path = Path.Combine(dir.Path, "wait.lock");
+            var path = Path.Join(dir.Path, "wait.lock");
             using var held = AcmeExclusiveFileLock.Acquire(path);
             using var cts = new CancellationTokenSource();
 
@@ -53,7 +53,7 @@ namespace VectorNNTPD.Common.Tests.Acme
         public void Path_that_is_a_directory_fails_promptly_without_contention_retry()
         {
             using var dir = new TempStateDir();
-            var path = Path.Combine(dir.Path, "as-directory.lock");
+            var path = Path.Join(dir.Path, "as-directory.lock");
             Directory.CreateDirectory(path);
 
             var ex = Assert.ThrowsAny<Exception>(() => AcmeExclusiveFileLock.Acquire(path, CancellationToken.None));
@@ -90,7 +90,7 @@ namespace VectorNNTPD.Common.Tests.Acme
         public void Initialization_failure_propagates_and_disposes_stream()
         {
             using var dir = new TempStateDir();
-            var path = Path.Combine(dir.Path, "init-fail.lock");
+            var path = Path.Join(dir.Path, "init-fail.lock");
             var disposed = 0;
             var openCount = 0;
 
@@ -168,15 +168,33 @@ namespace VectorNNTPD.Common.Tests.Acme
         public async Task Waiting_acquire_succeeds_after_holder_releases()
         {
             using var dir = new TempStateDir();
-            var path = Path.Combine(dir.Path, "release.lock");
-            var held = AcmeExclusiveFileLock.Acquire(path);
-            var waiting = AcmeExclusiveFileLock.AcquireAsync(path, CancellationToken.None);
-            Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(path, out _));
-            Assert.False(waiting.IsCompleted);
+            var path = Path.Join(dir.Path, "release.lock");
 
-            held.Dispose();
-            using var acquired = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.NotNull(acquired);
+            Task<AcmeExclusiveFileLock>? waiting = null;
+            try
+            {
+                using (AcmeExclusiveFileLock.Acquire(path))
+                {
+                    waiting = AcmeExclusiveFileLock.AcquireAsync(path, CancellationToken.None);
+                    Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(path, out _));
+                    Assert.False(waiting.IsCompleted);
+                }
+
+                var acquired = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+                waiting = null;
+                using (acquired)
+                {
+                    Assert.NotNull(acquired);
+                }
+            }
+            finally
+            {
+                if (waiting is not null)
+                {
+                    // Holder was released above; settle the waiter and dispose its result.
+                    (await waiting).Dispose();
+                }
+            }
         }
 
         /// <summary>

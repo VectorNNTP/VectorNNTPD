@@ -120,16 +120,17 @@ namespace VectorNNTPD.Common.Tests.Acme
         {
             using var dir = new TempStateDir();
             var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
-            using var held = AcmeExclusiveFileLock.Acquire(journal.LockPath);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => Task.Run(
-                    () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token),
-                    cts.Token));
-            Assert.False(File.Exists(journal.FilePath));
+            using (AcmeExclusiveFileLock.Acquire(journal.LockPath))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => Task.Run(
+                        () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token),
+                        CancellationToken.None));
+                Assert.False(File.Exists(journal.FilePath));
+            }
 
-            held.Dispose();
             var id = journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
             Assert.Equal(id, Assert.Single(journal.LoadHistory()).Id);
         }
@@ -235,19 +236,39 @@ namespace VectorNNTPD.Common.Tests.Acme
         {
             using var dir = new TempStateDir();
             var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
-            var held = AcmeExclusiveFileLock.Acquire(journal.LockPath);
             using var cts = new CancellationTokenSource();
 
-            var waiting = Task.Run(
-                () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token));
+            Task<string>? waiting = null;
+            try
+            {
+                using (AcmeExclusiveFileLock.Acquire(journal.LockPath))
+                {
+                    waiting = Task.Run(
+                        () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token));
 
-            // Observe genuine contention before cancelling.
-            Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(journal.LockPath, out _));
-            cts.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
-            Assert.False(File.Exists(journal.FilePath));
+                    // Observe genuine contention before cancelling.
+                    Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(journal.LockPath, out _));
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+                    waiting = null;
+                    Assert.False(File.Exists(journal.FilePath));
+                }
+            }
+            finally
+            {
+                if (waiting is not null)
+                {
+                    // Holder is released by using; cancel and settle so the background task cannot outlive the test.
+                    cts.Cancel();
+                    var settled = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(5)));
+                    if (settled == waiting && waiting.IsFaulted)
+                    {
+                        // Observe the fault so it is not an unobserved task exception.
+                        _ = waiting.Exception;
+                    }
+                }
+            }
 
-            held.Dispose();
             var id = journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
             Assert.Equal(id, Assert.Single(journal.LoadHistory()).Id);
         }

@@ -117,7 +117,7 @@ namespace VectorNNTPD.Common.Acme
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
             acquired = null;
 
-            FileStream? stream = null;
+            FileStream stream;
             try
             {
                 stream = CreateExclusiveStream(path);
@@ -127,16 +127,19 @@ namespace VectorNNTPD.Common.Acme
                 return false;
             }
 
+            // Open succeeded: dispose on initialization failure, otherwise transfer ownership
+            // to the returned lock. A finally/null pattern is avoided so initialization errors
+            // cannot be mistaken for open-time contention retries.
             try
             {
                 InitializeLockFile(stream);
                 acquired = new AcmeExclusiveFileLock(stream);
-                stream = null;
                 return true;
             }
-            finally
+            catch
             {
-                stream?.Dispose();
+                stream.Dispose();
+                throw;
             }
         }
 
