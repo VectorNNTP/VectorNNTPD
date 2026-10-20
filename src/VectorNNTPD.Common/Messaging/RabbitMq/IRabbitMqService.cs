@@ -26,6 +26,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// The first successful connect has <see cref="RabbitMqConnectionReplacedEventArgs.IsReplacement"/>
         /// set to <see langword="false"/>. Later generations set it to <see langword="true"/> so callers
         /// can drop work tied to the previous connection.
+        /// A subscriber exception is logged and isolated: it does not fail connect or reconnect, does not
+        /// retire the published generation, and does not prevent later subscribers from receiving the event.
         /// </remarks>
         event EventHandler<RabbitMqConnectionReplacedEventArgs>? ConnectionReplaced;
 

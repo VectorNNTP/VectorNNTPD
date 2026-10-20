@@ -193,5 +193,23 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             Level = LogLevel.Warning,
             Message = "RabbitMQ connection close failed")]
         internal static partial void ConnectionCloseFailed(ILogger logger, Exception exception);
+
+        /// <summary>
+        /// Logs event 2820 (error): a <c>ConnectionReplaced</c> subscriber threw after the generation was published.
+        /// The published connection remains current; the exception is not rethrown.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="exception">Subscriber failure attached to the log event.</param>
+        /// <param name="Generation">Generation that was already installed when the handler ran.</param>
+        /// <param name="Subscriber">Declaring type and method name of the failing handler, when known.</param>
+        [LoggerMessage(
+            EventId = 2820,
+            Level = LogLevel.Error,
+            Message = "A ConnectionReplaced subscriber failed after generation {Generation} was published ({Subscriber})")]
+        internal static partial void ConnectionReplacedHandlerFailed(
+            ILogger logger,
+            Exception exception,
+            long Generation,
+            string Subscriber);
     }
 }
