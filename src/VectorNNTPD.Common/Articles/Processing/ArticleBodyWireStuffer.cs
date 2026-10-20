@@ -12,9 +12,11 @@ namespace VectorNNTPD.Common.Articles.Processing
     /// </para>
     /// <para>
     /// Headers, including a header line that begins with <c>.</c>, and the header/body separator are copied unchanged.
-    /// A body line whose first content byte is <c>.</c> gains one leading <c>.</c>. Content excludes a CR that
-    /// immediately precedes LF. The NNTP multiline terminator <c>.CRLF</c> is not appended.
+    /// A body line whose first content byte is <c>.</c> gains one leading <c>.</c>. Line ends are CR, LF, or CRLF,
+    /// matching the parser's body walk. A CR that immediately precedes LF is one terminator, not two.
+    /// The NNTP multiline terminator <c>.CRLF</c> is not appended.
     /// When no body line needs a dot, the original array is returned.
+    /// Delivery framing still requires exclusive CRLF and may reject a retained article that used bare CR or bare LF.
     /// </para>
     /// </remarks>
     internal static class ArticleBodyWireStuffer
@@ -102,7 +104,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                     }
 
                     extra++;
-                    SkipThroughLineFeed(body, ref index);
+                    SkipThroughLineTerminator(body, ref index);
                 }
 
                 return extra;
@@ -156,7 +158,7 @@ namespace VectorNNTPD.Common.Articles.Processing
 
                 destination[written++] = (byte)'.';
                 var start = index;
-                SkipThroughLineFeed(body, ref index);
+                SkipThroughLineTerminator(body, ref index);
                 var line = index - start;
                 body.Slice(start, line).CopyTo(destination[written..]);
                 written += line;
@@ -183,23 +185,40 @@ namespace VectorNNTPD.Common.Articles.Processing
         {
             while (index < body.Length && body[index] != (byte)'.')
             {
-                SkipThroughLineFeed(body, ref index);
+                SkipThroughLineTerminator(body, ref index);
             }
         }
 
-        /// <summary>Advances <paramref name="index"/> to the first byte after this line's LF, or to the buffer length.</summary>
+        /// <summary>
+        /// Advances <paramref name="index"/> to the first byte after this line's CR, LF, or CRLF, or to the buffer length.
+        /// </summary>
         /// <param name="body">Logical body.</param>
         /// <param name="index">A byte inside the current line on entry.</param>
-        private static void SkipThroughLineFeed(ReadOnlySpan<byte> body, ref int index)
+        /// <remarks>
+        /// Matches the parser's <c>AdvancePastTerminator</c> rules so a bare CR ends a line for stuffing.
+        /// A CR immediately followed by LF is consumed as one terminator.
+        /// </remarks>
+        private static void SkipThroughLineTerminator(ReadOnlySpan<byte> body, ref int index)
         {
-            while (index < body.Length && body[index] != (byte)'\n')
+            while (index < body.Length)
             {
-                index++;
-            }
+                var b = body[index++];
+                if (b == (byte)'\n')
+                {
+                    return;
+                }
 
-            if (index < body.Length)
-            {
-                index++;
+                if (b != (byte)'\r')
+                {
+                    continue;
+                }
+
+                if (index < body.Length && body[index] == (byte)'\n')
+                {
+                    index++;
+                }
+
+                return;
             }
         }
     }
