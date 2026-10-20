@@ -7,6 +7,22 @@ namespace VectorNNTPD.Common.Acme
     /// and a <c>current</c> pointer.
     /// Persists the TLS credential as PKCS#12/PFX (<c>certificate.pfx</c>).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Recovery is conservative: an I/O or access failure while reading the pointer or inspecting a
+    /// generation is never treated as proof that the certificate is absent or incomplete, and never
+    /// triggers destructive cleanup. Destructive cleanup runs only when a complete current generation
+    /// is positively established, or when a pointed-to generation is positively incomplete (marker/PFX
+    /// missing or empty) — and then only that incomplete generation (plus its pointer) is removed.
+    /// A missing pointer does not auto-promote orphans; a later successful Save GCs non-current
+    /// generations once a new current id is committed.
+    /// </para>
+    /// <para>
+    /// Public entry points acquire the FQDN <see cref="AcmeIssuanceLock"/>. Callers that already hold
+    /// that lock (for example <see cref="CertificateManager"/>) must use the <c>*UnderLock</c> methods
+    /// to avoid a same-process exclusive-lock deadlock.
+    /// </para>
+    /// </remarks>
     internal sealed partial class CertificateStore
     {
         /// <summary>32 lowercase hex characters, the <c>N</c> format of a <see cref="Guid"/>.</summary>
@@ -28,6 +44,12 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>Renewal window passed to <see cref="CertificateValidator.ValidatePfx"/> on load and save.</summary>
         private readonly TimeSpan _renewalThreshold;
+
+        /// <summary>
+        /// Optional filesystem seam for deterministic fault injection in tests.
+        /// <see langword="null"/> uses the real filesystem.
+        /// </summary>
+        internal ICertificateStoreFileAccess? FileAccessForTests { get; set; }
 
         /// <summary>Initializes a new instance of the <see cref="CertificateStore"/> class.</summary>
         /// <param name="stateDir">Shared ACME state directory.</param>
@@ -58,7 +80,8 @@ namespace VectorNNTPD.Common.Acme
             _requiredDomains = requiredDomains;
             _renewalThreshold = renewalThreshold;
             AcmePaths.EnsureCertificateIdentityLayout(stateDir, _fqdn);
-            Recover();
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            RecoverUnderLock();
         }
 
         /// <summary>Gets the FQDN this store is scoped to.</summary>
@@ -70,9 +93,16 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Returns paths for the active generation (after recovery).</summary>
         internal CertificatePaths Paths()
         {
-            Recover();
-            var active = ReadCurrentId();
-            if (active is not null && GenerationIsComplete(active))
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            return PathsUnderLock();
+        }
+
+        /// <summary>Returns paths for the active generation. Caller must hold the FQDN issuance lock.</summary>
+        internal CertificatePaths PathsUnderLock()
+        {
+            RecoverUnderLock();
+            var active = TryGetCompleteCurrentIdUnderLock();
+            if (active is not null)
             {
                 return AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, active);
             }
@@ -83,9 +113,15 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Returns the active generation id, or <see langword="null"/> when none is current.</summary>
         internal string? CurrentGenerationId()
         {
-            Recover();
-            var active = ReadCurrentId();
-            return active is not null && GenerationIsComplete(active) ? active : null;
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            return CurrentGenerationIdUnderLock();
+        }
+
+        /// <summary>Returns the active generation id. Caller must hold the FQDN issuance lock.</summary>
+        internal string? CurrentGenerationIdUnderLock()
+        {
+            RecoverUnderLock();
+            return TryGetCompleteCurrentIdUnderLock();
         }
 
         /// <summary>
@@ -93,9 +129,18 @@ namespace VectorNNTPD.Common.Acme
         /// </summary>
         internal CertificateMaterial? Load()
         {
-            Recover();
-            var active = ReadCurrentId();
-            if (active is null || !GenerationIsComplete(active))
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            return LoadUnderLock();
+        }
+
+        /// <summary>
+        /// Loads and validates the active PFX. Caller must hold the FQDN issuance lock.
+        /// </summary>
+        internal CertificateMaterial? LoadUnderLock()
+        {
+            RecoverUnderLock();
+            var active = TryGetCompleteCurrentIdUnderLock();
+            if (active is null)
             {
                 return null;
             }
@@ -107,6 +152,10 @@ namespace VectorNNTPD.Common.Acme
                 pfxBytes = File.ReadAllBytes(paths.PfxPath);
             }
             catch (IOException ex)
+            {
+                throw new AcmeStorageException("certificate_read_failed", ex.GetType().Name);
+            }
+            catch (UnauthorizedAccessException ex)
             {
                 throw new AcmeStorageException("certificate_read_failed", ex.GetType().Name);
             }
@@ -142,11 +191,20 @@ namespace VectorNNTPD.Common.Acme
         /// <exception cref="AcmeStorageException">Thrown when the write fails after the new generation directory is removed.</exception>
         internal CertificatePaths Save(CertificateMaterial material, string? pfxPassword = null)
         {
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            return SaveUnderLock(material, pfxPassword);
+        }
+
+        /// <summary>
+        /// Persists a new generation. Caller must hold the FQDN issuance lock.
+        /// </summary>
+        internal CertificatePaths SaveUnderLock(CertificateMaterial material, string? pfxPassword = null)
+        {
             ArgumentNullException.ThrowIfNull(material);
             var password = pfxPassword ?? _pfxPassword;
             ArgumentException.ThrowIfNullOrWhiteSpace(password);
             AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
-            Recover();
+            RecoverUnderLock();
 
             var preStatus = CertificateValidator.ValidatePfx(
                 material.PfxBytes,
@@ -172,6 +230,10 @@ namespace VectorNNTPD.Common.Acme
                     reloaded = File.ReadAllBytes(paths.PfxPath);
                 }
                 catch (IOException ex)
+                {
+                    throw new AcmeStorageException("certificate_read_failed", ex.GetType().Name);
+                }
+                catch (UnauthorizedAccessException ex)
                 {
                     throw new AcmeStorageException("certificate_read_failed", ex.GetType().Name);
                 }
@@ -208,84 +270,228 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Idempotent recovery for interrupted promotions inside this FQDN only.</summary>
         internal void Recover()
         {
-            AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
-            var pointer = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
-            var currentId = ReadCurrentId();
-            if (File.Exists(pointer) && currentId is null)
-            {
-                AtomicFile.TryDelete(pointer);
-            }
-
-            if (currentId is not null && GenerationIsComplete(currentId))
-            {
-                CleanupNonCurrentGenerations(keep: currentId);
-                return;
-            }
-
-            if (currentId is not null)
-            {
-                AtomicFile.TryDelete(pointer);
-            }
-
-            CleanupNonCurrentGenerations(keep: null);
+            using var issuanceLock = AcmeIssuanceLock.Acquire(_stateDir, _fqdn);
+            RecoverUnderLock();
         }
 
         /// <summary>
-        /// Reads the current-pointer file. Returns <see langword="null"/> when the file is missing, unreadable, or not a 32-hex id.
+        /// Idempotent recovery. Caller must hold the FQDN issuance lock.
         /// </summary>
-        /// <returns>The generation id, or <see langword="null"/>.</returns>
-        private string? ReadCurrentId()
+        /// <remarks>
+        /// Decision tree (destructive steps only when positively safe):
+        /// <list type="bullet">
+        /// <item><description>Unreadable pointer or indeterminate generation inspection → throw; mutate nothing.</description></item>
+        /// <item><description>Valid pointer + complete generation → GC other generations only.</description></item>
+        /// <item><description>Valid pointer + positively incomplete generation → delete that pointer and that generation only.</description></item>
+        /// <item><description>Malformed pointer (read succeeded, content invalid) → delete pointer only; leave all generations.</description></item>
+        /// <item><description>
+        /// Missing pointer → leave all generations (may still hold a recoverable complete PFX).
+        /// Automatic promotion is not performed: a later successful <see cref="Save"/> /
+        /// <see cref="SaveUnderLock"/> GCs non-current generations once a new current id is established.
+        /// </description></item>
+        /// </list>
+        /// </remarks>
+        internal void RecoverUnderLock()
+        {
+            AcmePaths.EnsureCertificateIdentityLayout(_stateDir, _fqdn);
+            var pointerPath = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
+            CurrentPointerState pointer = ReadCurrentPointerState();
+
+            switch (pointer.Kind)
+            {
+                case CurrentPointerKind.Unreadable:
+                    throw new AcmeStorageException(
+                        "current_pointer_unreadable",
+                        pointer.FailureDetail ?? "IOException");
+
+                case CurrentPointerKind.Valid:
+                    {
+                        string generationId = pointer.GenerationId!;
+                        GenerationInspection inspection = InspectGeneration(generationId);
+                        if (inspection == GenerationInspection.Indeterminate)
+                        {
+                            throw new AcmeStorageException(
+                                "generation_inspection_failed",
+                                generationId);
+                        }
+
+                        if (inspection == GenerationInspection.Complete)
+                        {
+                            CleanupNonCurrentGenerations(keep: generationId);
+                            return;
+                        }
+
+                        // Positively incomplete: remove the pointer first. Only delete the generation
+                        // after the pointer is confirmed gone so a failed pointer delete cannot leave
+                        // current referencing a removed directory.
+                        if (!TryDeleteCurrentPointer(pointerPath))
+                        {
+                            throw new AcmeStorageException(
+                                "current_pointer_delete_failed",
+                                generationId);
+                        }
+
+                        TryDeleteDirectory(AcmePaths.GenerationDir(_stateDir, _fqdn, generationId));
+                        return;
+                    }
+
+                case CurrentPointerKind.Malformed:
+                    // Content was read successfully but is not a generation id. Safe to remove the
+                    // pointer alone; generations may still hold a complete recoverable PFX.
+                    if (!TryDeleteCurrentPointer(pointerPath))
+                    {
+                        throw new AcmeStorageException(
+                            "current_pointer_delete_failed",
+                            "malformed");
+                    }
+
+                    return;
+
+                case CurrentPointerKind.Missing:
+                    // No pointer must not imply "delete every generation". Orphans remain until a
+                    // later Save establishes a new current generation and GCs non-current dirs.
+                    return;
+
+                default:
+                    throw new InvalidOperationException($"Unexpected pointer kind {pointer.Kind}.");
+            }
+        }
+
+        /// <summary>
+        /// Returns the current generation id when the pointer is valid and that generation is complete.
+        /// Throws when the pointer or generation cannot be inspected safely.
+        /// </summary>
+        private string? TryGetCompleteCurrentIdUnderLock()
+        {
+            CurrentPointerState pointer = ReadCurrentPointerState();
+            return pointer.Kind switch
+            {
+                CurrentPointerKind.Missing or CurrentPointerKind.Malformed => null,
+                CurrentPointerKind.Unreadable => throw new AcmeStorageException(
+                    "current_pointer_unreadable",
+                    pointer.FailureDetail ?? "IOException"),
+                CurrentPointerKind.Valid => InspectGeneration(pointer.GenerationId!) switch
+                {
+                    GenerationInspection.Complete => pointer.GenerationId,
+                    GenerationInspection.Incomplete => null,
+                    GenerationInspection.Indeterminate => throw new AcmeStorageException(
+                        "generation_inspection_failed",
+                        pointer.GenerationId!),
+                    _ => null,
+                },
+                _ => null,
+            };
+        }
+
+        /// <summary>Reads the current-pointer file without collapsing I/O failure into "missing".</summary>
+        private CurrentPointerState ReadCurrentPointerState()
         {
             var path = AcmePaths.CurrentGenerationPointerPath(_stateDir, _fqdn);
-            if (!File.Exists(path))
+            ICertificateStoreFileAccess io = FileAccessForTests ?? RealCertificateStoreFileAccess.Instance;
+
+            bool exists;
+            try
             {
-                return null;
+                exists = io.FileExists(path);
+            }
+            catch (IOException ex)
+            {
+                return CurrentPointerState.Unreadable(ex.GetType().Name);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return CurrentPointerState.Unreadable(ex.GetType().Name);
+            }
+
+            if (!exists)
+            {
+                return CurrentPointerState.Missing();
             }
 
             try
             {
-                var raw = File.ReadAllText(path).Trim();
-                return GenerationIdRegex().IsMatch(raw) ? raw : null;
+                var raw = io.ReadAllText(path).Trim();
+                return GenerationIdRegex().IsMatch(raw)
+                    ? CurrentPointerState.Valid(raw)
+                    : CurrentPointerState.Malformed();
             }
-            catch (IOException)
+            catch (IOException ex)
             {
-                return null;
+                return CurrentPointerState.Unreadable(ex.GetType().Name);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return CurrentPointerState.Unreadable(ex.GetType().Name);
             }
         }
 
         /// <summary>
-        /// A generation is complete when the id matches <see cref="GenerationIdRegex"/>, the <c>complete</c> marker exists, and <c>certificate.pfx</c> exists and is non-empty.
+        /// Inspects whether a generation is positively complete, positively incomplete, or indeterminate.
         /// </summary>
-        /// <param name="generationId">Directory name under <c>gens</c>.</param>
-        /// <returns><see langword="false"/> when any of those checks fail, including an <see cref="IOException"/> reading the length.</returns>
-        private bool GenerationIsComplete(string generationId)
+        private GenerationInspection InspectGeneration(string generationId)
         {
             if (!GenerationIdRegex().IsMatch(generationId))
             {
-                return false;
+                return GenerationInspection.Incomplete;
             }
 
+            ICertificateStoreFileAccess io = FileAccessForTests ?? RealCertificateStoreFileAccess.Instance;
             var marker = AcmePaths.GenerationCompleteMarker(_stateDir, _fqdn, generationId);
             var paths = AcmePaths.GenerationCertificatePaths(_stateDir, _fqdn, generationId);
-            if (!File.Exists(marker) || !File.Exists(paths.PfxPath))
-            {
-                return false;
-            }
 
             try
             {
-                return new FileInfo(paths.PfxPath).Length > 0;
+                if (!io.FileExists(marker) || !io.FileExists(paths.PfxPath))
+                {
+                    return GenerationInspection.Incomplete;
+                }
+
+                return io.GetFileLength(paths.PfxPath) > 0
+                    ? GenerationInspection.Complete
+                    : GenerationInspection.Incomplete;
             }
             catch (IOException)
+            {
+                return GenerationInspection.Indeterminate;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return GenerationInspection.Indeterminate;
+            }
+        }
+
+        /// <summary>
+        /// Best-effort delete of the current pointer, returning whether the file is gone afterward.
+        /// </summary>
+        /// <param name="pointerPath">Path to <c>current</c>.</param>
+        /// <returns>
+        /// <see langword="true"/> only when a post-delete existence check positively observes the file as absent.
+        /// An I/O or access failure while inspecting existence returns <see langword="false"/> (not treated as absent).
+        /// </returns>
+        private bool TryDeleteCurrentPointer(string pointerPath)
+        {
+            ICertificateStoreFileAccess io = FileAccessForTests ?? RealCertificateStoreFileAccess.Instance;
+            io.TryDelete(pointerPath);
+            try
+            {
+                return !io.FileExists(pointerPath);
+            }
+            catch (IOException)
+            {
+                // Inspection failed — must not treat as proof the pointer is gone.
+                return false;
+            }
+            catch (UnauthorizedAccessException)
             {
                 return false;
             }
         }
 
-        /// <summary>Deletes every generation directory except <paramref name="keep"/>. <see langword="null"/> deletes all of them. IO failures are ignored.</summary>
-        /// <param name="keep">Generation id to retain, or <see langword="null"/>.</param>
-        private void CleanupNonCurrentGenerations(string? keep)
+        /// <summary>Deletes every generation directory except <paramref name="keep"/>. IO failures are ignored.</summary>
+        /// <param name="keep">Generation id to retain. Must not be null — callers never pass null after #183.</param>
+        private void CleanupNonCurrentGenerations(string keep)
         {
+            ArgumentException.ThrowIfNullOrEmpty(keep);
             var root = AcmePaths.GenerationsDir(_stateDir, _fqdn);
             if (!Directory.Exists(root))
             {
@@ -295,7 +501,7 @@ namespace VectorNNTPD.Common.Acme
             foreach (var entry in Directory.EnumerateDirectories(root))
             {
                 var name = Path.GetFileName(entry);
-                if (keep is not null && string.Equals(name, keep, StringComparison.Ordinal))
+                if (string.Equals(name, keep, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -324,5 +530,102 @@ namespace VectorNNTPD.Common.Acme
                 // Best-effort.
             }
         }
+
+        /// <summary>Outcome of reading the <c>current</c> pointer file.</summary>
+        private enum CurrentPointerKind
+        {
+            /// <summary>Pointer file does not exist.</summary>
+            Missing,
+
+            /// <summary>Pointer contains a valid 32-hex generation id.</summary>
+            Valid,
+
+            /// <summary>Pointer was read but content is not a valid generation id.</summary>
+            Malformed,
+
+            /// <summary>Pointer exists (or existence is unknown) but could not be read safely.</summary>
+            Unreadable,
+        }
+
+        /// <summary>Structured result of <see cref="ReadCurrentPointerState"/>.</summary>
+        private readonly struct CurrentPointerState
+        {
+            private CurrentPointerState(CurrentPointerKind kind, string? generationId, string? failureDetail)
+            {
+                Kind = kind;
+                GenerationId = generationId;
+                FailureDetail = failureDetail;
+            }
+
+            public CurrentPointerKind Kind { get; }
+
+            public string? GenerationId { get; }
+
+            public string? FailureDetail { get; }
+
+            public static CurrentPointerState Missing() => new(CurrentPointerKind.Missing, null, null);
+
+            public static CurrentPointerState Valid(string generationId) =>
+                new(CurrentPointerKind.Valid, generationId, null);
+
+            public static CurrentPointerState Malformed() => new(CurrentPointerKind.Malformed, null, null);
+
+            public static CurrentPointerState Unreadable(string detail) =>
+                new(CurrentPointerKind.Unreadable, null, detail);
+        }
+
+        /// <summary>Result of inspecting one generation directory.</summary>
+        private enum GenerationInspection
+        {
+            /// <summary>Marker and non-empty PFX are present.</summary>
+            Complete,
+
+            /// <summary>Missing marker/PFX, empty PFX, or invalid id — positively incomplete.</summary>
+            Incomplete,
+
+            /// <summary>Existence or length could not be determined because of I/O or access failure.</summary>
+            Indeterminate,
+        }
+    }
+
+    /// <summary>
+    /// Narrow filesystem seam used by <see cref="CertificateStore"/> for pointer and generation inspection.
+    /// </summary>
+    internal interface ICertificateStoreFileAccess
+    {
+        /// <summary>Returns whether <paramref name="path"/> exists.</summary>
+        bool FileExists(string path);
+
+        /// <summary>Reads the entire text of <paramref name="path"/>.</summary>
+        string ReadAllText(string path);
+
+        /// <summary>Returns the length in bytes of <paramref name="path"/>.</summary>
+        long GetFileLength(string path);
+
+        /// <summary>
+        /// Best-effort delete of <paramref name="path"/>.
+        /// Implementations may ignore <see cref="IOException"/> and <see cref="UnauthorizedAccessException"/>.
+        /// </summary>
+        /// <param name="path">File to delete when present.</param>
+        void TryDelete(string path);
+    }
+
+    /// <summary>Default <see cref="ICertificateStoreFileAccess"/> backed by <see cref="File"/> / <see cref="FileInfo"/>.</summary>
+    internal sealed class RealCertificateStoreFileAccess : ICertificateStoreFileAccess
+    {
+        /// <summary>Shared instance.</summary>
+        internal static RealCertificateStoreFileAccess Instance { get; } = new();
+
+        /// <inheritdoc />
+        public bool FileExists(string path) => File.Exists(path);
+
+        /// <inheritdoc />
+        public string ReadAllText(string path) => File.ReadAllText(path);
+
+        /// <inheritdoc />
+        public long GetFileLength(string path) => new FileInfo(path).Length;
+
+        /// <inheritdoc />
+        public void TryDelete(string path) => AtomicFile.TryDelete(path);
     }
 }

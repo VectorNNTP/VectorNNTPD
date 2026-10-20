@@ -26,6 +26,41 @@ namespace VectorNNTPD.Common.Acme
         }
 
         /// <summary>
+        /// Acquires the FQDN-scoped issuance lock synchronously, waiting until it is available or cancelled.
+        /// </summary>
+        /// <param name="stateDir">Shared ACME state root.</param>
+        /// <param name="fqdn">Certificate FQDN that owns the lock.</param>
+        /// <param name="cancellationToken">Cancels the wait.</param>
+        /// <returns>A held lock that must be disposed to release.</returns>
+        /// <remarks>
+        /// Used by <see cref="CertificateStore"/> for constructor recovery and synchronous Load/Save/Recover.
+        /// Prefer <see cref="AcquireAsync"/> on async issuance paths.
+        /// </remarks>
+        internal static AcmeIssuanceLock Acquire(
+            string stateDir,
+            string fqdn,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
+            var identity = CertificateIdentities.NormalizeFqdn(fqdn);
+            AcmePaths.EnsureCertificateIdentityLayout(stateDir, identity);
+            var path = AcmePaths.IssuanceLockPath(stateDir, identity);
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (TryOpenExclusive(path, out AcmeIssuanceLock? acquired))
+                {
+                    return acquired;
+                }
+
+                // Honor cancellation while waiting for a held lock (same cadence as AcquireAsync).
+                cancellationToken.WaitHandle.WaitOne(RetryDelayMilliseconds);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        /// <summary>
         /// Acquires the FQDN-scoped issuance lock, waiting until it is available or cancelled.
         /// </summary>
         /// <param name="stateDir">Shared ACME state root.</param>
@@ -45,39 +80,57 @@ namespace VectorNNTPD.Common.Acme
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (TryOpenExclusive(path, out AcmeIssuanceLock? acquired))
+                {
+                    return acquired;
+                }
+
+                await Task.Delay(RetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Attempts one exclusive open of the lock file.
+        /// </summary>
+        /// <param name="path">Lock file path.</param>
+        /// <param name="acquired">Held lock when this method returns <see langword="true"/>.</param>
+        /// <returns><see langword="false"/> when another holder owns the file (retry).</returns>
+        private static bool TryOpenExclusive(string path, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out AcmeIssuanceLock? acquired)
+        {
+            acquired = null;
+            try
+            {
+                var stream = new FileStream(
+                    path,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 4096,
+                    FileOptions.None);
                 try
                 {
-                    var stream = new FileStream(
-                        path,
-                        FileMode.OpenOrCreate,
-                        FileAccess.ReadWrite,
-                        FileShare.None,
-                        bufferSize: 4096,
-                        FileOptions.None);
-                    try
-                    {
-                        stream.SetLength(0);
-                        var payload = System.Text.Encoding.UTF8.GetBytes(
-                            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                            + Environment.NewLine);
-                        stream.Write(payload);
-                        stream.Flush(flushToDisk: true);
-                        return new AcmeIssuanceLock(stream);
-                    }
-                    catch
-                    {
-                        stream.Dispose();
-                        throw;
-                    }
+                    stream.SetLength(0);
+                    var payload = System.Text.Encoding.UTF8.GetBytes(
+                        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        + Environment.NewLine);
+                    stream.Write(payload);
+                    stream.Flush(flushToDisk: true);
+                    acquired = new AcmeIssuanceLock(stream);
+                    return true;
                 }
-                catch (IOException)
+                catch
                 {
-                    await Task.Delay(RetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
+                    stream.Dispose();
+                    throw;
                 }
-                catch (UnauthorizedAccessException)
-                {
-                    await Task.Delay(RetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
-                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
             }
         }
 

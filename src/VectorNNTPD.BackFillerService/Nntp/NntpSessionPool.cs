@@ -923,7 +923,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             await PublishKeepAliveAsync(session).ConfigureAwait(false);
                             break;
                         case IdleAdmission.OverBound:
-                            await RetireSessionAsync(session, "max sessions shrink", replenish: false)
+                            await RetireSessionAsync(
+                                    session,
+                                    "max sessions shrink",
+                                    replenish: false,
+                                    liveAlreadyDetached: true)
                                 .ConfigureAwait(false);
                             break;
                         default:
@@ -1659,7 +1663,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     await PublishKeepAliveAsync(session).ConfigureAwait(false);
                     break;
                 case IdleAdmission.OverBound:
-                    await RetireSessionAsync(session, "max sessions shrink", replenish: false).ConfigureAwait(false);
+                    await RetireSessionAsync(
+                            session,
+                            "max sessions shrink",
+                            replenish: false,
+                            liveAlreadyDetached: true)
+                        .ConfigureAwait(false);
                     break;
                 default:
                     await RetireSessionAsync(session, "session is no longer reusable").ConfigureAwait(false);
@@ -1903,7 +1912,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
             /// <summary>The session is in <see cref="_idle"/> and may start DATE keepalive.</summary>
             Admitted,
 
-            /// <summary>The session is reusable and live, and the live count is above the bound max. The caller retires it.</summary>
+            /// <summary>
+            /// The live count was above the bound max. The session was detached from <see cref="_live"/> under
+            /// <see cref="_idleGate"/> so concurrent admits observe the reduced count; the caller finishes disposal.
+            /// </summary>
             OverBound,
 
             /// <summary>The session is already retired or not reusable. The caller retires it; a second retire is a no-op.</summary>
@@ -1981,6 +1993,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             var registration = CreateKeepAliveRegistration(session);
             var published = false;
+            KeepAliveRegistration? overBoundKeepalive = null;
             IdleAdmission admission;
             try
             {
@@ -1993,7 +2006,24 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     }
                     else if (enforceBound && _live.Count > _provider.MaxSessions)
                     {
-                        admission = IdleAdmission.OverBound;
+                        // Detach under this lock so a concurrent return cannot also observe OverBound
+                        // against the same elevated live count and retire a second session.
+                        // Only OverBound when TryRemove wins — callers pass liveAlreadyDetached and must not
+                        // dispose/decrement unless this session actually left _live here.
+                        if (_idleNodes.Remove(session, out var overBoundNode))
+                        {
+                            _idle.Remove(overBoundNode);
+                        }
+
+                        if (_live.TryRemove(session, out _))
+                        {
+                            _ = _keepAlives.TryRemove(session, out overBoundKeepalive);
+                            admission = IdleAdmission.OverBound;
+                        }
+                        else
+                        {
+                            admission = IdleAdmission.NotReusable;
+                        }
                     }
                     else
                     {
@@ -2040,6 +2070,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     {
                         CancelKeepAliveRegistration(registration);
                     }
+
+                    CancelKeepAliveRegistration(overBoundKeepalive);
                 }
             }
 
@@ -2378,6 +2410,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <param name="cancellationToken">
         /// Caller cancellation forwarded only to the session QUIT write. The default does not cancel that write early.
         /// </param>
+        /// <param name="liveAlreadyDetached">
+        /// <see langword="true"/> when <see cref="TryAdmitIdle"/> already removed this session from <see cref="_live"/>
+        /// for an <see cref="IdleAdmission.OverBound"/> decision. Skips the membership lock and finishes disposal only.
+        /// </param>
         /// <remarks>
         /// <c>TryRemove</c> wins the decrement and connection-number release. A second retire, dispose, or creation rollback
         /// observes the loss and does not change the counters again. Idle membership is removed under <see cref="_idleGate"/>
@@ -2396,51 +2432,60 @@ namespace VectorNNTPD.BackFillerService.Nntp
             bool onlyIfIdle = false,
             KeepAliveRegistration? actingRegistration = null,
             NntpShutdownDeadline deadline = default,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool liveAlreadyDetached = false)
         {
             var won = false;
             KeepAliveRegistration? keepalive = null;
-            lock (_idleGate)
+            if (liveAlreadyDetached)
             {
-                if (actingRegistration is not null)
+                // TryAdmitIdle(OverBound) already removed this session from live/idle under _idleGate.
+                won = true;
+            }
+            else
+            {
+                lock (_idleGate)
                 {
-                    if (_keepAlives.TryGetValue(session, out var active))
+                    if (actingRegistration is not null)
                     {
-                        if (!ReferenceEquals(active, actingRegistration))
+                        if (_keepAlives.TryGetValue(session, out var active))
+                        {
+                            if (!ReferenceEquals(active, actingRegistration))
+                            {
+                                return;
+                            }
+                        }
+                        else if (actingRegistration.WasPublished)
                         {
                             return;
                         }
                     }
-                    else if (actingRegistration.WasPublished)
-                    {
-                        return;
-                    }
-                }
 
-                if (onlyIfIdle && !_idleNodes.ContainsKey(session))
-                {
-                    return;
-                }
-
-                if (_issued.Contains(session))
-                {
-                    if (onlyIfIdle)
+                    if (onlyIfIdle && !_idleNodes.ContainsKey(session))
                     {
                         return;
                     }
 
-                    _ = _issued.Remove(session);
-                }
+                    if (_issued.Contains(session))
+                    {
+                        if (onlyIfIdle)
+                        {
+                            return;
+                        }
 
-                if (_idleNodes.Remove(session, out var node))
-                {
-                    _idle.Remove(node);
-                }
+                        _ = _issued.Remove(session);
+                    }
 
-                won = _live.TryRemove(session, out _);
-                if (won)
-                {
-                    _ = _keepAlives.TryRemove(session, out keepalive);
+                    if (_idleNodes.Remove(session, out var node))
+                    {
+                        _idle.Remove(node);
+                    }
+
+                    won = _live.TryRemove(session, out _);
+                    if (won)
+                    {
+                        _ = _keepAlives.TryRemove(session, out keepalive);
+                    }
                 }
             }
 

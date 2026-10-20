@@ -162,6 +162,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
         /// <summary>
         /// A shrink that overlaps two reserved acquires issues only the final bound and still wakes the loser after return.
+        /// The loser's OverBound dispose is held after live detachment so the winner's return cannot race another OverBound
+        /// decision against the elevated live count and retire the remaining session.
         /// </summary>
         [Fact]
         public async Task Shrink_during_reserved_acquire_issues_only_the_final_bound()
@@ -173,6 +175,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             var entered = 0;
             var bothEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var overBoundDisposeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseOverBoundDispose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             pool.BeforePermitIssuance = () =>
             {
                 if (Interlocked.Increment(ref entered) == 2)
@@ -181,6 +185,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 }
 
                 return release.Task;
+            };
+            pool.BeforeDetachedSessionDispose = () =>
+            {
+                overBoundDisposeEntered.TrySetResult();
+                return releaseOverBoundDispose.Task;
             };
             Task<NntpSessionLease>? first = null;
             Task<NntpSessionLease>? second = null;
@@ -194,26 +203,45 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await pool.ShrinkToBoundAsync(CancellationToken.None);
                 release.TrySetResult();
 
+                await overBoundDisposeEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
                 await WaitUntilAsync(() =>
-                    (first.IsCompletedSuccessfully && !second.IsCompleted && pool.ActiveLeaseCount == 1 && pool.AvailablePermitCount == 0)
-                    || (second.IsCompletedSuccessfully && !first.IsCompleted && pool.ActiveLeaseCount == 1 && pool.AvailablePermitCount == 0));
+                    (first.IsCompletedSuccessfully && !second.IsCompleted
+                        && pool.ActiveLeaseCount == 1
+                        && pool.LiveSessionCount == 1
+                        && pool.AvailablePermitCount == 0)
+                    || (second.IsCompletedSuccessfully && !first.IsCompleted
+                        && pool.ActiveLeaseCount == 1
+                        && pool.LiveSessionCount == 1
+                        && pool.AvailablePermitCount == 0));
                 var winner = first.IsCompletedSuccessfully ? first : second;
                 var loser = ReferenceEquals(winner, first) ? second : first;
                 var lease = await winner;
                 Assert.False(loser.IsCompleted);
                 Assert.Equal(1, pool.ActiveLeaseCount);
+                Assert.Equal(1, pool.LiveSessionCount);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
 
                 await lease.DisposeAsync();
+                Assert.Equal(1, pool.IdleSessionCount);
+                Assert.Equal(1, pool.LiveSessionCount);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+
+                releaseOverBoundDispose.TrySetResult();
                 var followed = await loser.WaitAsync(TimeSpan.FromSeconds(2));
                 Assert.Equal(1, pool.ActiveLeaseCount);
+                Assert.Equal(1, pool.LiveSessionCount);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
                 await followed.DisposeAsync();
                 Assert.Equal(0, pool.ActiveLeaseCount);
+                Assert.Equal(1, pool.LiveSessionCount);
                 Assert.Equal(1, pool.AvailablePermitCount);
             }
             finally
             {
                 release.TrySetResult();
+                releaseOverBoundDispose.TrySetResult();
                 pool.BeforePermitIssuance = null;
+                pool.BeforeDetachedSessionDispose = null;
                 acquireCancellation.Cancel();
                 await SettleAcquireAsync(first);
                 await SettleAcquireAsync(second);
