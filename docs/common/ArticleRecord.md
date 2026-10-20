@@ -607,6 +607,8 @@ It is **not** used by:
 
 NNTPD ingestion encodes the Common OverviewDB protobuf subset (`OverviewArticleV1`) from CanonicalV1 field ranges and publishes those bytes on `overviewdb.queue`. That handoff does not serialize ArtData. RabbitMQ transport stays in NNTPD.
 
+Overview header fields (`message_id`, `newsgroups`, `subject`, `from`, `date`, `references`) are protobuf **`bytes`**, not UTF-8 `string`. The codec copies the same ArtData octets the parser accepted (including `0x80`–`0xFF`). Decode must not run those fields through `Encoding.UTF8.GetString`, which would replace malformed UTF-8 with U+FFFD and break byte-for-byte round-trips. Length-delimited wire encoding is unchanged from when the schema labeled those fields `string`, so schema version stays `1` and existing payloads remain readable; consumers that UTF-8-decoded the old `string` labeling already corrupted non-UTF-8 values.
+
 ### Future scope (not implemented)
 
 - Request Message-ID match as an orchestration step **after** or **beside** factory construction

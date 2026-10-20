@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace VectorNNTPD.Common.Articles.OverviewDb
 {
     /// <summary>
@@ -7,11 +5,12 @@ namespace VectorNNTPD.Common.Articles.OverviewDb
     /// </summary>
     /// <remarks>
     /// Encodes from <see cref="ArticleRecord"/> field ranges without copying
-    /// <see cref="ArticleRecord.ArtData"/> or reparsing the article. Text fields
-    /// are the canonical header value bytes already stored in ArtData, written as
-    /// protobuf UTF-8 strings. Newsgroups are tokenized from the Newsgroups value
-    /// range only (comma-separated, SP/HTAB/CR/LF skipped). RabbitMQ transport is
-    /// not this type's responsibility.
+    /// <see cref="ArticleRecord.ArtData"/> or reparsing the article. Header fields
+    /// are the canonical value octets already stored in ArtData, written as protobuf
+    /// length-delimited <c>bytes</c> (not UTF-8-decoded). Decode copies those octets
+    /// unchanged so values with <c>0x80</c>–<c>0xFF</c> round-trip. Newsgroups are
+    /// tokenized from the Newsgroups value range only (comma-separated, SP/HTAB/CR/LF
+    /// skipped). RabbitMQ transport is not this type's responsibility.
     /// </remarks>
     internal static class OverviewArticleV1Codec
     {
@@ -27,22 +26,22 @@ namespace VectorNNTPD.Common.Articles.OverviewDb
         /// <summary>Field number 2. Length-delimited 32-byte <see cref="ArticleId"/> digest.</summary>
         private const int FieldArticleId = 2;
 
-        /// <summary>Field number 3. Length-delimited Message-ID header value bytes.</summary>
+        /// <summary>Field number 3. Length-delimited Message-ID header value octets.</summary>
         private const int FieldMessageId = 3;
 
-        /// <summary>Field number 4. Repeated length-delimited newsgroup token.</summary>
+        /// <summary>Field number 4. Repeated length-delimited newsgroup token octets.</summary>
         private const int FieldNewsgroups = 4;
 
-        /// <summary>Field number 5. Length-delimited Subject header value bytes.</summary>
+        /// <summary>Field number 5. Length-delimited Subject header value octets.</summary>
         private const int FieldSubject = 5;
 
-        /// <summary>Field number 6. Length-delimited From header value bytes.</summary>
+        /// <summary>Field number 6. Length-delimited From header value octets.</summary>
         private const int FieldFrom = 6;
 
-        /// <summary>Field number 7. Length-delimited winning Date header value bytes.</summary>
+        /// <summary>Field number 7. Length-delimited winning Date header value octets.</summary>
         private const int FieldDate = 7;
 
-        /// <summary>Field number 8. Length-delimited References header value bytes.</summary>
+        /// <summary>Field number 8. Length-delimited References header value octets.</summary>
         private const int FieldReferences = 8;
 
         /// <summary>Field number 9. Varint article size. Negative <see cref="ArticleRecord.ArtSize"/> is written as 0.</summary>
@@ -181,25 +180,25 @@ namespace VectorNNTPD.Common.Articles.OverviewDb
                         switch (field)
                         {
                             case FieldArticleId:
-                                message.ArticleId = slice.ToArray();
+                                message.ArticleId = CopyFieldBytes(slice);
                                 break;
                             case FieldMessageId:
-                                message.MessageId = Encoding.UTF8.GetString(slice);
+                                message.MessageId = CopyFieldBytes(slice);
                                 break;
                             case FieldNewsgroups:
-                                message.Newsgroups.Add(Encoding.UTF8.GetString(slice));
+                                message.Newsgroups.Add(CopyFieldBytes(slice));
                                 break;
                             case FieldSubject:
-                                message.Subject = Encoding.UTF8.GetString(slice);
+                                message.Subject = CopyFieldBytes(slice);
                                 break;
                             case FieldFrom:
-                                message.From = Encoding.UTF8.GetString(slice);
+                                message.From = CopyFieldBytes(slice);
                                 break;
                             case FieldDate:
-                                message.Date = Encoding.UTF8.GetString(slice);
+                                message.Date = CopyFieldBytes(slice);
                                 break;
                             case FieldReferences:
-                                message.References = Encoding.UTF8.GetString(slice);
+                                message.References = CopyFieldBytes(slice);
                                 break;
                         }
 
@@ -220,6 +219,14 @@ namespace VectorNNTPD.Common.Articles.OverviewDb
         /// <returns><see langword="true"/> when the full article is present as a contiguous span.</returns>
         internal static bool ContainsCompleteArticle(ReadOnlySpan<byte> payload, ReadOnlySpan<byte> artData)
             => artData.Length > 0 && payload.IndexOf(artData) >= 0;
+
+        /// <summary>
+        /// Copies length-delimited overview field octets. Empty slices reuse <see cref="Array.Empty{T}"/>.
+        /// </summary>
+        /// <param name="slice">Field payload from the protobuf stream.</param>
+        /// <returns>Owned copy of <paramref name="slice"/>, or an empty array when the field length is zero.</returns>
+        private static byte[] CopyFieldBytes(ReadOnlySpan<byte> slice)
+            => slice.IsEmpty ? [] : slice.ToArray();
 
         /// <summary>
         /// Writes each non-empty comma-separated token as a repeated <see cref="FieldNewsgroups"/> length-delimited field.

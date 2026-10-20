@@ -34,11 +34,11 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
             record.ArtId.CopyTo(artId);
             Assert.Equal(OverviewArticleV1.CurrentSchemaVersion, decoded.SchemaVersion);
             Assert.Equal(artId.ToArray(), decoded.ArticleId);
-            Assert.Equal("<id@example.test>", decoded.MessageId);
-            Assert.NotEqual(Encoding.UTF8.GetBytes(decoded.MessageId), decoded.ArticleId);
+            AssertAsciiEqual("<id@example.test>", decoded.MessageId);
+            Assert.NotEqual(decoded.MessageId, decoded.ArticleId);
             Assert.Equal(32, decoded.ArticleId.Length);
-            Assert.StartsWith("<", decoded.MessageId, StringComparison.Ordinal);
-            Assert.EndsWith(">", decoded.MessageId, StringComparison.Ordinal);
+            Assert.Equal((byte)'<', decoded.MessageId[0]);
+            Assert.Equal((byte)'>', decoded.MessageId[^1]);
         }
 
         /// <summary>
@@ -59,13 +59,13 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
             var payload = OverviewArticleV1Codec.Encode(record);
             var decoded = OverviewArticleV1Codec.Decode(payload);
 
-            Assert.Equal("overview-subject", decoded.Subject);
-            Assert.Equal("poster@example.test", decoded.From);
-            Assert.Equal(Encoding.ASCII.GetString(record.Date), decoded.Date);
-            Assert.Equal("<prev@example.test>", decoded.References);
+            AssertAsciiEqual("overview-subject", decoded.Subject);
+            AssertAsciiEqual("poster@example.test", decoded.From);
+            Assert.True(record.Date.SequenceEqual(decoded.Date));
+            AssertAsciiEqual("<prev@example.test>", decoded.References);
             Assert.Equal((uint)record.ArtSize, decoded.Bytes);
             Assert.Equal((uint)record.ArtLines, decoded.Lines);
-            Assert.Equal(["alt.test", "rec.test", "comp.test"], decoded.Newsgroups);
+            AssertAsciiGroups(["alt.test", "rec.test", "comp.test"], decoded.Newsgroups);
             Assert.Equal(record.ArtSize, (int)decoded.Bytes);
             Assert.Equal(record.ArtLines, (int)decoded.Lines);
         }
@@ -102,7 +102,7 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
                     newsgroups: "group.z,group.a,group.m"));
 
             var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
-            Assert.Equal(["group.z", "group.a", "group.m"], decoded.Newsgroups);
+            AssertAsciiGroups(["group.z", "group.a", "group.m"], decoded.Newsgroups);
         }
 
         /// <summary>
@@ -127,11 +127,11 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
 
             Assert.Equal(new DateTime(2024, 8, 23, 5, 30, 10, DateTimeKind.Utc), record.CanonicalUtc);
             Assert.Equal("Fri, 23 Aug 2024 05:30:10 +0000", Encoding.ASCII.GetString(record.Date));
-            Assert.Equal(Encoding.ASCII.GetString(record.Date), decoded.Date);
-            Assert.Equal("Fri, 23 Aug 2024 05:30:10 +0000", decoded.Date);
-            Assert.NotEqual(record.CanonicalUtc.ToString("O"), decoded.Date);
-            Assert.DoesNotContain("07:30:10", decoded.Date, StringComparison.Ordinal);
-            Assert.DoesNotContain("+0200", decoded.Date, StringComparison.Ordinal);
+            Assert.True(record.Date.SequenceEqual(decoded.Date));
+            AssertAsciiEqual("Fri, 23 Aug 2024 05:30:10 +0000", decoded.Date);
+            Assert.NotEqual(record.CanonicalUtc.ToString("O"), Encoding.ASCII.GetString(decoded.Date));
+            Assert.True(decoded.Date.AsSpan().IndexOf("07:30:10"u8) < 0);
+            Assert.True(decoded.Date.AsSpan().IndexOf("+0200"u8) < 0);
         }
 
         /// <summary>
@@ -146,12 +146,12 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
                     newsgroups: "group.one, group.two, group.three"));
 
             var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
-            Assert.Equal(["group.one", "group.two", "group.three"], decoded.Newsgroups);
+            AssertAsciiGroups(["group.one", "group.two", "group.three"], decoded.Newsgroups);
             Assert.Equal("group.one, group.two, group.three", Encoding.ASCII.GetString(record.Newsgroups));
         }
 
         /// <summary>
-        /// A missing References field encodes as an empty string. Subject and From still come from the article headers.
+        /// A missing References field encodes as empty octets. Subject and From still come from the article headers.
         /// </summary>
         [Fact]
         public void Encode_MissingReferences_IsEmptyRatherThanInvented()
@@ -164,9 +164,9 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
             Assert.False(record.Fields.References.IsPresent);
             Assert.True(record.References.IsEmpty);
             var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
-            Assert.Equal(string.Empty, decoded.References);
-            Assert.Equal("ingress-test", decoded.Subject);
-            Assert.Equal("user@example.test", decoded.From);
+            Assert.Empty(decoded.References);
+            AssertAsciiEqual("ingress-test", decoded.Subject);
+            AssertAsciiEqual("user@example.test", decoded.From);
         }
 
         /// <summary>
@@ -190,12 +190,12 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
 
             Assert.Equal(first, second);
             Assert.Equal(OverviewArticleV1.CurrentSchemaVersion, decoded.SchemaVersion);
-            Assert.Equal("<roundtrip@example.test>", decoded.MessageId);
-            Assert.Equal(["alt.test", "rec.test"], decoded.Newsgroups);
-            Assert.Equal("overview-subject", decoded.Subject);
-            Assert.Equal("poster@example.test", decoded.From);
-            Assert.Equal(Encoding.ASCII.GetString(record.Date), decoded.Date);
-            Assert.Equal("<prev@example.test>", decoded.References);
+            AssertAsciiEqual("<roundtrip@example.test>", decoded.MessageId);
+            AssertAsciiGroups(["alt.test", "rec.test"], decoded.Newsgroups);
+            AssertAsciiEqual("overview-subject", decoded.Subject);
+            AssertAsciiEqual("poster@example.test", decoded.From);
+            Assert.True(record.Date.SequenceEqual(decoded.Date));
+            AssertAsciiEqual("<prev@example.test>", decoded.References);
             Assert.Equal((uint)record.ArtSize, decoded.Bytes);
             Assert.Equal((uint)record.ArtLines, decoded.Lines);
 
@@ -227,7 +227,87 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
 
             Assert.True(created.IsAccepted);
             var overview = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(created.Record));
-            Assert.Equal(["group.one", "group.two", "group.three"], overview.Newsgroups);
+            AssertAsciiGroups(["group.one", "group.two", "group.three"], overview.Newsgroups);
+        }
+
+        /// <summary>
+        /// ASCII-only Subject octets round-trip unchanged through encode and decode.
+        /// </summary>
+        [Fact]
+        public void EncodeDecode_WhenSubjectIsAscii_PreservesExactBytes()
+        {
+            var record = CreateRecord(
+                Destuffed("<ascii-subject@example.test>", subject: "plain-ascii-subject"));
+            var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
+
+            Assert.True(record.Subject.SequenceEqual(decoded.Subject));
+            AssertAsciiEqual("plain-ascii-subject", decoded.Subject);
+        }
+
+        /// <summary>
+        /// A valid UTF-8 Subject (multi-byte <c>é</c>) keeps the same octets and the same Unicode meaning under UTF-8 decode.
+        /// </summary>
+        [Fact]
+        public void EncodeDecode_WhenSubjectIsValidUtf8_PreservesOctetsAndUtf8Meaning()
+        {
+            var subject = new byte[] { (byte)'c', (byte)'a', (byte)'f', 0xC3, 0xA9 };
+            var record = CreateRecordFromBytes(BuildArticleWithSubjectBytes("<utf8-subject@example.test>", subject));
+            var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
+
+            Assert.True(record.Subject.SequenceEqual(decoded.Subject));
+            Assert.Equal(subject, decoded.Subject);
+            Assert.Equal("café", Encoding.UTF8.GetString(decoded.Subject));
+        }
+
+        /// <summary>
+        /// A lone Latin-1 <c>0xE9</c> Subject byte (not valid UTF-8 alone) round-trips as that octet, not as UTF-8 U+FFFD bytes.
+        /// </summary>
+        [Fact]
+        public void EncodeDecode_WhenSubjectHasLatin1Byte_PreservesExactOctet()
+        {
+            var subject = new byte[] { (byte)'c', (byte)'a', (byte)'f', 0xE9 };
+            var record = CreateRecordFromBytes(BuildArticleWithSubjectBytes("<latin1-subject@example.test>", subject));
+            var payload = OverviewArticleV1Codec.Encode(record);
+            var decoded = OverviewArticleV1Codec.Decode(payload);
+
+            Assert.True(record.Subject.SequenceEqual(decoded.Subject));
+            Assert.Equal(subject, decoded.Subject);
+            Assert.Contains((byte)0xE9, decoded.Subject);
+            // U+FFFD as UTF-8 is EF BF BD; the codec must not have substituted that into the field.
+            Assert.True(decoded.Subject.AsSpan().IndexOf("\uFFFD"u8) < 0);
+            Assert.Contains((byte)0xE9, payload);
+        }
+
+        /// <summary>
+        /// Multiple high bytes and a malformed UTF-8 sequence round-trip byte-for-byte through the codec.
+        /// </summary>
+        [Fact]
+        public void EncodeDecode_WhenSubjectHasHighAndMalformedUtf8Bytes_PreservesExactOctets()
+        {
+            // 0x80, 0xFF, and truncated UTF-8 lead 0xC3 without a continuation.
+            var subject = new byte[] { (byte)'x', 0x80, 0xFF, 0xC3, (byte)'y' };
+            var record = CreateRecordFromBytes(BuildArticleWithSubjectBytes("<binary-subject@example.test>", subject));
+            var decoded = OverviewArticleV1Codec.Decode(OverviewArticleV1Codec.Encode(record));
+
+            Assert.True(record.Subject.SequenceEqual(decoded.Subject));
+            Assert.Equal(subject, decoded.Subject);
+        }
+
+        /// <summary>
+        /// A payload that still carries non-UTF-8 Subject octets (as historically written into length-delimited fields)
+        /// decodes those octets without UTF-8 replacement when read with the bytes contract.
+        /// </summary>
+        [Fact]
+        public void Decode_WhenLegacyLengthDelimitedSubjectHasHighByte_PreservesOctet()
+        {
+            var subject = new byte[] { (byte)'L', 0xE9 };
+            var record = CreateRecordFromBytes(BuildArticleWithSubjectBytes("<legacy-high@example.test>", subject));
+            var payload = OverviewArticleV1Codec.Encode(record);
+
+            // Re-decode the same wire bytes: string-vs-bytes labeling does not change length-delimited framing.
+            var decoded = OverviewArticleV1Codec.Decode(payload);
+            Assert.Equal(subject, decoded.Subject);
+            Assert.Equal(OverviewArticleV1.CurrentSchemaVersion, decoded.SchemaVersion);
         }
 
         /// <summary>Multi-line body containing a token that must not appear in the overview payload.</summary>
@@ -269,17 +349,68 @@ namespace VectorNNTPD.Common.Tests.Articles.OverviewDb
         }
 
         /// <summary>
+        /// Builds destuffed article bytes with an arbitrary Subject value (may include <c>0x80</c>–<c>0xFF</c>).
+        /// </summary>
+        /// <param name="messageId">Message-ID header value.</param>
+        /// <param name="subject">Subject header value octets.</param>
+        /// <returns>Destuffed article bytes.</returns>
+        private static byte[] BuildArticleWithSubjectBytes(string messageId, ReadOnlySpan<byte> subject)
+        {
+            var prefix = Encoding.ASCII.GetBytes(
+                "Path: peer.example\r\n" +
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n" +
+                "Message-ID: " + messageId + "\r\n" +
+                "Newsgroups: alt.test\r\n" +
+                "From: user@example.test\r\n" +
+                "Subject: ");
+            var suffix = "\r\n\r\nbody\r\n"u8;
+            var article = new byte[prefix.Length + subject.Length + suffix.Length];
+            prefix.CopyTo(article);
+            subject.CopyTo(article.AsSpan(prefix.Length));
+            suffix.CopyTo(article.AsSpan(prefix.Length + subject.Length));
+            return article;
+        }
+
+        /// <summary>
         /// Parses <paramref name="destuffed"/> with <see cref="LocalFqdn"/> and returns the accepted record.
         /// </summary>
         /// <param name="destuffed">Destuffed article text.</param>
         /// <returns>The accepted canonical record.</returns>
         private static ArticleRecord CreateRecord(string destuffed)
         {
+            return CreateRecordFromBytes(Encoding.ASCII.GetBytes(destuffed));
+        }
+
+        /// <summary>
+        /// Parses <paramref name="destuffed"/> with <see cref="LocalFqdn"/> and returns the accepted record.
+        /// </summary>
+        /// <param name="destuffed">Destuffed article bytes.</param>
+        /// <returns>The accepted canonical record.</returns>
+        private static ArticleRecord CreateRecordFromBytes(byte[] destuffed)
+        {
             var created = ArticleRecordFactory.TryCreate(
                 new NntpArticleParser(LocalFqdn),
-                Encoding.ASCII.GetBytes(destuffed));
+                destuffed);
             Assert.True(created.IsAccepted);
             return created.Record;
+        }
+
+        /// <summary>Asserts <paramref name="actual"/> equals the ASCII encoding of <paramref name="expected"/>.</summary>
+        /// <param name="expected">Expected ASCII text.</param>
+        /// <param name="actual">Decoded overview field octets.</param>
+        private static void AssertAsciiEqual(string expected, byte[] actual)
+            => Assert.Equal(Encoding.ASCII.GetBytes(expected), actual);
+
+        /// <summary>Asserts decoded newsgroup tokens match ASCII group names in order.</summary>
+        /// <param name="expected">Expected group names.</param>
+        /// <param name="actual">Decoded newsgroup token octets.</param>
+        private static void AssertAsciiGroups(string[] expected, IReadOnlyList<byte[]> actual)
+        {
+            Assert.Equal(expected.Length, actual.Count);
+            for (var i = 0; i < expected.Length; i++)
+            {
+                AssertAsciiEqual(expected[i], actual[i]);
+            }
         }
     }
 }

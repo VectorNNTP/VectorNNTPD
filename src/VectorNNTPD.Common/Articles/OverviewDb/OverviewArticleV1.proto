@@ -8,15 +8,21 @@ option csharp_namespace = "VectorNNTPD.Common.Articles.OverviewDb";
 // SchemaVersion must be 1. ArticleId is VectorNNTP's 32-byte BLAKE3 ArtId, not
 // the clear-text Message-ID and not BackFiller's MD5 identity.
 // RabbitMQ transport (queue, confirms, expiration, AppId) is application-owned.
+//
+// Header fields are bytes, not UTF-8 strings. Encode copies CanonicalV1 header
+// value octets unchanged (Subject/From/Date/References/Message-ID and each
+// Newsgroups token). The article parser permits 0x80–0xFF in header values;
+// those octets must round-trip. Wire type is still length-delimited, so payloads
+// written when these fields were documented as string remain readable.
 message OverviewArticleV1 {
   uint32 schema_version = 1;
   bytes article_id = 2;
-  string message_id = 3;
-  repeated string newsgroups = 4;
-  string subject = 5;
-  string from = 6;
-  string date = 7;
-  string references = 8;
+  bytes message_id = 3;
+  repeated bytes newsgroups = 4;
+  bytes subject = 5;
+  bytes from = 6;
+  bytes date = 7;
+  bytes references = 8;
   uint32 bytes = 9;
   uint32 lines = 10;
 }
