@@ -221,8 +221,8 @@ namespace VectorNNTPD.Common.Acme
                         continue;
                     }
 
-                    var normalized = values.Select(NormalizeTxt).ToHashSet(StringComparer.Ordinal);
-                    if (normalized.Contains(expected))
+                    // Exact digest compare (RFC 8555 DNS-01). Do not trim whitespace or strip quotes.
+                    if (values.Contains(expected, StringComparer.Ordinal))
                     {
                         resolved.Add(name);
                     }
@@ -470,20 +470,6 @@ namespace VectorNNTPD.Common.Acme
             {
                 // Logged by callers via category.
             }
-        }
-
-        /// <summary>Trims TXT RDATA and removes one pair of surrounding double quotes.</summary>
-        /// <param name="value">Resolver text.</param>
-        /// <returns>The comparison form used against <see cref="Dns01ChallengeSpec.Validation"/>.</returns>
-        private static string NormalizeTxt(string value)
-        {
-            var cleaned = value.Trim();
-            if (cleaned is ['"', _, ..] && cleaned[^1] == '"')
-            {
-                cleaned = cleaned[1..^1];
-            }
-
-            return cleaned;
         }
 
         /// <summary>One TXT record created by this solver and still tracked for cleanup.</summary>

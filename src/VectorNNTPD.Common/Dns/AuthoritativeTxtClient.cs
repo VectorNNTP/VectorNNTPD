@@ -45,17 +45,26 @@ namespace VectorNNTPD.Common.Dns
             ArgumentNullException.ThrowIfNull(nameserver);
             ArgumentException.ThrowIfNullOrWhiteSpace(recordName);
 
-            byte[] queryPacket = DnsQueryBuilder.Build(recordName, DnsRecordType.Txt, out ushort queryId);
-            byte[]? udpResponse = await TryUdpQueryAsync(nameserver, recordName, queryPacket, logger, cancellationToken)
+            string ownerName = recordName.TrimEnd('.');
+            byte[] queryPacket = DnsQueryBuilder.Build(ownerName, DnsRecordType.Txt, out ushort queryId);
+            byte[]? udpResponse = await TryUdpQueryAsync(nameserver, ownerName, queryPacket, logger, cancellationToken)
                 .ConfigureAwait(false);
-            List<string> results = udpResponse is null ? [] : DnsTxtParser.ParseTxtStrings(udpResponse, queryId);
+            // Require AA=1: UDP/TCP queries are sent RD=0 directly to an authoritative nameserver address.
+            // A recursive or otherwise non-authoritative reply must not count as DNS-01 propagation proof.
+            List<string> results = udpResponse is null
+                ? []
+                : DnsTxtParser.ParseTxtStrings(udpResponse, queryId, ownerName, requireAuthoritativeAnswer: true);
             if (udpResponse is null || ShouldRetryOverTcp(udpResponse, results))
             {
-                byte[]? tcpResponse = await TryTcpQueryAsync(nameserver, recordName, queryPacket, logger, cancellationToken)
+                byte[]? tcpResponse = await TryTcpQueryAsync(nameserver, ownerName, queryPacket, logger, cancellationToken)
                     .ConfigureAwait(false);
                 if (tcpResponse is not null)
                 {
-                    List<string> tcpParsed = DnsTxtParser.ParseTxtStrings(tcpResponse, queryId);
+                    List<string> tcpParsed = DnsTxtParser.ParseTxtStrings(
+                        tcpResponse,
+                        queryId,
+                        ownerName,
+                        requireAuthoritativeAnswer: true);
                     if (tcpParsed.Count > 0)
                     {
                         return tcpParsed;
