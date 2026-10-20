@@ -11,11 +11,11 @@ namespace VectorNNTPD.Common.Logging
     /// <remarks>
     /// Serilog disposes this object with the logger. <see cref="Dispose"/> stops the timer, waits until an
     /// in-flight callback has left the flush lock, flushes any remaining buffered write, then disposes the
-    /// inner sink and the timer. A flush or inner-sink failure is reported through <see cref="SelfLog"/> so
-    /// the diagnostic cannot re-enter this file sink. A timer callback contains every flush failure and leaves the
-    /// checkpoint pending so a later tick or <see cref="Dispose"/> retries it. When the
-    /// final flush and a later dispose both fail, the flush exception is thrown and the dispose failure stays
-    /// on <see cref="SelfLog"/>. A second <see cref="Dispose"/> does nothing.
+    /// inner sink and the timer. A flush, inner-sink, or timer failure is reported through <see cref="SelfLog"/>
+    /// so the diagnostic cannot re-enter this file sink, and is not rethrown: logger disposal must not turn a
+    /// clean process exit into a failure. A timer callback contains every flush failure and leaves the
+    /// checkpoint pending so a later tick or <see cref="Dispose"/> retries it. A second <see cref="Dispose"/>
+    /// does nothing.
     /// </remarks>
     public sealed class PeriodicFileFlushSink : ILogEventSink, IDisposable
     {
@@ -72,11 +72,10 @@ namespace VectorNNTPD.Common.Logging
         /// <summary>
         /// Stops the timer, flushes the last buffered write, and disposes the inner sink and timer.
         /// </summary>
-        /// <exception cref="Exception">
-        /// The final flush exception when one occurred. An inner-sink or timer dispose exception is thrown
-        /// only when the final flush succeeded. A dispose failure that follows a flush failure is written to
-        /// <see cref="SelfLog"/> and is not thrown.
-        /// </exception>
+        /// <remarks>
+        /// Flush and dispose failures are written to <see cref="SelfLog"/> and do not escape.
+        /// Cleanup of the inner sink and timer still runs after a flush failure.
+        /// </remarks>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -93,7 +92,6 @@ namespace VectorNNTPD.Common.Logging
                 ReportDiagnostic("Periodic file flush timer was already stopped.", ex);
             }
 
-            Exception? flushError = null;
             lock (_gate)
             {
                 try
@@ -103,12 +101,10 @@ namespace VectorNNTPD.Common.Logging
                 // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
                 catch (Exception ex)
                 {
-                    flushError = ex;
                     ReportDiagnostic("Periodic file flush failed during disposal.", ex);
                 }
             }
 
-            Exception? disposeError = null;
             try
             {
                 (_sink as IDisposable)?.Dispose();
@@ -116,7 +112,6 @@ namespace VectorNNTPD.Common.Logging
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
             catch (Exception ex)
             {
-                disposeError = ex;
                 ReportDiagnostic("Periodic file sink disposal failed.", ex);
             }
 
@@ -127,18 +122,7 @@ namespace VectorNNTPD.Common.Logging
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
             catch (Exception ex)
             {
-                disposeError ??= ex;
                 ReportDiagnostic("Periodic file flush timer disposal failed.", ex);
-            }
-
-            if (flushError is not null)
-            {
-                throw flushError;
-            }
-
-            if (disposeError is not null)
-            {
-                throw disposeError;
             }
         }
 
