@@ -6,23 +6,23 @@ namespace VectorNNTPD.Common.Acme
     /// <remarks>
     /// The lock file is <c>live/{fqdn}/.issuance.lock</c>. Distinct FQDNs use distinct files
     /// and can issue concurrently. The same FQDN is mutually exclusive across processes.
+    /// Acquisition delegates to <see cref="AcmeExclusiveFileLock"/> so contention classification
+    /// matches journal locks: only recognized sharing/lock violations retry; unrelated
+    /// filesystem failures propagate immediately.
     /// </remarks>
     internal sealed class AcmeIssuanceLock : IAsyncDisposable, IDisposable
     {
-        /// <summary>Milliseconds between sharing-violation retries. The wait observes <c>cancellationToken</c>.</summary>
-        private const int RetryDelayMilliseconds = 50;
-
-        /// <summary>Open lock file at <c>live/{fqdn}/.issuance.lock</c>. Disposing it releases the lock.</summary>
-        private readonly FileStream _stream;
+        /// <summary>Underlying exclusive lock file for this FQDN.</summary>
+        private readonly AcmeExclusiveFileLock _fileLock;
 
         /// <summary>Non-zero after <see cref="Dispose"/> has run.</summary>
         private int _disposed;
 
-        /// <summary>Takes ownership of an already exclusive <paramref name="stream"/>.</summary>
-        /// <param name="stream">Lock stream. Disposed by <see cref="Dispose"/>.</param>
-        private AcmeIssuanceLock(FileStream stream)
+        /// <summary>Takes ownership of an already held <paramref name="fileLock"/>.</summary>
+        /// <param name="fileLock">FQDN exclusive lock. Disposed by <see cref="Dispose"/>.</param>
+        private AcmeIssuanceLock(AcmeExclusiveFileLock fileLock)
         {
-            _stream = stream;
+            _fileLock = fileLock;
         }
 
         /// <summary>
@@ -41,23 +41,8 @@ namespace VectorNNTPD.Common.Acme
             string fqdn,
             CancellationToken cancellationToken = default)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
-            var identity = CertificateIdentities.NormalizeFqdn(fqdn);
-            AcmePaths.EnsureCertificateIdentityLayout(stateDir, identity);
-            var path = AcmePaths.IssuanceLockPath(stateDir, identity);
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (TryOpenExclusive(path, out AcmeIssuanceLock? acquired))
-                {
-                    return acquired;
-                }
-
-                // Honor cancellation while waiting for a held lock (same cadence as AcquireAsync).
-                cancellationToken.WaitHandle.WaitOne(RetryDelayMilliseconds);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
+            var path = ResolveLockPath(stateDir, fqdn);
+            return new AcmeIssuanceLock(AcmeExclusiveFileLock.Acquire(path, cancellationToken));
         }
 
         /// <summary>
@@ -72,66 +57,53 @@ namespace VectorNNTPD.Common.Acme
             string fqdn,
             CancellationToken cancellationToken)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
-            var identity = CertificateIdentities.NormalizeFqdn(fqdn);
-            AcmePaths.EnsureCertificateIdentityLayout(stateDir, identity);
-            var path = AcmePaths.IssuanceLockPath(stateDir, identity);
-
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (TryOpenExclusive(path, out AcmeIssuanceLock? acquired))
-                {
-                    return acquired;
-                }
-
-                await Task.Delay(RetryDelayMilliseconds, cancellationToken).ConfigureAwait(false);
-            }
+            var path = ResolveLockPath(stateDir, fqdn);
+            var fileLock = await AcmeExclusiveFileLock
+                .AcquireAsync(path, cancellationToken)
+                .ConfigureAwait(false);
+            return new AcmeIssuanceLock(fileLock);
         }
 
         /// <summary>
-        /// Attempts one exclusive open of the lock file.
+        /// Attempts one exclusive open of the FQDN issuance lock file.
         /// </summary>
-        /// <param name="path">Lock file path.</param>
+        /// <param name="stateDir">Shared ACME state root.</param>
+        /// <param name="fqdn">Certificate FQDN that owns the lock.</param>
         /// <param name="acquired">Held lock when this method returns <see langword="true"/>.</param>
-        /// <returns><see langword="false"/> when another holder owns the file (retry).</returns>
-        private static bool TryOpenExclusive(string path, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out AcmeIssuanceLock? acquired)
+        /// <returns>
+        /// <see langword="false"/> when another holder owns the file (recognized contention).
+        /// Unrelated filesystem failures are thrown.
+        /// </returns>
+        /// <remarks>
+        /// Exposed for tests that must prove synchronous and asynchronous classification stay aligned
+        /// without entering a wait loop.
+        /// </remarks>
+        internal static bool TryAcquireOnce(
+            string stateDir,
+            string fqdn,
+            [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out AcmeIssuanceLock? acquired)
         {
-            acquired = null;
-            try
+            var path = ResolveLockPath(stateDir, fqdn);
+            if (!AcmeExclusiveFileLock.TryAcquireOnce(path, out AcmeExclusiveFileLock? fileLock))
             {
-                var stream = new FileStream(
-                    path,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None,
-                    bufferSize: 4096,
-                    FileOptions.None);
-                try
-                {
-                    stream.SetLength(0);
-                    var payload = System.Text.Encoding.UTF8.GetBytes(
-                        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                        + Environment.NewLine);
-                    stream.Write(payload);
-                    stream.Flush(flushToDisk: true);
-                    acquired = new AcmeIssuanceLock(stream);
-                    return true;
-                }
-                catch
-                {
-                    stream.Dispose();
-                    throw;
-                }
-            }
-            catch (IOException)
-            {
+                acquired = null;
                 return false;
             }
-            catch (UnauthorizedAccessException)
-            {
-                return false;
-            }
+
+            acquired = new AcmeIssuanceLock(fileLock);
+            return true;
+        }
+
+        /// <summary>Normalizes <paramref name="fqdn"/> and returns <c>live/{fqdn}/.issuance.lock</c>.</summary>
+        /// <param name="stateDir">Shared ACME state root.</param>
+        /// <param name="fqdn">Certificate FQDN that owns the lock.</param>
+        /// <returns>Absolute or rooted issuance lock path under <paramref name="stateDir"/>.</returns>
+        private static string ResolveLockPath(string stateDir, string fqdn)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(stateDir);
+            var identity = CertificateIdentities.NormalizeFqdn(fqdn);
+            AcmePaths.EnsureCertificateIdentityLayout(stateDir, identity);
+            return AcmePaths.IssuanceLockPath(stateDir, identity);
         }
 
         /// <summary>Closes the lock stream, releasing the FQDN issuance lock. A second call does nothing.</summary>
@@ -142,7 +114,7 @@ namespace VectorNNTPD.Common.Acme
                 return;
             }
 
-            _stream.Dispose();
+            _fileLock.Dispose();
         }
 
         /// <summary>Releases the lock synchronously and returns a completed task.</summary>

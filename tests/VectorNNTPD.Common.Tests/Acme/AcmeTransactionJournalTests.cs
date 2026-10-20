@@ -120,16 +120,17 @@ namespace VectorNNTPD.Common.Tests.Acme
         {
             using var dir = new TempStateDir();
             var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
-            using var held = AcmeExclusiveFileLock.Acquire(journal.LockPath);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => Task.Run(
-                    () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token),
-                    cts.Token));
-            Assert.False(File.Exists(journal.FilePath));
+            using (AcmeExclusiveFileLock.Acquire(journal.LockPath))
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => Task.Run(
+                        () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token),
+                        CancellationToken.None));
+                Assert.False(File.Exists(journal.FilePath));
+            }
 
-            held.Dispose();
             var id = journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
             Assert.Equal(id, Assert.Single(journal.LoadHistory()).Id);
         }
@@ -169,6 +170,107 @@ namespace VectorNNTPD.Common.Tests.Acme
             var history = new AcmeTransactionJournal(dir.Path, Fqdn).LoadHistory();
             Assert.Equal([first, second, third], history.Select(static item => item.Id).ToArray());
             Assert.Single(Directory.GetFiles(AcmePaths.JournalRoot(dir.Path), "*.json"));
+        }
+
+        /// <summary>
+        /// A failed lock acquisition (path is a directory) propagates immediately and does not prevent a later
+        /// same-path journal write once the lock path is usable again.
+        /// </summary>
+        [Fact]
+        public void Failed_lock_acquisition_does_not_wedge_later_same_path_writers()
+        {
+            using var dir = new TempStateDir();
+            var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
+            Directory.CreateDirectory(journal.LockPath);
+
+            Assert.Throws<UnauthorizedAccessException>(
+                () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, CancellationToken.None));
+            Assert.False(File.Exists(journal.FilePath));
+
+            Directory.Delete(journal.LockPath);
+            var id = journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
+            Assert.Equal(id, Assert.Single(journal.LoadHistory()).Id);
+        }
+
+        /// <summary>
+        /// Concurrent same-FQDN journal begins remain serialized: both transactions are retained with distinct ids
+        /// and no corruption of the single journal file.
+        /// </summary>
+        /// <returns>A task that completes after both concurrent begins finish.</returns>
+        [Fact]
+        public async Task Concurrent_same_path_journal_writers_remain_serialized()
+        {
+            using var dir = new TempStateDir();
+            var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
+            using var barrier = new Barrier(2);
+
+            var first = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                return journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
+            });
+            var second = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                return journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
+            });
+
+            var ids = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(2, ids.Distinct(StringComparer.Ordinal).Count());
+
+            var history = new AcmeTransactionJournal(dir.Path, Fqdn).LoadHistory();
+            Assert.Equal(2, history.Count);
+            Assert.Contains(ids[0], history.Select(static t => t.Id));
+            Assert.Contains(ids[1], history.Select(static t => t.Id));
+            Assert.All(history, static t => Assert.Equal(AcmeTransactionJournal.StatusInProgress, t.Status));
+            Assert.Single(Directory.GetFiles(AcmePaths.JournalRoot(dir.Path), "*.json"));
+        }
+
+        /// <summary>
+        /// While one same-FQDN writer waits on a held journal lock, a cancelled waiter exits without permanently
+        /// blocking a subsequent writer after the holder releases.
+        /// </summary>
+        /// <returns>A task that completes after cancel and the later successful begin are observed.</returns>
+        [Fact]
+        public async Task Cancelled_waiter_does_not_block_subsequent_same_path_writer()
+        {
+            using var dir = new TempStateDir();
+            var journal = new AcmeTransactionJournal(dir.Path, Fqdn);
+            using var cts = new CancellationTokenSource();
+
+            Task<string>? waiting = null;
+            try
+            {
+                using (AcmeExclusiveFileLock.Acquire(journal.LockPath))
+                {
+                    waiting = Task.Run(
+                        () => journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow, cts.Token));
+
+                    // Observe genuine contention before cancelling.
+                    Assert.False(AcmeExclusiveFileLock.TryAcquireOnce(journal.LockPath, out _));
+                    cts.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+                    waiting = null;
+                    Assert.False(File.Exists(journal.FilePath));
+                }
+            }
+            finally
+            {
+                if (waiting is not null)
+                {
+                    // Holder is released by using; cancel and settle so the background task cannot outlive the test.
+                    cts.Cancel();
+                    var settled = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(5)));
+                    if (settled == waiting && waiting.IsFaulted)
+                    {
+                        // Observe the fault so it is not an unobserved task exception.
+                        _ = waiting.Exception;
+                    }
+                }
+            }
+
+            var id = journal.BeginTransaction([Fqdn], DirectoryUrl, DateTimeOffset.UtcNow);
+            Assert.Equal(id, Assert.Single(journal.LoadHistory()).Id);
         }
     }
 }
