@@ -121,9 +121,22 @@ namespace VectorNNTPD.Common.Acme
         /// <returns>Usable material, or a non-usable status whose reason is <c>absent</c> or the storage/certificate category.</returns>
         internal CertificateStatus EvaluateExisting(DateTimeOffset? now = null)
         {
+            // Public entry: Load acquires the FQDN issuance lock.
+            return EvaluateExistingCore(() => _store.Load(), now);
+        }
+
+        /// <summary>
+        /// Assesses on-disk certificate while the caller already holds the FQDN issuance lock.
+        /// </summary>
+        private CertificateStatus EvaluateExistingUnderLock(DateTimeOffset? now = null)
+            => EvaluateExistingCore(() => _store.LoadUnderLock(), now);
+
+        /// <summary>Shared evaluate path for locked and unlocked store loads.</summary>
+        private CertificateStatus EvaluateExistingCore(Func<CertificateMaterial?> load, DateTimeOffset? now)
+        {
             try
             {
-                var loaded = _store.Load();
+                var loaded = load();
                 if (loaded is null)
                 {
                     return new CertificateStatus(false, true, null, "absent");
@@ -157,7 +170,7 @@ namespace VectorNNTPD.Common.Acme
                 await using var issuanceLock = await AcmeIssuanceLock
                     .AcquireAsync(_stateDir, _fqdn, cancellationToken)
                     .ConfigureAwait(false);
-                var status = EvaluateExisting();
+                var status = EvaluateExistingUnderLock();
                 if (status is { Usable: true, Material: not null, DueForRenewal: false })
                 {
                     PublishCredential(status.Material, _store.CurrentPfxPassword);
@@ -206,7 +219,7 @@ namespace VectorNNTPD.Common.Acme
                 await using var issuanceLock = await AcmeIssuanceLock
                     .AcquireAsync(_stateDir, _fqdn, cancellationToken)
                     .ConfigureAwait(false);
-                var status = EvaluateExisting(now);
+                var status = EvaluateExistingUnderLock(now);
                 if (status is { Usable: true, Material: not null, DueForRenewal: false })
                 {
                     PublishCredential(status.Material, _store.CurrentPfxPassword);
@@ -293,7 +306,8 @@ namespace VectorNNTPD.Common.Acme
                 }
 
                 _journal.RecordCertificateIssued(status.Material);
-                var persisted = _store.Save(status.Material, pfxPassword);
+                // Ensure/Renew already hold the FQDN issuance lock; do not re-acquire.
+                var persisted = _store.SaveUnderLock(status.Material, pfxPassword);
                 PublishCredential(status.Material, pfxPassword);
                 AfterPersistForTests?.Invoke();
                 _journal.RecordCertificatePersisted(persisted.GenerationId, status.Material);
