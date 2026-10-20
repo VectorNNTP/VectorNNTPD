@@ -1,39 +1,37 @@
-using System.Collections.Concurrent;
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 
 namespace VectorNNTPD.Common.Dns
 {
     /// <summary>
-    /// Pooled UDP DNS exchange with remote-endpoint source validation.
+    /// Per-query UDP DNS exchange with remote-endpoint and transaction-id correlation.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// After sending to a specific nameserver, datagrams are accepted only when
-    /// <see cref="UdpReceiveResult.RemoteEndPoint"/> matches that address and port 53.
-    /// Non-matching datagrams are discarded until the receive timeout elapses.
+    /// Each call creates and disposes its own <see cref="UdpClient"/>. Sockets are not pooled:
+    /// a timed-out or failed receive can leave datagrams queued on the socket, and recycling that
+    /// socket would allow a later query to observe an earlier response. Dispose-per-query gives a
+    /// clear isolation guarantee without an unprovable drain/reset of <see cref="UdpClient"/>.
     /// </para>
     /// <para>
-    /// Validation uses <see cref="IPEndPoint"/> equality on the address and port returned by
-    /// <see cref="UdpClient.ReceiveAsync(System.Threading.CancellationToken)"/>, which is straightforward
-    /// on win-x64 / .NET 10 with unbound pooled sockets.
+    /// After sending to a specific nameserver endpoint, datagrams are accepted only when
+    /// <see cref="UdpReceiveResult.RemoteEndPoint"/> matches that address and port, the buffer is
+    /// long enough to contain a DNS header, and the response transaction id equals the query id.
+    /// Unrelated, short, or stale-id datagrams are discarded until the single receive deadline elapses.
+    /// Full header, question, and owner-name validation remain the caller's responsibility
+    /// (see <see cref="DnsTxtParser"/> / <see cref="DnsResponseHeader"/>).
     /// </para>
     /// </remarks>
     internal static class DnsUdpExchange
     {
-        /// <summary>Maximum UDP clients retained in <see cref="Pool"/>. Additional returns dispose the client.</summary>
-        private const int PoolMaxSize = 8;
-
-        /// <summary>Process-wide bag of unbound UDP clients rented by address family.</summary>
-        private static readonly ConcurrentBag<UdpClient> Pool = [];
-
         /// <summary>
         /// Outcome of a single UDP DNS exchange attempt.
         /// </summary>
         internal readonly struct Result
         {
             /// <summary>Initializes a successful exchange.</summary>
-            /// <param name="buffer">Response datagram accepted from the expected nameserver.</param>
+            /// <param name="buffer">Response datagram accepted from the expected nameserver with a matching transaction id.</param>
             internal Result(byte[] buffer)
             {
                 Buffer = buffer;
@@ -69,38 +67,71 @@ namespace VectorNNTPD.Common.Dns
 
         /// <summary>
         /// Sends <paramref name="query"/> to <paramref name="destination"/>:53 and returns the first
-        /// response whose remote endpoint matches that destination.
+        /// correlated response from that endpoint.
         /// </summary>
         /// <param name="destination">Nameserver address. The destination port is always 53.</param>
-        /// <param name="query">DNS query bytes.</param>
-        /// <param name="timeoutMilliseconds">Receive window. Non-matching datagrams are discarded until it elapses.</param>
+        /// <param name="query">DNS query bytes. Must include a complete DNS header; the transaction id is taken from it.</param>
+        /// <param name="timeoutMilliseconds">Single receive deadline. Non-matching datagrams are discarded until it elapses.</param>
         /// <param name="cancellationToken">Cancels send and receive. A timeout that is not caller cancellation returns <see cref="Result.Timeout"/>.</param>
-        /// <returns>A success, timeout, or socket-failure outcome. The rented socket is always returned to the pool.</returns>
-        internal static async Task<Result> QueryAsync(
+        /// <returns>A success, timeout, or socket-failure outcome. The socket is always disposed.</returns>
+        internal static Task<Result> QueryAsync(
             IPAddress destination,
             byte[] query,
             int timeoutMilliseconds,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(destination);
-            ArgumentNullException.ThrowIfNull(query);
+            return QueryAsync(new IPEndPoint(destination, 53), query, timeoutMilliseconds, cancellationToken);
+        }
 
-            var expected = new IPEndPoint(destination, 53);
-            UdpClient udp = Rent(destination.AddressFamily);
+        /// <summary>
+        /// Sends <paramref name="query"/> to <paramref name="destination"/> and returns the first
+        /// correlated response from that endpoint (address and port).
+        /// </summary>
+        /// <param name="destination">Nameserver endpoint (tests may use a non-53 loopback port).</param>
+        /// <param name="query">DNS query bytes. Must include a complete DNS header; the transaction id is taken from it.</param>
+        /// <param name="timeoutMilliseconds">Single receive deadline. Non-matching datagrams are discarded until it elapses.</param>
+        /// <param name="cancellationToken">Cancels send and receive. A timeout that is not caller cancellation returns <see cref="Result.Timeout"/>.</param>
+        /// <returns>A success, timeout, or socket-failure outcome. The socket is always disposed.</returns>
+        internal static async Task<Result> QueryAsync(
+            IPEndPoint destination,
+            byte[] query,
+            int timeoutMilliseconds,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(destination);
+            ArgumentNullException.ThrowIfNull(query);
+            if (query.Length < DnsWireFormat.HeaderSize)
+            {
+                throw new ArgumentException("DNS query must include a complete header.", nameof(query));
+            }
+
+            ushort expectedId = BinaryPrimitives.ReadUInt16BigEndian(query);
+
+            // Fresh socket per query: never recycle after timeout/failure (stale datagram risk).
+            using var udp = new UdpClient(destination.AddressFamily);
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(timeoutMilliseconds);
 
             try
             {
-                _ = await udp.SendAsync(query, expected, timeoutCts.Token).ConfigureAwait(false);
+                _ = await udp.SendAsync(query, destination, timeoutCts.Token).ConfigureAwait(false);
 
                 while (!timeoutCts.IsCancellationRequested)
                 {
                     UdpReceiveResult result = await udp.ReceiveAsync(timeoutCts.Token).ConfigureAwait(false);
-                    if (RemoteEndpointMatches(result.RemoteEndPoint, expected))
+                    if (!RemoteEndpointMatches(result.RemoteEndPoint, destination))
                     {
-                        return new Result(result.Buffer);
+                        continue;
                     }
+
+                    if (!TryReadCorrelatedTransactionId(result.Buffer, expectedId))
+                    {
+                        // Short, malformed, or stale transaction id — keep the original deadline.
+                        continue;
+                    }
+
+                    return new Result(result.Buffer);
                 }
 
                 return Result.Timeout();
@@ -117,15 +148,33 @@ namespace VectorNNTPD.Common.Dns
             {
                 return Result.Failure();
             }
-            finally
+        }
+
+        /// <summary>
+        /// Returns whether <paramref name="buffer"/> is long enough for a DNS header and carries
+        /// transaction id <paramref name="expectedId"/>.
+        /// </summary>
+        /// <param name="buffer">Received datagram.</param>
+        /// <param name="expectedId">Transaction id from the outbound query.</param>
+        /// <returns>
+        /// <see langword="true"/> when the datagram is a correlation candidate for the caller to parse;
+        /// <see langword="false"/> when it must be ignored without ending the query.
+        /// </returns>
+        internal static bool TryReadCorrelatedTransactionId(byte[] buffer, ushort expectedId)
+        {
+            ArgumentNullException.ThrowIfNull(buffer);
+            if (buffer.Length < DnsWireFormat.HeaderSize)
             {
-                Return(udp);
+                return false;
             }
+
+            ushort responseId = BinaryPrimitives.ReadUInt16BigEndian(buffer);
+            return responseId == expectedId;
         }
 
         /// <summary>Returns whether <paramref name="remote"/> is an <see cref="IPEndPoint"/> with the expected address and port.</summary>
         /// <param name="remote">Datagram remote endpoint. Null and non-IP endpoints do not match.</param>
-        /// <param name="expected">Nameserver endpoint, including port 53.</param>
+        /// <param name="expected">Nameserver endpoint.</param>
         /// <returns><see langword="true"/> when both address and port match.</returns>
         private static bool RemoteEndpointMatches(EndPoint? remote, IPEndPoint expected)
         {
@@ -135,42 +184,6 @@ namespace VectorNNTPD.Common.Dns
             }
 
             return ip.Port == expected.Port && ip.Address.Equals(expected.Address);
-        }
-
-        /// <summary>
-        /// Takes a pooled unbound client of <paramref name="family"/>, disposing pooled clients of a different family, or creates a new one.
-        /// </summary>
-        /// <param name="family">Address family of the nameserver being queried.</param>
-        /// <returns>A client the caller must pass to <see cref="Return"/>.</returns>
-        private static UdpClient Rent(AddressFamily family)
-        {
-            while (Pool.TryTake(out UdpClient? client))
-            {
-                if (client.Client.AddressFamily == family)
-                {
-                    return client;
-                }
-
-                client.Dispose();
-            }
-
-            return new UdpClient(family);
-        }
-
-        /// <summary>
-        /// Returns <paramref name="client"/> to <see cref="Pool"/> when fewer than <see cref="PoolMaxSize"/> clients are retained; otherwise disposes it.
-        /// </summary>
-        /// <param name="client">Client rented for one exchange.</param>
-        private static void Return(UdpClient client)
-        {
-            if (Pool.Count < PoolMaxSize)
-            {
-                Pool.Add(client);
-            }
-            else
-            {
-                client.Dispose();
-            }
         }
     }
 }
