@@ -35,6 +35,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     RabbitMqLogEventSink.TextContentType);
 
                 var diagnostic = TestSelfLog.Capture(() => sink.Emit(Event()));
+                await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
                 Assert.Contains("publication failed", diagnostic, StringComparison.Ordinal);
                 Assert.Contains("format boom", diagnostic, StringComparison.Ordinal);
@@ -61,7 +62,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 connection.DefaultPublishConfirmBehavior = FakePublishConfirmBehavior.Confirm;
                 connection.OnPublishChannelCreated = channel =>
                     channel.DisposeException = new NotSupportedException("channel dispose boom");
-                var sink = new RabbitMqLogEventSink(
+                using var sink = new RabbitMqLogEventSink(
                     service,
                     "logs",
                     "backfiller",
@@ -69,6 +70,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     new MessageTemplateTextFormatter("{Message}"),
                     RabbitMqLogEventSink.TextContentType);
                 sink.Emit(Event());
+                await sink.WhenIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
                 var diagnostic = TestSelfLog.Capture(sink.Dispose);
 

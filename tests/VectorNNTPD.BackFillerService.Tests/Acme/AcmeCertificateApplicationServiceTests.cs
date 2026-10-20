@@ -320,10 +320,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
 
             await scope.Service.StartAsync(CancellationToken.None);
             await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            var checkDone = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            scope.Service.NotifyOnNextRenewalCheckForTests(checkDone);
             scope.Options.AcmeCertificatePassword = "rotated-pfx-password";
             scope.Time.Advance(TimeSpan.FromHours(6));
-            await ArticleWorkTestDeliveries.WaitUntilAsync(() => scope.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
+            // Bound only detects a hung renewal; completion is signaled when the check finishes.
+            await checkDone.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
+            Assert.Equal(1, scope.Service.RenewalChecksCompleted);
             Assert.Equal([original, "rotated-pfx-password"], scope.Publisher.Passwords);
             var saved = LoadMaterial(scope, "rotated-pfx-password");
             Assert.NotNull(saved);
