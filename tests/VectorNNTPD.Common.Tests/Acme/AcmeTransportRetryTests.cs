@@ -57,6 +57,100 @@ namespace VectorNNTPD.Common.Tests.Acme
         }
 
         /// <summary>
+        /// Expected transport failure while inspecting the orders list becomes the fallback diagnostic without a second newOrder.
+        /// </summary>
+        [Fact]
+        public async Task NewOrder_orders_inspection_http_failure_uses_fallback_without_replay()
+        {
+            var handler = new ScriptedHandler();
+            handler.On(HttpMethod.Get, DirectoryUri, DirectoryResponse);
+            handler.On(HttpMethod.Head, NewNonceUri, NonceResponse);
+            int newOrderPosts = 0;
+            handler.On(HttpMethod.Post, NewOrderUri, _ =>
+            {
+                newOrderPosts++;
+                throw new HttpRequestException("response lost after accept");
+            });
+            handler.On(HttpMethod.Post, AccountUri, _ => throw new HttpRequestException("account lookup failed"));
+
+            using AcmeAccountKey key = CreateKey();
+            AcmeClient client = CreateClient(handler, key, new ImmediateDelayTimeProvider());
+            client.BindExistingAccount(AccountUri.AbsoluteUri);
+
+            AcmeAmbiguousOutcomeException ex = await Assert.ThrowsAsync<AcmeAmbiguousOutcomeException>(() =>
+                client.CreateOrderAsync(
+                    [new AcmeIdentifier { Type = AcmeIdentifierTypes.Dns, Value = "host.example.com" }],
+                    CancellationToken.None));
+
+            Assert.Equal(1, newOrderPosts);
+            Assert.Contains("orders list could not be inspected", ex.Message, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Caller cancellation during orders-list inspection propagates and is not converted to the diagnostic fallback.
+        /// </summary>
+        [Fact]
+        public async Task NewOrder_orders_inspection_cancellation_propagates()
+        {
+            var handler = new ScriptedHandler();
+            handler.On(HttpMethod.Get, DirectoryUri, DirectoryResponse);
+            handler.On(HttpMethod.Head, NewNonceUri, NonceResponse);
+            int newOrderPosts = 0;
+            using var cts = new CancellationTokenSource();
+            handler.On(HttpMethod.Post, NewOrderUri, _ =>
+            {
+                newOrderPosts++;
+                throw new HttpRequestException("response lost after accept");
+            });
+            handler.On(HttpMethod.Post, AccountUri, _ =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            });
+
+            using AcmeAccountKey key = CreateKey();
+            AcmeClient client = CreateClient(handler, key);
+            client.BindExistingAccount(AccountUri.AbsoluteUri);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                client.CreateOrderAsync(
+                    [new AcmeIdentifier { Type = AcmeIdentifierTypes.Dns, Value = "host.example.com" }],
+                    cts.Token));
+
+            Assert.Equal(1, newOrderPosts);
+        }
+
+        /// <summary>
+        /// Unexpected programming errors during inspection are not converted into the orders-list fallback message.
+        /// </summary>
+        [Fact]
+        public async Task NewOrder_orders_inspection_unexpected_exception_propagates()
+        {
+            var handler = new ScriptedHandler();
+            handler.On(HttpMethod.Get, DirectoryUri, DirectoryResponse);
+            handler.On(HttpMethod.Head, NewNonceUri, NonceResponse);
+            int newOrderPosts = 0;
+            handler.On(HttpMethod.Post, NewOrderUri, _ =>
+            {
+                newOrderPosts++;
+                throw new HttpRequestException("response lost after accept");
+            });
+            handler.On(HttpMethod.Post, AccountUri, _ => throw new InvalidOperationException("unexpected bug"));
+
+            using AcmeAccountKey key = CreateKey();
+            AcmeClient client = CreateClient(handler, key);
+            client.BindExistingAccount(AccountUri.AbsoluteUri);
+
+            InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.CreateOrderAsync(
+                    [new AcmeIdentifier { Type = AcmeIdentifierTypes.Dns, Value = "host.example.com" }],
+                    CancellationToken.None));
+
+            Assert.Equal(1, newOrderPosts);
+            Assert.Equal("unexpected bug", ex.Message);
+        }
+
+        /// <summary>
         /// A single matching order is not adopted after ambiguous newOrder: it may be a pre-existing or concurrent order.
         /// </summary>
         [Fact]

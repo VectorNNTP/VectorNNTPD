@@ -460,13 +460,25 @@ namespace VectorNNTPD.Common.Acme.Protocol
 
                 return "a single matching order is not attributable to this request under ACME";
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            // codeql[cs/catch-of-all-exceptions] Diagnostic inspection must not mask the original ambiguous newOrder outcome.
-            catch (Exception)
+            catch (AcmeCaException)
             {
+                return "orders list could not be inspected";
+            }
+            catch (HttpRequestException)
+            {
+                return "orders list could not be inspected";
+            }
+            catch (UriFormatException)
+            {
+                return "orders list could not be inspected";
+            }
+            catch (OperationCanceledException)
+            {
+                // HttpClient timeout or non-caller cancellation during best-effort inspection.
                 return "orders list could not be inspected";
             }
         }
