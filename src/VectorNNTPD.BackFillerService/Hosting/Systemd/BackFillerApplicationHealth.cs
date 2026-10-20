@@ -33,13 +33,26 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             && Volatile.Read(ref _unexpectedTermination) == 0
             && Volatile.Read(ref _certificateUnavailable) == 0;
 
+        /// <summary>
+        /// Raised after <see cref="MarkCertificateAvailable"/> clears the certificate block.
+        /// Subscribers may retry deferred work such as systemd <c>READY=1</c>.
+        /// </summary>
+        internal event Action? WatchdogHealthMayHaveImproved;
+
         /// <summary>Stops watchdog keep-alives until <see cref="MarkCertificateAvailable"/>.</summary>
         /// <remarks>Reversible. Does not mark unexpected termination and does not stop the host by itself.</remarks>
         internal void MarkCertificateUnavailable() => Interlocked.Exchange(ref _certificateUnavailable, 1);
 
         /// <summary>Allows watchdog keep-alives again after a usable certificate is published.</summary>
-        /// <remarks>Does not clear <see cref="_stopping"/> or <see cref="_unexpectedTermination"/>.</remarks>
-        internal void MarkCertificateAvailable() => Interlocked.Exchange(ref _certificateUnavailable, 0);
+        /// <remarks>
+        /// Does not clear <see cref="_stopping"/> or <see cref="_unexpectedTermination"/>.
+        /// Raises <see cref="WatchdogHealthMayHaveImproved"/> after clearing the certificate block.
+        /// </remarks>
+        internal void MarkCertificateAvailable()
+        {
+            Interlocked.Exchange(ref _certificateUnavailable, 0);
+            WatchdogHealthMayHaveImproved?.Invoke();
+        }
 
         /// <summary>Marks successful host start (all hosted services started).</summary>
         /// <remarks>Leaves <see cref="_stopping"/> and <see cref="_unexpectedTermination"/> unchanged.</remarks>

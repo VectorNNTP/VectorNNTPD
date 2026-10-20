@@ -10,8 +10,10 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
     /// <remarks>
     /// <para>
     /// Ready is reported at most once after <see cref="IHostApplicationLifetime.ApplicationStarted"/> (all hosted
-    /// services started successfully). Startup failure never reports ready. Once shutdown begins,
-    /// further readiness notifications are suppressed.
+    /// services started successfully). Startup failure never reports ready. When watchdog health is not yet
+    /// true at that moment, or when a handled transient notify failure occurs, readiness is retried until it
+    /// succeeds, shutdown begins, or the notifier is disposed. Once shutdown begins, further readiness
+    /// notifications are suppressed.
     /// </para>
     /// <para>
     /// <see cref="StartAsync"/> and <see cref="StopAsync"/> do not observe their cancellation tokens.
@@ -23,6 +25,11 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
     /// </remarks>
     internal sealed class SystemdLifecycleNotifier : IHostedService, IDisposable
     {
+        /// <summary>
+        /// Delay before the first readiness retry and between subsequent retries after a handled notify failure.
+        /// </summary>
+        internal static readonly TimeSpan ReadyRetryInterval = TimeSpan.FromSeconds(1);
+
         /// <summary>Host lifetime whose started and stopping tokens are observed.</summary>
         private readonly IHostApplicationLifetime _hostLifetime;
 
@@ -38,17 +45,34 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
         /// <summary>Options that enable or suppress ready, stopping, and status notifications.</summary>
         private readonly IOptions<BackFillerOptions> _options;
 
+        /// <summary>Clock used to schedule readiness retries after handled notify failures.</summary>
+        private readonly TimeProvider _time;
+
         /// <summary>Logger for activation, readiness, stopping, status, and swallowed notify failures.</summary>
         private readonly ILogger<SystemdLifecycleNotifier> _logger;
 
         /// <summary>
-        /// Non-recursive lock for duplicate <c>STATUS=</c> suppression. Ready and stopping use separate interlocked flags.
+        /// Non-recursive lock for duplicate <c>STATUS=</c> suppression and readiness-retry timer ownership.
         /// No caller enters it again on the same call stack.
         /// </summary>
         private readonly Lock _sync = new();
 
-        /// <summary>Non-zero after a ready notification is sent or after stopping suppresses a later ready.</summary>
-        private int _readySent;
+        /// <summary>Cached handler so subscribe and unsubscribe use the same delegate instance.</summary>
+        private readonly Action _onWatchdogHealthMayHaveImproved;
+
+        /// <summary>
+        /// Non-zero after a ready notification succeeds or after stopping/disposal permanently suppresses readiness.
+        /// </summary>
+        private int _readyTerminal;
+
+        /// <summary>Non-zero while a readiness attempt holds the send gate.</summary>
+        private int _readyAttempt;
+
+        /// <summary>Non-zero after the first handled readiness failure was logged at error level.</summary>
+        private int _readyFailureLogged;
+
+        /// <summary>Non-zero after <see cref="OnApplicationStarted"/> has armed readiness attempts.</summary>
+        private int _applicationStartedSeen;
 
         /// <summary>Non-zero after <c>STOPPING=1</c> has been sent once.</summary>
         private int _stoppingSent;
@@ -59,9 +83,12 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
         private string? _lastStatus;
 
         /// <summary>
-        /// Set after both lifetime callbacks are registered. Gates <see cref="OnApplicationStarted"/> only.
+        /// Set after both lifetime callbacks are registered. Gates <see cref="OnApplicationStarted"/> and readiness.
         /// </summary>
         private bool _subscribed;
+
+        /// <summary>Periodic readiness retry timer, or <see langword="null"/> when no retry is armed.</summary>
+        private ITimer? _readyRetryTimer;
 
         /// <summary>
         /// Retains the host lifetime, health flags, notify bridge, and systemd options.
@@ -72,6 +99,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
         /// <param name="runtime">Platform snapshot. Used to decide whether activation is logged.</param>
         /// <param name="options">BackFiller options whose <see cref="BackFillerOptions.Systemd"/> flags gate each notification.</param>
         /// <param name="logger">Logger for lifecycle notification events.</param>
+        /// <param name="time">Clock for readiness retries. Production uses the registered <see cref="TimeProvider"/>.</param>
         /// <exception cref="ArgumentNullException">Thrown when any argument is <see langword="null"/>.</exception>
         public SystemdLifecycleNotifier(
             IHostApplicationLifetime hostLifetime,
@@ -79,7 +107,8 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             ISystemdNotifyBridge notify,
             ISystemdRuntime runtime,
             IOptions<BackFillerOptions> options,
-            ILogger<SystemdLifecycleNotifier> logger)
+            ILogger<SystemdLifecycleNotifier> logger,
+            TimeProvider time)
         {
             ArgumentNullException.ThrowIfNull(hostLifetime);
             ArgumentNullException.ThrowIfNull(health);
@@ -87,6 +116,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(logger);
+            ArgumentNullException.ThrowIfNull(time);
 
             _hostLifetime = hostLifetime;
             _health = health;
@@ -94,6 +124,8 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             _runtime = runtime;
             _options = options;
             _logger = logger;
+            _time = time;
+            _onWatchdogHealthMayHaveImproved = OnWatchdogHealthMayHaveImproved;
         }
 
         /// <summary>
@@ -117,6 +149,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
                     _runtime.IsSystemdService);
             }
 
+            _health.WatchdogHealthMayHaveImproved += _onWatchdogHealthMayHaveImproved;
             _hostLifetime.ApplicationStarted.Register(OnApplicationStarted);
             _hostLifetime.ApplicationStopping.Register(OnApplicationStopping);
             _subscribed = true;
@@ -140,13 +173,17 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             return Task.CompletedTask;
         }
 
-        /// <summary>Stops a later <see cref="OnApplicationStarted"/> from marking health or sending ready.</summary>
+        /// <summary>
+        /// Stops readiness retries and prevents a later <see cref="OnApplicationStarted"/> from marking health or sending ready.
+        /// </summary>
         /// <remarks>
-        /// Sets <see cref="_subscribed"/> to <see langword="false"/> and does not dispose the lifetime registrations.
-        /// <see cref="OnApplicationStopping"/> does not consult that flag.
+        /// Sets <see cref="_subscribed"/> to <see langword="false"/>, permanently suppresses readiness, and does not dispose
+        /// the lifetime registrations. <see cref="OnApplicationStopping"/> does not consult that flag.
         /// </remarks>
         public void Dispose()
         {
+            SuppressReadiness();
+            _health.WatchdogHealthMayHaveImproved -= _onWatchdogHealthMayHaveImproved;
             _subscribed = false;
         }
 
@@ -161,6 +198,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
 
             _health.MarkStarted();
             TryNotifyStatus("Running: BackFiller hosted services started");
+            Interlocked.Exchange(ref _applicationStartedSeen, 1);
             TryNotifyReady();
         }
 
@@ -175,16 +213,35 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             TryNotifyStatus("Stopping: graceful shutdown in progress");
         }
 
-        /// <summary>Sends <c>READY=1</c> at most once when options, notify, and watchdog health allow it.</summary>
+        /// <summary>Retries readiness after certificate health may have become healthy again.</summary>
+        private void OnWatchdogHealthMayHaveImproved()
+        {
+            if (Volatile.Read(ref _applicationStartedSeen) == 0)
+            {
+                return;
+            }
+
+            TryNotifyReady();
+        }
+
+        /// <summary>
+        /// Sends <c>READY=1</c> at most once when options, notify, and watchdog health allow it.
+        /// </summary>
         /// <remarks>
         /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyReadyOnApplicationRunning"/>
-        /// is false, <see cref="ISystemdNotifyBridge.IsEnabled"/> is false, or
-        /// <see cref="IApplicationHealth.IsHealthyForWatchdog"/> is false.
-        /// The once-only flag is set before the send. Exceptions from <see cref="ISystemdNotifyBridge.NotifyReady"/>
-        /// are logged and swallowed, and the flag stays set.
+        /// is false, <see cref="ISystemdNotifyBridge.IsEnabled"/> is false, readiness was already completed or
+        /// suppressed, the notifier is no longer subscribed, or
+        /// <see cref="IApplicationHealth.IsHealthyForWatchdog"/> is false. The once-only flag is set only after
+        /// <see cref="ISystemdNotifyBridge.NotifyReady"/> returns. Handled notify exceptions schedule a delayed
+        /// retry. Concurrent callers share one send gate so at most one successful <c>READY=1</c> is emitted.
         /// </remarks>
         private void TryNotifyReady()
         {
+            if (!_subscribed)
+            {
+                return;
+            }
+
             if (!_options.Value.Systemd.NotifyReadyOnApplicationRunning)
             {
                 return;
@@ -195,31 +252,109 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
                 return;
             }
 
-            if (!_health.IsHealthyForWatchdog)
+            if (Volatile.Read(ref _readyTerminal) != 0)
             {
                 return;
             }
 
-            if (Interlocked.Exchange(ref _readySent, 1) != 0)
+            if (!_health.IsHealthyForWatchdog)
+            {
+                StopReadyRetries();
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _readyAttempt, 1, 0) != 0)
             {
                 return;
             }
 
             try
             {
-                _notify.NotifyReady();
-                SystemdLogMessages.ReadinessReported(_logger);
+                if (!_subscribed || Volatile.Read(ref _readyTerminal) != 0)
+                {
+                    return;
+                }
+
+                if (!_health.IsHealthyForWatchdog)
+                {
+                    StopReadyRetries();
+                    return;
+                }
+
+                try
+                {
+                    _notify.NotifyReady();
+                    Interlocked.Exchange(ref _readyTerminal, 1);
+                    StopReadyRetries();
+                    SystemdLogMessages.ReadinessReported(_logger);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    if (Interlocked.Exchange(ref _readyFailureLogged, 1) == 0)
+                    {
+                        SystemdLogMessages.NotificationFailed(_logger, ex, "READY=1");
+                    }
+                    else
+                    {
+                        SystemdLogMessages.ReadinessRetryScheduled(_logger, ReadyRetryInterval);
+                    }
+
+                    ScheduleReadyRetry();
+                }
             }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or UnauthorizedAccessException)
+            finally
             {
-                SystemdLogMessages.NotificationFailed(_logger, ex, "READY=1");
+                Interlocked.Exchange(ref _readyAttempt, 0);
             }
+        }
+
+        /// <summary>Arms a periodic readiness retry when one is not already running.</summary>
+        private void ScheduleReadyRetry()
+        {
+            if (!_subscribed || Volatile.Read(ref _readyTerminal) != 0)
+            {
+                return;
+            }
+
+            lock (_sync)
+            {
+                if (!_subscribed || Volatile.Read(ref _readyTerminal) != 0 || _readyRetryTimer is not null)
+                {
+                    return;
+                }
+
+                _readyRetryTimer = _time.CreateTimer(
+                    static state => ((SystemdLifecycleNotifier)state!).TryNotifyReady(),
+                    this,
+                    ReadyRetryInterval,
+                    ReadyRetryInterval);
+            }
+        }
+
+        /// <summary>Disposes any armed readiness retry timer.</summary>
+        private void StopReadyRetries()
+        {
+            ITimer? timer;
+            lock (_sync)
+            {
+                timer = _readyRetryTimer;
+                _readyRetryTimer = null;
+            }
+
+            timer?.Dispose();
+        }
+
+        /// <summary>Permanently suppresses readiness and cancels retries.</summary>
+        private void SuppressReadiness()
+        {
+            Interlocked.Exchange(ref _readyTerminal, 1);
+            StopReadyRetries();
         }
 
         /// <summary>Sends <c>STOPPING=1</c> at most once and suppresses any later ready notification.</summary>
         /// <remarks>
         /// Returns without sending when <see cref="BackFillerSystemdOptions.NotifyStoppingOnApplicationShutdown"/>
-        /// is false or notify is disabled. After the once-only flag is claimed, <see cref="_readySent"/> is set
+        /// is false or notify is disabled. After the once-only flag is claimed, readiness is suppressed
         /// so a later <see cref="TryNotifyReady"/> returns immediately. Exceptions from
         /// <see cref="ISystemdNotifyBridge.NotifyStopping"/> are logged and swallowed.
         /// </remarks>
@@ -227,11 +362,13 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
         {
             if (!_options.Value.Systemd.NotifyStoppingOnApplicationShutdown)
             {
+                SuppressReadiness();
                 return;
             }
 
             if (!_notify.IsEnabled)
             {
+                SuppressReadiness();
                 return;
             }
 
@@ -241,7 +378,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             }
 
             // Once stopping, readiness must not be reported later.
-            Interlocked.Exchange(ref _readySent, 1);
+            SuppressReadiness();
 
             try
             {

@@ -34,6 +34,18 @@ namespace VectorNNTPD.BackFillerService.Logging
             Message = "Reported systemd readiness after successful BackFiller host start")]
         internal static partial void ReadinessReported(ILogger logger);
 
+        /// <summary>
+        /// Written on a repeated handled readiness failure after the first error was already logged.
+        /// Avoids flooding the error stream while retries remain armed.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="RetryInterval">Delay until the next readiness attempt.</param>
+        [LoggerMessage(
+            EventId = 5119,
+            Level = LogLevel.Debug,
+            Message = "systemd READY=1 still failing; retrying in {RetryInterval}")]
+        internal static partial void ReadinessRetryScheduled(ILogger logger, TimeSpan RetryInterval);
+
         /// <summary>Written after <c>STOPPING=1</c> is sent, when stopping notification is configured, notify is enabled, and stopping has not already been sent.</summary>
         /// <param name="logger">Logger that receives the event.</param>
         [LoggerMessage(

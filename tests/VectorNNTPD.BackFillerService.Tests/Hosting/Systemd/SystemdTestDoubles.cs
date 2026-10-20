@@ -4,7 +4,9 @@ using VectorNNTPD.BackFillerService.Hosting.Systemd;
 namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
 {
     /// <summary>
-    /// Records systemd notify payloads and counts. <see cref="ThrowOnNotify"/> fails the next notify.
+    /// Records systemd notify payloads and counts.
+    /// <see cref="ThrowOnNotify"/> fails every notify while set.
+    /// <see cref="ReadyFailuresRemaining"/> fails that many <see cref="NotifyReady"/> attempts then succeeds.
     /// <see cref="IsEnabled"/> defaults to true.
     /// </summary>
     internal sealed class FakeSystemdNotifyBridge : ISystemdNotifyBridge
@@ -19,12 +21,38 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
         private int _stoppingCount;
         /// <summary>Successful WATCHDOG recordings.</summary>
         private int _watchdogCount;
+        /// <summary>Entries into <see cref="NotifyReady"/> regardless of success.</summary>
+        private int _readyAttempts;
+        /// <summary>Remaining READY attempts that throw before a successful record.</summary>
+        private int _readyFailuresRemaining;
 
         /// <summary>When false, notify methods return without recording (mirrors disabled notify socket).</summary>
         public bool IsEnabled { get; set; } = true;
 
-        /// <summary>When set, the next notify path that checks this throws before recording.</summary>
+        /// <summary>
+        /// When set, every notify path that checks this throws before recording until cleared.
+        /// Evaluated after <see cref="ReadyFailuresRemaining"/> on the READY path.
+        /// </summary>
         public Exception? ThrowOnNotify { get; set; }
+
+        /// <summary>
+        /// Number of remaining <see cref="NotifyReady"/> attempts that throw before recording succeeds.
+        /// Does not affect STATUS, STOPPING, or WATCHDOG paths.
+        /// </summary>
+        public int ReadyFailuresRemaining
+        {
+            get => Volatile.Read(ref _readyFailuresRemaining);
+            set => Volatile.Write(ref _readyFailuresRemaining, value);
+        }
+
+        /// <summary>
+        /// Optional gate held before a READY attempt records. Tests use this to hold concurrent callers.
+        /// </summary>
+        public ManualResetEventSlim? BlockReadyUntil { get; set; }
+
+        /// <summary>Completes when any <see cref="NotifyReady"/> attempt begins, before recording or throwing.</summary>
+        public TaskCompletionSource ReadyAttempted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Snapshot of recorded notify lines (READY, STOPPING, WATCHDOG, STATUS).</summary>
         internal IReadOnlyList<string> Notifications
@@ -40,6 +68,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
 
         /// <summary>Count of successful READY=1 recordings.</summary>
         internal int ReadyCount => Volatile.Read(ref _readyCount);
+
+        /// <summary>Total entries into <see cref="NotifyReady"/>, including failures.</summary>
+        internal int ReadyAttemptCount => Volatile.Read(ref _readyAttempts);
 
         /// <summary>Count of successful STOPPING=1 recordings.</summary>
         internal int StoppingCount => Volatile.Read(ref _stoppingCount);
@@ -80,6 +111,24 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
         /// <inheritdoc />
         public void NotifyReady()
         {
+            Interlocked.Increment(ref _readyAttempts);
+            ReadyAttempted.TrySetResult();
+            BlockReadyUntil?.Wait();
+
+            while (true)
+            {
+                var remaining = Volatile.Read(ref _readyFailuresRemaining);
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                if (Interlocked.CompareExchange(ref _readyFailuresRemaining, remaining - 1, remaining) == remaining)
+                {
+                    throw ThrowOnNotify ?? new InvalidOperationException("notify-failed");
+                }
+            }
+
             Record("READY=1", ref _readyCount);
             ReadySent.TrySetResult();
         }
