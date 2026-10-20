@@ -157,8 +157,10 @@ namespace VectorNNTPD.BackFillerService.Configuration
 
             return new BackFillerRuntimeOptions(
                 ServerId: serverId,
-                DnsSuffix: dnsSuffix,
-                Fqdn: fqdn,
+                DnsIdentity: new BackFillerRuntimeDnsIdentity(
+                    dnsSuffix,
+                    fqdn,
+                    CertificateIdentities.ForFqdn(fqdn, acme.IncludeNewsHostnameInCertificate)),
                 BindAddressTokens: tokens,
                 BindPortTls: bindPortTls,
                 LogDirectory: ResolveFileLogDirectory(options, contentRootPath),
@@ -183,7 +185,6 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     WorkRequestMaxPayloadBytes: rabbitMq.WorkRequestMaxPayloadBytes ?? 1024,
                     PublishConfirmTimeoutSeconds: rabbitMq.PublishConfirmTimeoutSeconds ?? 10,
                     ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount),
-                CertificateDomainNames: CertificateIdentities.ForFqdn(fqdn, acme.IncludeNewsHostnameInCertificate),
                 NntpDb: new NntpDbRuntimeOptions(
                     nntpDb.ConnectionString.Trim(),
                     nntpDbBuilder.Server ?? string.Empty,

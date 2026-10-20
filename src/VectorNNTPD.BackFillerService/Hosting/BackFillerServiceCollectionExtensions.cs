@@ -173,7 +173,7 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 new DelegateRabbitMqConnectionNameProvider(() =>
                     RabbitMqRuntimeOptions.GetDefaultConnectionName(
                         ApplicationJsonConfiguration.EntryAssemblyName,
-                        sp.GetRequiredService<IOptions<BackFillerOptions>>().Value.Fqdn)));
+                        sp.GetRequiredService<BackFillerRuntimeOptions>().Fqdn)));
             VectorNNTPD.Common.Hosting.RabbitMqServiceCollectionExtensions.AddRabbitMqInfrastructure(builder.Services);
 
             builder.Services.AddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
@@ -254,15 +254,23 @@ namespace VectorNNTPD.BackFillerService.Hosting
             builder.Services.AddSingleton<IHostedService, BackFillerApplicationHostedService>();
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<ArticleRetentionSweepService>());
+            // Rebuild when the runtime FQDN changes after nntpsharedconfig projection. A plain
+            // singleton NntpArticleParser would keep the config-file identity forever.
+            builder.Services.AddSingleton(static provider =>
+                new BackFillerRuntimeArticleParser(provider.GetRequiredService<BackFillerRuntimeOptions>()));
             builder.Services.TryAddSingleton(static provider =>
-                new NntpArticleParser(provider.GetRequiredService<BackFillerRuntimeOptions>().Fqdn));
-            builder.Services.AddSingleton<IArticleWorkHandler>(static provider => new ProviderArticleWorkHandler(
-                provider.GetRequiredService<INntpArticleRetriever>(),
-                provider.GetRequiredService<IArticleRetentionAuthority>(),
-                provider.GetRequiredService<NntpArticleParser>(),
-                provider.GetRequiredService<INntpSharedConfigurationCatalogue>(),
-                provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId,
-                provider.GetRequiredService<ILogger<ProviderArticleWorkHandler>>()));
+                provider.GetRequiredService<BackFillerRuntimeArticleParser>().Current);
+            builder.Services.AddSingleton<IArticleWorkHandler>(static provider =>
+            {
+                var runtimeParser = provider.GetRequiredService<BackFillerRuntimeArticleParser>();
+                return new ProviderArticleWorkHandler(
+                    provider.GetRequiredService<INntpArticleRetriever>(),
+                    provider.GetRequiredService<IArticleRetentionAuthority>(),
+                    () => runtimeParser.Current,
+                    provider.GetRequiredService<INntpSharedConfigurationCatalogue>(),
+                    provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId,
+                    provider.GetRequiredService<ILogger<ProviderArticleWorkHandler>>());
+            });
             builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
                 provider.GetRequiredService<IRabbitMqService>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),

@@ -71,21 +71,25 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         }
 
         /// <summary>
-        /// Contract: Runtime options are immutable records.
+        /// Contract: Non-identity runtime fields stay immutable via record <c>with</c>; DNS identity is updated in place.
         /// </summary>
 
         [Fact]
-        public void Runtime_options_are_immutable_records()
+        public void Runtime_options_share_mutable_dns_identity_across_with_copies()
         {
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 BackFillerTestOptions.CreateValid(),
                 BackFillerTestOptions.CreateValidNntpDb());
 
             Assert.True(runtime.GetType().IsSealed);
-            var withFqdn = runtime with { Fqdn = "other.example" };
-            Assert.NotSame(runtime, withFqdn);
+            var withInterval = runtime with { AccountRefreshInterval = TimeSpan.FromSeconds(12) };
+            Assert.NotSame(runtime, withInterval);
+            Assert.Same(runtime.DnsIdentity, withInterval.DnsIdentity);
             Assert.Equal("backfiller01.usenet.ninja", runtime.Fqdn);
-            Assert.Equal("other.example", withFqdn.Fqdn);
+
+            runtime.ApplySharedDnsIdentity("other.example", "backfiller01.other.example", includeNewsHostnameInCertificate: false);
+            Assert.Equal("backfiller01.other.example", runtime.Fqdn);
+            Assert.Equal("backfiller01.other.example", withInterval.Fqdn);
             Assert.Null(runtime.GetType().GetProperty("Name"));
         }
 

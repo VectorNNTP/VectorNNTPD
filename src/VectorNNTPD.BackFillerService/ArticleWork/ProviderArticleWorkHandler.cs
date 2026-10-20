@@ -31,8 +31,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Canonical retention authority that admits or rejects the built record.</summary>
         private readonly IArticleRetentionAuthority _retention;
 
-        /// <summary>Parser used to build the CanonicalV1 record from the retrieved article bytes.</summary>
-        private readonly NntpArticleParser _parser;
+        /// <summary>
+        /// Fallback parser factory used when no shared catalogue is configured or the server id is
+        /// outside <see cref="ServerIdRules"/>. Must return a parser for the current runtime FQDN.
+        /// </summary>
+        private readonly Func<NntpArticleParser> _fallbackParser;
 
         /// <summary>Published shared configuration. Null when the handler keeps the injected parser and a zero article limit.</summary>
         private readonly INntpSharedConfigurationCatalogue? _sharedConfiguration;
@@ -146,13 +149,46 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             int serverId,
             ILogger<ProviderArticleWorkHandler>? logger = null,
             ArrayPool<byte>? canonicalBufferPool = null)
+            : this(
+                retriever,
+                retention,
+                () => parser,
+                sharedConfiguration,
+                serverId,
+                logger,
+                canonicalBufferPool)
+        {
+            ArgumentNullException.ThrowIfNull(parser);
+        }
+
+        /// <summary>Initializes the handler with a live fallback-parser factory (host DI).</summary>
+        /// <param name="retriever">NNTP ARTICLE retriever.</param>
+        /// <param name="retention">Canonical retention authority.</param>
+        /// <param name="fallbackParser">
+        /// Returns the CanonicalV1 parser for the current runtime FQDN when the server id is outside
+        /// <see cref="ServerIdRules"/> or when no shared catalogue is configured.
+        /// </param>
+        /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>, or null.</param>
+        /// <param name="serverId">BackFiller server id combined with <c>dnssuffix</c> for the Path hop and retained endpoint.</param>
+        /// <param name="logger">Article-processing logger. Null uses <see cref="NullLogger{T}.Instance"/>.</param>
+        /// <param name="canonicalBufferPool">
+        /// Pool for the canonical article array. Null uses <see cref="ArrayPool{T}.Shared"/>.
+        /// </param>
+        internal ProviderArticleWorkHandler(
+            INntpArticleRetriever retriever,
+            IArticleRetentionAuthority retention,
+            Func<NntpArticleParser> fallbackParser,
+            INntpSharedConfigurationCatalogue? sharedConfiguration,
+            int serverId,
+            ILogger<ProviderArticleWorkHandler>? logger = null,
+            ArrayPool<byte>? canonicalBufferPool = null)
         {
             ArgumentNullException.ThrowIfNull(retriever);
             ArgumentNullException.ThrowIfNull(retention);
-            ArgumentNullException.ThrowIfNull(parser);
+            ArgumentNullException.ThrowIfNull(fallbackParser);
             _retriever = retriever;
             _retention = retention;
-            _parser = parser;
+            _fallbackParser = fallbackParser;
             _sharedConfiguration = sharedConfiguration;
             _serverId = serverId;
             _logger = logger ?? NullLogger<ProviderArticleWorkHandler>.Instance;
@@ -248,7 +284,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var consumed = false;
             var maxArticleBytes = 0;
             byte[]? siteNameUtf8 = null;
-            var parser = _parser;
+            var parser = _fallbackParser();
             string? endpointFqdn = null;
             if (_sharedConfiguration is not null)
             {
@@ -461,7 +497,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     return current;
                 }
 
-                var built = SharedArticlePreparation.Create(shared, _serverId, _parser);
+                var built = SharedArticlePreparation.Create(shared, _serverId, _fallbackParser());
                 Volatile.Write(ref _sharedArticleState, built);
                 return built;
             }

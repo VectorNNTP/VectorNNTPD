@@ -39,6 +39,8 @@ Section name: `BackFiller` (`BackFillerOptions.SectionName`).
 
 Generated `Fqdn` is `backfiller{ServerId:00}.{DnsSuffix}`. It is not a configuration key. It is empty when `ServerId` is missing or out of range, or when `DnsSuffix` is empty.
 
+`BackFillerRuntimeOptions` is built from the bindable options at DI construction time, so its FQDN starts as that config-file provisional name. When `ProviderAccountConfigurationService` publishes `nntpsharedconfig`, `Project` sets `BackFillerOptions.DnsSuffix`, `AcmeCloudflareOptions.Fqdn` / `DnsSuffix`, and calls `BackFillerRuntimeOptions.ApplySharedDnsIdentity` so the singleton runtime FQDN, certificate domain names, retention fallback, DI article-parser accessor, and RabbitMQ connection name all use the database-derived identity. Startup smoke that only builds the host (without starting the account service) still reports the provisional FQDN.
+
 `BackFillerAcmeCloudflareOptionsAdapter` copies BackFiller bind and ACME fields onto `AcmeCloudflareOptions` and sets `IncludeNewsHostnameInCertificate` to false. The shared `AcmeCloudflareOptions` type still defaults that flag to true and documents `BindPort` 119 as an NNTPD cleartext port. BackFiller validation does not use `BindPort`.
 
 Nested groups:
