@@ -17,8 +17,8 @@ namespace VectorNNTPD.Common.Articles.DateParser
         /// The lookup compares the entire trailing letter token. Order does not express prefixes.
         /// <c>CST</c> is the North American abbreviation named by RFC 1036. Its <c>-06:00</c> mapping is the Issue #164 convention.
         /// The local RFC 1036 text does not state that numeric offset.
-        /// <c>UTC+0</c> through <c>UTC+9</c> and <c>UTC-1</c> through <c>UTC-9</c> are retained and are not selected:
-        /// the detector accepts only a trailing ASCII letter run, so those tokens never reach this table.
+        /// <c>UTC+0</c> through <c>UTC+9</c> and <c>UTC-1</c> through <c>UTC-9</c> are selected by a dedicated trailing-token detector
+        /// before the alphabetic letter-run path. <c>UTC-0</c> and multi-digit forms such as <c>UTC+10</c> are not in this table.
         /// </summary>
         private static readonly TimezoneMapping[] TimezoneMappings = CreateDefaultTimezoneMappings();
 
@@ -172,7 +172,7 @@ namespace VectorNNTPD.Common.Articles.DateParser
             new("LINT"u8.ToArray(), "+14:00"u8.ToArray()),
             new("NRT"u8.ToArray(), "+12:00"u8.ToArray()),
 
-            // Letter-only matching never selects these. Numeric ±hhmm and ±hh:mm offsets are parsed by the date patterns.
+            // Trailing UTC±N forms (single digit). Numeric ±hhmm and ±hh:mm offsets remain a separate parse path.
             new("UTC+0"u8.ToArray(), "+00:00"u8.ToArray()),
             new("UTC+1"u8.ToArray(), "+01:00"u8.ToArray()),
             new("UTC+2"u8.ToArray(), "+02:00"u8.ToArray()),

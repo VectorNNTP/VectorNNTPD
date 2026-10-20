@@ -284,20 +284,113 @@ namespace VectorNNTPD.Common.Tests.Articles.DateParser
         }
 
         /// <summary>
-        /// <c>UTC+1</c> is not a letter token, so the abbreviation table does not rewrite it and numeric-offset parsing does not accept that spelling.
+        /// Each documented <c>UTC±N</c> form converts 12:00 on 23 Aug 2024 to the UTC instant of its table offset.
+        /// </summary>
+        /// <param name="token">Trailing <c>UTC+0</c>..<c>UTC+9</c> or <c>UTC-1</c>..<c>UTC-9</c>.</param>
+        /// <param name="offsetMinutesEast">Documented offset in minutes east of UTC.</param>
+        [Theory]
+        [MemberData(nameof(DocumentedUtcNumericForms))]
+        public void TryGetCanonicalUtc_WhenUtcNumericForm_ReturnsDocumentedUtcInstant(
+            string token,
+            int offsetMinutesEast)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {token}"),
+                out var utc,
+                out var failure);
+
+            var expected = new DateTime(2024, 8, 23, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-offsetMinutesEast);
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(expected, utc);
+        }
+
+        /// <summary>
+        /// Noon <c>UTC+5</c> is 07:00 UTC and noon <c>UTC-5</c> is 17:00 UTC. Zero offset keeps noon.
+        /// </summary>
+        [Theory]
+        [InlineData("UTC+5", 7, 0)]
+        [InlineData("UTC-5", 17, 0)]
+        [InlineData("UTC+0", 12, 0)]
+        public void TryGetCanonicalUtc_WhenUtcNumericSignExamples_ReturnsExpectedClock(
+            string token,
+            int utcHour,
+            int utcMinute)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {token}"),
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2024, 8, 23, utcHour, utcMinute, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// The <c>UTC</c> prefix of a numeric form folds ASCII case the same way letter abbreviations do.
+        /// </summary>
+        /// <param name="token">Mixed-case or lowercase documented form.</param>
+        /// <param name="offsetMinutesEast">Offset implied by the digit in <paramref name="token"/>.</param>
+        [Theory]
+        [InlineData("utc+5", 300)]
+        [InlineData("Utc-3", -180)]
+        [InlineData("uTc+0", 0)]
+        public void TryGetCanonicalUtc_WhenUtcNumericFormCaseDiffers_ReturnsSameUtcInstant(
+            string token,
+            int offsetMinutesEast)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {token}"),
+                out var utc,
+                out var failure);
+
+            var expected = new DateTime(2024, 8, 23, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-offsetMinutesEast);
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(expected, utc);
+        }
+
+        /// <summary>
+        /// Strict mode still accepts a documented <c>UTC±N</c> form because it is a known table token, not an unknown letter abbreviation.
         /// </summary>
         [Fact]
-        public void TryGetCanonicalUtc_WhenUtcPlusDigitForm_IsNotAnAbbreviationMatch()
+        public void TryGetCanonicalUtc_WhenUtcNumericFormIsStrict_AcceptsKnownToken()
         {
             var options = DateParseOptions.Default with { RequireKnownTimezoneAbbreviation = true };
             var accepted = NewsDateParser.TryGetCanonicalUtc(
                 "Fri, 23 Aug 2024 12:00:00 UTC+1"u8,
                 options,
-                out _,
+                out var utc,
+                out var failure);
+
+            Assert.True(accepted);
+            Assert.Equal(DateParseFailureReason.None, failure);
+            Assert.Equal(new DateTime(2024, 8, 23, 11, 0, 0, DateTimeKind.Utc), utc);
+        }
+
+        /// <summary>
+        /// Malformed or undocumented numeric UTC spellings are not rewritten and fail exact parsing.
+        /// </summary>
+        /// <param name="token">Trailing token that must not match the documented single-digit forms.</param>
+        [Theory]
+        [InlineData("UTC+")]
+        [InlineData("UTC-")]
+        [InlineData("UTC+10")]
+        [InlineData("UTC-0")]
+        [InlineData("UTC--5")]
+        [InlineData("UTC++5")]
+        [InlineData("UTC+05")]
+        public void TryGetCanonicalUtc_WhenUtcNumericFormIsMalformed_Rejects(string token)
+        {
+            var accepted = NewsDateParser.TryGetCanonicalUtc(
+                Encoding.ASCII.GetBytes($"Fri, 23 Aug 2024 12:00:00 {token}"),
+                out var utc,
                 out var failure);
 
             Assert.False(accepted);
             Assert.Equal(DateParseFailureReason.ParseFailed, failure);
+            Assert.Equal(default, utc);
         }
 
         /// <summary>
@@ -330,8 +423,24 @@ namespace VectorNNTPD.Common.Tests.Articles.DateParser
         }
 
         /// <summary>
+        /// Documented single-digit <c>UTC±N</c> forms and their minutes east of UTC.
+        /// </summary>
+        /// <returns>Pairs of token and offset minutes.</returns>
+        public static IEnumerable<object[]> DocumentedUtcNumericForms()
+        {
+            for (var hour = 0; hour <= 9; hour++)
+            {
+                yield return [$"UTC+{hour}", hour * 60];
+            }
+
+            for (var hour = 1; hour <= 9; hour++)
+            {
+                yield return [$"UTC-{hour}", -hour * 60];
+            }
+        }
+
+        /// <summary>
         /// Built-in letter abbreviations and their documented minutes east of UTC.
-        /// <c>UTC+N</c> rows are excluded because the letter-run detector does not select them.
         /// </summary>
         /// <returns>Pairs of abbreviation and offset minutes.</returns>
         public static IEnumerable<object[]> KnownTimezoneAbbreviations()
