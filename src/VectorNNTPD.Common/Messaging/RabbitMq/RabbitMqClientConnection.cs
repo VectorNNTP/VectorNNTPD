@@ -73,6 +73,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
         /// <inheritdoc />
+        public event EventHandler<RabbitMqConnectionBlockedEventArgs>? ConnectionBlocked;
+
+        /// <inheritdoc />
+        public event EventHandler? ConnectionUnblocked;
+
+        /// <inheritdoc />
         public async Task<IRabbitMqTopologyChannel> CreateTopologyChannelAsync(CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
@@ -222,23 +228,32 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             return Task.CompletedTask;
         }
 
-        /// <summary>Logs the broker block reason. Does not pause channels or request recovery.</summary>
+        /// <summary>
+        /// Logs the broker block reason and raises <see cref="ConnectionBlocked"/>.
+        /// Does not pause channels or request recovery; <see cref="RabbitMqService"/> owns the timeout.
+        /// </summary>
         /// <param name="sender">Unused.</param>
         /// <param name="eventArgs">Broker block reason.</param>
         /// <returns>A completed task.</returns>
         private Task OnBlockedAsync(object sender, ConnectionBlockedEventArgs eventArgs)
         {
-            RabbitMqLogMessages.ConnectionBlocked(_logger, eventArgs.Reason);
+            var reason = eventArgs.Reason ?? string.Empty;
+            RabbitMqLogMessages.ConnectionBlocked(_logger, reason);
+            ConnectionBlocked?.Invoke(this, new RabbitMqConnectionBlockedEventArgs(reason));
             return Task.CompletedTask;
         }
 
-        /// <summary>Logs that the broker unblocked the connection. <paramref name="eventArgs"/> is unused.</summary>
+        /// <summary>
+        /// Logs that the broker unblocked the connection and raises <see cref="ConnectionUnblocked"/>.
+        /// <paramref name="eventArgs"/> is unused.
+        /// </summary>
         /// <param name="sender">Unused.</param>
         /// <param name="eventArgs">Unused client event args.</param>
         /// <returns>A completed task.</returns>
         private Task OnUnblockedAsync(object sender, AsyncEventArgs eventArgs)
         {
             RabbitMqLogMessages.ConnectionUnblocked(_logger);
+            ConnectionUnblocked?.Invoke(this, EventArgs.Empty);
             return Task.CompletedTask;
         }
     }

@@ -107,6 +107,24 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             Message = "RabbitMQ broker unblocked the connection")]
         internal static partial void ConnectionUnblocked(ILogger logger);
 
+        /// <summary>
+        /// Logs event 2807 (warning): a connection remained broker-blocked through
+        /// <c>ConnectionBlockedTimeoutSeconds</c>; recovery is requested for that generation.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="Generation">Connection generation that stayed blocked.</param>
+        /// <param name="TimeoutSeconds">Configured blocked-duration timeout that elapsed.</param>
+        /// <param name="Reason">Block reason from the start of this blocked episode.</param>
+        [LoggerMessage(
+            EventId = 2807,
+            Level = LogLevel.Warning,
+            Message = "RabbitMQ connection generation {Generation} remained blocked for {TimeoutSeconds}s ({Reason}); requesting recovery")]
+        internal static partial void ConnectionBlockedTimeout(
+            ILogger logger,
+            long Generation,
+            int TimeoutSeconds,
+            string Reason);
+
         /// <summary>Logs event 2808 (information): a reconnect attempt is about to wait.</summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="Attempt">One-based attempt number for the current recovery.</param>

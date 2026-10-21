@@ -23,12 +23,49 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             Assert.Equal(1024, options.WorkRequestMaxPayloadBytes);
             Assert.Equal(60, options.ChannelLeaseTimeoutSeconds);
             Assert.Equal(30, options.RpcTimeoutSeconds);
+            Assert.Equal(30, options.ConnectionBlockedTimeoutSeconds);
+            Assert.Equal(30, options.SocketTimeoutSeconds);
             Assert.Empty(options.Hosts!);
             Assert.Equal("/", options.VirtualHost);
             Assert.True(options.EnableSsl);
             Assert.Equal(5672, options.Port);
             Assert.NotNull(options.Management);
             Assert.Null(options.Management.BaseUrl);
+        }
+
+        /// <summary>
+        /// ConnectionBlockedTimeoutSeconds below the validated minimum fails startup validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenConnectionBlockedTimeoutBelowMinimum()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ConnectionBlockedTimeoutSeconds = 4;
+            options.RpcTimeoutSeconds = 1;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ConnectionBlockedTimeoutSeconds", StringComparison.Ordinal)
+                    && failure.Contains("between 5 and 3600", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// ConnectionBlockedTimeoutSeconds must remain at least RpcTimeoutSeconds.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenConnectionBlockedTimeoutLessThanRpcTimeout()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.RpcTimeoutSeconds = 60;
+            options.ConnectionBlockedTimeoutSeconds = 30;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains(
+                    "ConnectionBlockedTimeoutSeconds must be greater than or equal to RpcTimeoutSeconds",
+                    StringComparison.Ordinal));
         }
 
         /// <summary>

@@ -59,8 +59,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         public int? RpcTimeoutSeconds { get; set; } = 30;
 
         /// <summary>
-        /// Maximum duration, in seconds, that a broker-blocked RabbitMQ connection may remain
-        /// blocked before recovery evaluation. Also used as the client connection timeout.
+        /// Maximum continuous duration, in seconds, that a broker-blocked RabbitMQ connection may
+        /// remain blocked before <see cref="RabbitMqService"/> retires that generation and reconnects.
+        /// Not the AMQP handshake timeout; handshake uses <see cref="SocketTimeoutSeconds"/>.
         /// </summary>
         public int? ConnectionBlockedTimeoutSeconds { get; set; } = 30;
 
@@ -197,7 +198,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         public int? RequestedHeartbeatSeconds { get; set; } = 60;
 
         /// <summary>
-        /// RabbitMQ socket operation timeout, in seconds, for low-level network I/O.
+        /// RabbitMQ socket read/write timeout and AMQP connection-establishment timeout
+        /// (<c>RequestedConnectionTimeout</c>), in seconds.
         /// </summary>
         public int? SocketTimeoutSeconds { get; set; } = 30;
 

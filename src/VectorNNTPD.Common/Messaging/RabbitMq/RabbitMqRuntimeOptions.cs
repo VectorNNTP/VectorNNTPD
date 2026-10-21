@@ -11,7 +11,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
     /// <param name="EnableSsl">Whether TLS is enabled for RabbitMQ connectivity.</param>
     /// <param name="ChannelLeaseTimeoutSeconds">Maximum channel lease timeout in seconds.</param>
     /// <param name="RpcTimeoutSeconds">Maximum RabbitMQ RPC timeout in seconds.</param>
-    /// <param name="ConnectionBlockedTimeoutSeconds">Maximum blocked-connection timeout in seconds.</param>
+    /// <param name="ConnectionBlockedTimeoutSeconds">Maximum continuous broker-blocked duration before generation retirement, in seconds.</param>
     /// <param name="ChannelPoolSize">Configured RabbitMQ channel pool size.</param>
     /// <param name="MinConnections">Configured minimum pooled RabbitMQ connections.</param>
     /// <param name="MaxConnections">Configured maximum pooled RabbitMQ connections.</param>
@@ -27,7 +27,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
     /// <param name="DegradedThreshold">Degraded health threshold ratio.</param>
     /// <param name="UnhealthyThreshold">Consecutive unhealthy evaluations threshold.</param>
     /// <param name="RequestedHeartbeatSeconds">Requested AMQP heartbeat in seconds.</param>
-    /// <param name="SocketTimeoutSeconds">Socket read/write timeout in seconds.</param>
+    /// <param name="SocketTimeoutSeconds">Socket read/write and AMQP connection-establishment timeout in seconds.</param>
     /// <param name="RequestedChannelMax">Requested channel max for AMQP negotiation.</param>
     /// <param name="ConsumerPrefetchCount">Optional RabbitMQ consumer prefetch count.</param>
     /// <param name="DiagnosticPayloadCorrelationId">Optional AMQP CorrelationId used to gate temporary payload diagnostics.</param>

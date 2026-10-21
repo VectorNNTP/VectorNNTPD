@@ -160,6 +160,12 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <summary>Raised by <see cref="SimulateLost"/>; not wired to a real broker.</summary>
         public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
+        /// <summary>Raised by <see cref="SimulateBlocked"/>; not wired to a real broker.</summary>
+        public event EventHandler<RabbitMqConnectionBlockedEventArgs>? ConnectionBlocked;
+
+        /// <summary>Raised by <see cref="SimulateUnblocked"/>; not wired to a real broker.</summary>
+        public event EventHandler? ConnectionUnblocked;
+
         /// <summary>Manual-ack channels created through this connection in order.</summary>
         public List<FakeBackFillerRabbitMqChannel> Channels { get; } = [];
 
@@ -300,6 +306,19 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         {
             IsOpen = false;
             ConnectionLost?.Invoke(this, new RabbitMqConnectionLostEventArgs(replyCode, replyText, initiator));
+        }
+
+        /// <summary>Raises <see cref="ConnectionBlocked"/> while leaving <see cref="IsOpen"/> unchanged.</summary>
+        /// <param name="reason">Block reason delivered to subscribers.</param>
+        internal void SimulateBlocked(string reason = "low on disk")
+        {
+            ConnectionBlocked?.Invoke(this, new RabbitMqConnectionBlockedEventArgs(reason));
+        }
+
+        /// <summary>Raises <see cref="ConnectionUnblocked"/> while leaving <see cref="IsOpen"/> unchanged.</summary>
+        internal void SimulateUnblocked()
+        {
+            ConnectionUnblocked?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>When set, thrown after dispose gates complete and the dispose count is incremented.</summary>

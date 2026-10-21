@@ -85,7 +85,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 TopologyRecoveryEnabled = false,
                 NetworkRecoveryInterval = TimeSpan.FromSeconds(options.NetworkRecoveryIntervalSeconds),
                 RequestedHeartbeat = TimeSpan.FromSeconds(options.RequestedHeartbeatSeconds),
-                RequestedConnectionTimeout = TimeSpan.FromSeconds(options.ConnectionBlockedTimeoutSeconds),
+                // Handshake/dial timeout is independent of ConnectionBlockedTimeoutSeconds, which
+                // RabbitMqService uses as the maximum continuous broker-blocked duration.
+                RequestedConnectionTimeout = TimeSpan.FromSeconds(options.SocketTimeoutSeconds),
                 ContinuationTimeout = TimeSpan.FromSeconds(options.RpcTimeoutSeconds),
                 HandshakeContinuationTimeout = TimeSpan.FromSeconds(options.RpcTimeoutSeconds),
                 SocketReadTimeout = TimeSpan.FromSeconds(options.SocketTimeoutSeconds),
