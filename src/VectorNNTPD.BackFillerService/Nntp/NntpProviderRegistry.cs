@@ -85,6 +85,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 {
                     TcpSendBufferBytes = runtime.Nntp.SendBufferBytes,
                     TcpReceiveBufferBytes = runtime.Nntp.ReceiveBufferBytes,
+                    TcpKeepAlive = runtime.TcpKeepAlive,
                 },
                 runtime.Shutdown.GracePeriod,
                 establishment,

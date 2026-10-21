@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
+using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.BackFillerService.Nntp;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
@@ -9,7 +10,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
     public sealed class TcpNntpTransportFactoryTests
     {
         /// <summary>
-        /// The connected socket has independent buffers and Nagle off before the first write, and the write still completes.
+        /// The connected socket has independent buffers, Nagle off, and TCP keepalive before the first write.
         /// </summary>
         [Fact]
         public async Task Connect_applies_independent_buffers_and_no_delay_before_the_first_write()
@@ -33,12 +34,53 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.True(client.Client.ReceiveBufferSize >= 128 * 1024);
             Assert.NotEqual(client.Client.SendBufferSize, client.Client.ReceiveBufferSize);
             Assert.Equal(64 * 1024, options.ReceiveBufferBytes);
+            Assert.True(TcpSocketOptions.IsKeepAliveEnabled(client.Client));
 
             await stream.WriteAsync(new byte[] { 7 });
             var received = new byte[1];
             Assert.Equal(1, await server.GetStream().ReadAsync(received));
             Assert.Equal(7, received[0]);
             Assert.True(client.Client.NoDelay);
+        }
+
+        /// <summary>
+        /// Issue #191: TCP keepalive is enabled even when provider DATE keepalive is disabled.
+        /// </summary>
+        [Fact]
+        public async Task Connect_enables_tcp_keepalive_when_provider_date_keepalive_is_disabled()
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var accepted = listener.AcceptTcpClientAsync();
+            var factory = new TcpNntpTransportFactory();
+            var provider = new BackFillerProviderDefinition(
+                "loopback",
+                "127.0.0.1",
+                port,
+                false,
+                null,
+                null,
+                0,
+                1,
+                KeepAliveSeconds: 0);
+            Assert.False(provider.DateKeepAliveEnabled);
+
+            await using var stream = await factory.ConnectAsync(
+                provider,
+                NntpSessionOptions.Default,
+                CancellationToken.None);
+            using var server = await accepted;
+            var client = ClientOf(stream);
+
+            Assert.True(TcpSocketOptions.IsKeepAliveEnabled(client.Client));
+            if (TcpSocketOptions.TryGetTcpKeepAliveProbeOption(
+                    client.Client,
+                    SocketOptionName.TcpKeepAliveTime,
+                    out var time))
+            {
+                Assert.Equal(TcpKeepAliveSettings.DefaultTimeSeconds, time);
+            }
         }
 
         /// <summary>A second connect gets its own configured socket after the first stream is disposed.</summary>
@@ -65,6 +107,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.True(client.Client.SendBufferSize >= 64 * 1024);
                 Assert.True(client.Client.ReceiveBufferSize >= 256 * 1024);
                 Assert.NotEqual(client.Client.SendBufferSize, client.Client.ReceiveBufferSize);
+                Assert.True(TcpSocketOptions.IsKeepAliveEnabled(client.Client));
             }
         }
 

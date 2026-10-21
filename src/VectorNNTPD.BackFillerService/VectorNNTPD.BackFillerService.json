@@ -28,6 +28,11 @@
       "ReceiveBufferBytes": 2097152,
       "SendBufferBytes": 1048576
     },
+    "TcpKeepAlive": {
+      "TimeSeconds": 10,
+      "IntervalSeconds": 5,
+      "RetryCount": 3
+    },
     "Logging": {
       "LogLevel": "Information",
       "LogRetentionDays": 14,

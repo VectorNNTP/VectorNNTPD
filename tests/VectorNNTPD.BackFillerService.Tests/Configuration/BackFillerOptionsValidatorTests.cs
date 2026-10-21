@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Hosting;
+using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.Common.Configuration;
@@ -533,6 +534,45 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.True(result.Succeeded);
         }
 
+        /// <summary>Issue #191: omitted TcpKeepAlive keys keep the documented defaults.</summary>
+        [Fact]
+        public void Validate_uses_default_tcp_keepalive_when_omitted()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            Assert.Equal(TcpKeepAliveSettings.DefaultTimeSeconds, options.TcpKeepAlive.TimeSeconds);
+            Assert.Equal(TcpKeepAliveSettings.DefaultIntervalSeconds, options.TcpKeepAlive.IntervalSeconds);
+            Assert.Equal(TcpKeepAliveSettings.DefaultRetryCount, options.TcpKeepAlive.RetryCount);
+
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
+
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidNntpDb());
+            Assert.Equal(TcpKeepAliveSettings.Default, runtime.TcpKeepAlive);
+        }
+
+        /// <summary>Issue #191: out-of-range TcpKeepAlive values fail validation.</summary>
+        [Fact]
+        public void Validate_rejects_out_of_range_tcp_keepalive()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.TcpKeepAlive.TimeSeconds = 0;
+            options.TcpKeepAlive.IntervalSeconds = 0;
+            options.TcpKeepAlive.RetryCount = 0;
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.False(result.Succeeded);
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("BackFiller:TcpKeepAlive:TimeSeconds", StringComparison.Ordinal));
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("BackFiller:TcpKeepAlive:IntervalSeconds", StringComparison.Ordinal));
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("BackFiller:TcpKeepAlive:RetryCount", StringComparison.Ordinal));
+        }
+
         /// <summary>Runtime snapshot copies each buffer without coupling send to receive or upstream to the listener.</summary>
         [Fact]
         public void Runtime_options_project_independent_tcp_buffers()
@@ -544,6 +584,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             options.Listener.ReceiveBufferBytes = 256 * 1024;
             options.Nntp.MaxConcurrentSessionEstablishments = BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments;
             options.Listener.MaxActiveConnections = 1024;
+            options.TcpKeepAlive.TimeSeconds = 11;
+            options.TcpKeepAlive.IntervalSeconds = 4;
+            options.TcpKeepAlive.RetryCount = 5;
 
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 options,
@@ -554,6 +597,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(128 * 1024, runtime.Listener.SendBufferBytes);
             Assert.Equal(256 * 1024, runtime.Listener.ReceiveBufferBytes);
             Assert.Equal(1024, runtime.Listener.MaxActiveConnections);
+            Assert.Equal(new TcpKeepAliveSettings(11, 4, 5), runtime.TcpKeepAlive);
             Assert.Equal(
                 BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments,
                 runtime.Nntp.MaxConcurrentSessionEstablishments);

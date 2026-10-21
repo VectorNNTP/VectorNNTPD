@@ -1060,7 +1060,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
         }
 
         /// <summary>
-        /// Asserts Nagle is off and that the OS-reported buffers are at least the requested sizes and are not the same value.
+        /// Asserts Nagle is off, TCP keepalive is on, and the OS-reported buffers are at least the requested sizes and are not the same value.
         /// </summary>
         /// <param name="socket">Accepted socket under test.</param>
         /// <param name="send">Requested send-buffer limit.</param>
@@ -1068,6 +1068,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
         private static void AssertRequestedBuffers(Socket socket, int send, int receive)
         {
             Assert.True(socket.NoDelay);
+            Assert.True(TcpSocketOptions.IsKeepAliveEnabled(socket));
             Assert.True(socket.SendBufferSize >= send, $"send buffer {socket.SendBufferSize} is below {send}");
             Assert.True(socket.ReceiveBufferSize >= receive, $"receive buffer {socket.ReceiveBufferSize} is below {receive}");
             Assert.NotEqual(socket.SendBufferSize, socket.ReceiveBufferSize);

@@ -1,5 +1,6 @@
 using MySqlConnector;
 using VectorNNTPD.BackFillerService.Acme;
+using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.Common.Configuration;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.Acme;
@@ -154,6 +155,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
             var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
             var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
             var nntp = options.Nntp ?? throw new InvalidOperationException("BackFiller:Nntp is required.");
+            var tcpKeepAlive = options.TcpKeepAlive ?? throw new InvalidOperationException("BackFiller:TcpKeepAlive is required.");
 
             return new BackFillerRuntimeOptions(
                 ServerId: serverId,
@@ -193,7 +195,11 @@ namespace VectorNNTPD.BackFillerService.Configuration
                 Nntp: new BackFillerNntpRuntimeOptions(
                     nntp.MaxConcurrentSessionEstablishments,
                     nntp.SendBufferBytes,
-                    nntp.ReceiveBufferBytes));
+                    nntp.ReceiveBufferBytes),
+                TcpKeepAlive: new TcpKeepAliveSettings(
+                    tcpKeepAlive.TimeSeconds,
+                    tcpKeepAlive.IntervalSeconds,
+                    tcpKeepAlive.RetryCount));
         }
 
         /// <summary>Resolves the file-log directory, or returns empty when that directory is blank.</summary>
