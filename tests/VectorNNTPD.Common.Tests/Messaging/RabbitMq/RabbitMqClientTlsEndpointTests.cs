@@ -127,6 +127,28 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         }
 
         /// <summary>
+        /// AMQP connection establishment uses <c>SocketTimeoutSeconds</c>, not the blocked-duration setting.
+        /// </summary>
+        [Fact]
+        public void CreateClientFactory_uses_socket_timeout_for_requested_connection_timeout()
+        {
+            var options = RabbitMqOptionsValidatorTests.CreateValidConnectivityOnly();
+            options.SocketTimeoutSeconds = 17;
+            options.ConnectionBlockedTimeoutSeconds = 45;
+            options.RpcTimeoutSeconds = 30;
+            var factory = RabbitMqClientConnectionFactory.CreateClientFactory(
+                options.ToRuntimeOptions(),
+                "VectorNNTPD.Common.Tests:timeouts");
+
+            Assert.Equal(TimeSpan.FromSeconds(17), factory.RequestedConnectionTimeout);
+            Assert.Equal(TimeSpan.FromSeconds(17), factory.SocketReadTimeout);
+            Assert.Equal(TimeSpan.FromSeconds(17), factory.SocketWriteTimeout);
+            Assert.NotEqual(
+                TimeSpan.FromSeconds(45),
+                factory.RequestedConnectionTimeout);
+        }
+
+        /// <summary>
         /// TLS-disabled factory keeps SSL disabled with protocol defaults unchanged.
         /// </summary>
         [Fact]

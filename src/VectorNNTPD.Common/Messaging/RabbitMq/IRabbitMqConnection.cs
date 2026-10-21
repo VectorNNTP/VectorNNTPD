@@ -34,6 +34,24 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
         /// <summary>
+        /// Raised when the broker blocks the connection (for example under resource alarm).
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RabbitMqService"/> is the only production subscriber. The connection remains
+        /// open; the service owns the blocked-duration timeout and recovery decision.
+        /// </remarks>
+        event EventHandler<RabbitMqConnectionBlockedEventArgs>? ConnectionBlocked;
+
+        /// <summary>
+        /// Raised when the broker clears a prior block on this connection.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="RabbitMqService"/> is the only production subscriber. Cancels a pending
+        /// blocked-duration timeout for the current generation when the sender is still current.
+        /// </remarks>
+        event EventHandler? ConnectionUnblocked;
+
+        /// <summary>
         /// Opens a short-lived channel that can declare exchanges, queues, and bindings.
         /// </summary>
         /// <param name="cancellationToken">Token used to cancel channel creation.</param>

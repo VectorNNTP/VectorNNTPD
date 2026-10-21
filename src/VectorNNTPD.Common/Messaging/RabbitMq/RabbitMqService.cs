@@ -13,7 +13,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
     /// <see cref="StartAsync"/> fails if an initial usable connection cannot be established, and it
     /// disposes any partial connect before returning. After start, a lost connection is not terminal:
     /// one watch task reconnects with backoff until a new generation is installed or shutdown cancels
-    /// the loop. RabbitMQ.Client automatic recovery is disabled; this service is the only lifecycle owner.
+    /// the loop. A connection that remains broker-blocked longer than
+    /// <see cref="RabbitMqRuntimeOptions.ConnectionBlockedTimeoutSeconds"/> requests the same recovery
+    /// path while the AMQP session may still be open. RabbitMQ.Client automatic recovery is disabled;
+    /// this service is the only lifecycle owner.
     /// </para>
     /// <para>
     /// Callers obtain a generation snapshot with <see cref="TryGetCurrent"/>. A handle does not
@@ -79,6 +82,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// Set under <see cref="_gate"/> when shutdown starts. Blocks publication and ignores recovery requests.
         /// </summary>
         private bool _stopping;
+
+        /// <summary>
+        /// Cancels the pending blocked-duration timeout for the current generation.
+        /// Owned under <see cref="_gate"/>; replaced only when a new blocked episode starts.
+        /// </summary>
+        private CancellationTokenSource? _blockedTimeoutCts;
 
         /// <summary>
         /// Creates the process connection owner, using <see cref="TimeProvider.System"/> for reconnect delays.
@@ -252,6 +261,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             lock (_gate)
             {
                 _stopping = true;
+                CancelBlockedTimeoutLocked();
             }
 
             await _runCts.CancelAsync().ConfigureAwait(false);
@@ -417,7 +427,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 var previous = live.Replaced;
                 if (previous is not null)
                 {
-                    previous.Connection.ConnectionLost -= OnConnectionLost;
+                    DetachConnectionHandlers(previous.Connection);
                     await DisposeConnectionQuietlyAsync(previous.Connection).ConfigureAwait(false);
                 }
 
@@ -531,29 +541,31 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         }
 
         /// <summary>
-        /// Subscribes to connection loss, then publishes <paramref name="connection"/> as the next generation.
+        /// Subscribes to connection lifecycle events, then publishes <paramref name="connection"/> as the next generation.
         /// </summary>
         /// <param name="connection">Open connection to make current. The caller must not dispose it after a successful return.</param>
         /// <returns>The installed generation and the previous generation, if one was still published.</returns>
-        /// <exception cref="InvalidOperationException">The service is stopping. The loss handler is removed and the connection is not published.</exception>
+        /// <exception cref="InvalidOperationException">The service is stopping. Handlers are removed and the connection is not published.</exception>
         /// <remarks>
         /// Does not dispose <paramref name="connection"/> or the previous generation. The caller disposes the previous one.
-        /// A close that races this method is still observed because the handler is attached before the publish.
+        /// A close that races this method is still observed because the handlers are attached before the publish.
+        /// Any pending blocked-duration timeout from a prior generation is cancelled when a new generation is published.
         /// </remarks>
         private PublishedConnection Publish(IRabbitMqConnection connection)
         {
-            // Subscribe before making the instance current so a close that races the
-            // publish is observed. OnConnectionLost still ignores a sender that is not current.
-            connection.ConnectionLost += OnConnectionLost;
+            // Subscribe before making the instance current so a close or block that races the
+            // publish is observed. Handlers still ignore a sender that is not current.
+            AttachConnectionHandlers(connection);
 
             lock (_gate)
             {
                 if (_stopping)
                 {
-                    connection.ConnectionLost -= OnConnectionLost;
+                    DetachConnectionHandlers(connection);
                     throw new InvalidOperationException("RabbitMQ service is stopping.");
                 }
 
+                CancelBlockedTimeoutLocked();
                 var previous = _current;
                 _generation++;
                 var current = new LiveConnection(connection, _generation);
@@ -561,6 +573,24 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 ConnectionCount++;
                 return new PublishedConnection(current, previous);
             }
+        }
+
+        /// <summary>Attaches loss, blocked, and unblocked handlers for a connection about to be published.</summary>
+        /// <param name="connection">Connection whose events this service will observe.</param>
+        private void AttachConnectionHandlers(IRabbitMqConnection connection)
+        {
+            connection.ConnectionLost += OnConnectionLost;
+            connection.ConnectionBlocked += OnConnectionBlocked;
+            connection.ConnectionUnblocked += OnConnectionUnblocked;
+        }
+
+        /// <summary>Detaches loss, blocked, and unblocked handlers from a retired or unpublished connection.</summary>
+        /// <param name="connection">Connection that must no longer raise recovery work into this service.</param>
+        private void DetachConnectionHandlers(IRabbitMqConnection connection)
+        {
+            connection.ConnectionLost -= OnConnectionLost;
+            connection.ConnectionBlocked -= OnConnectionBlocked;
+            connection.ConnectionUnblocked -= OnConnectionUnblocked;
         }
 
         /// <summary>
@@ -582,6 +612,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     return;
                 }
 
+                CancelBlockedTimeoutLocked();
                 generation = current.Generation;
             }
 
@@ -592,6 +623,180 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 eventArgs.ReplyText,
                 eventArgs.Initiator);
             RequestRecovery();
+        }
+
+        /// <summary>
+        /// Starts a single blocked-duration timeout for the current connection generation.
+        /// Duplicate blocked notifications for the same episode are ignored.
+        /// </summary>
+        /// <param name="sender">Connection that raised the block. Ignored unless it is still <see cref="_current"/>.</param>
+        /// <param name="eventArgs">Broker block reason preserved for timeout logging.</param>
+        /// <remarks>
+        /// Does not block the AMQP callback thread on I/O. The timeout uses <see cref="_timeProvider"/>
+        /// elapsed-duration delay and requests recovery through <see cref="RequestRecovery"/> only if
+        /// that same generation is still current and still blocked when the delay completes.
+        /// </remarks>
+        private void OnConnectionBlocked(object? sender, RabbitMqConnectionBlockedEventArgs eventArgs)
+        {
+            CancellationTokenSource cts;
+            long generation;
+            IRabbitMqConnection connection;
+            int timeoutSeconds;
+            lock (_gate)
+            {
+                if (_stopping
+                    || _runtime is null
+                    || _current is not { } current
+                    || !ReferenceEquals(current.Connection, sender))
+                {
+                    return;
+                }
+
+                // One timer per continuous blocked episode; duplicates must not stack.
+                if (_blockedTimeoutCts is not null)
+                {
+                    return;
+                }
+
+                timeoutSeconds = _runtime.ConnectionBlockedTimeoutSeconds;
+                generation = current.Generation;
+                connection = current.Connection;
+                cts = CancellationTokenSource.CreateLinkedTokenSource(_runCts.Token);
+                _blockedTimeoutCts = cts;
+            }
+
+            _ = ObserveBlockedTimeoutAsync(generation, connection, timeoutSeconds, eventArgs.Reason, cts);
+        }
+
+        /// <summary>
+        /// Cancels a pending blocked-duration timeout when the current generation unblocks.
+        /// </summary>
+        /// <param name="sender">Connection that raised the unblock. Ignored unless it is still <see cref="_current"/>.</param>
+        /// <param name="eventArgs">Unused.</param>
+        private void OnConnectionUnblocked(object? sender, EventArgs eventArgs)
+        {
+            lock (_gate)
+            {
+                if (_stopping
+                    || _current is not { } current
+                    || !ReferenceEquals(current.Connection, sender))
+                {
+                    return;
+                }
+
+                CancelBlockedTimeoutLocked();
+            }
+        }
+
+        /// <summary>
+        /// Waits for the configured blocked duration, then requests recovery when that generation is still current.
+        /// </summary>
+        /// <param name="generation">Generation that started the blocked episode.</param>
+        /// <param name="connection">Connection instance that must still be current at expiry.</param>
+        /// <param name="timeoutSeconds">Configured continuous blocked-duration limit.</param>
+        /// <param name="reason">Block reason captured at episode start.</param>
+        /// <param name="cts">Episode cancellation source; must match <see cref="_blockedTimeoutCts"/> at expiry.</param>
+        /// <remarks>
+        /// <para>
+        /// Linearization versus unblock/lost/shutdown: after the delay completes, recovery is claimed only by
+        /// clearing <see cref="_blockedTimeoutCts"/> under <see cref="_gate"/> while it still references
+        /// <paramref name="cts"/>. <see cref="CancelBlockedTimeoutLocked"/> (unblock, lost, retire, publish,
+        /// dispose) nulls that field first, so a timeout that loses the race returns without
+        /// <see cref="RequestRecovery"/>. A timeout that wins cannot be undone by a later unblock: the CTS
+        /// slot is empty, and <see cref="RequestRecovery"/> is gated again on <see cref="_stopping"/>.
+        /// </para>
+        /// <para>
+        /// Delay completion alone is not the claim; an unblock that cancels between completion and this lock
+        /// still wins. Stale senders never reach <see cref="CancelBlockedTimeoutLocked"/> for another
+        /// generation because blocked/unblocked handlers require <c>ReferenceEquals</c> with <see cref="_current"/>.
+        /// </para>
+        /// </remarks>
+        private async Task ObserveBlockedTimeoutAsync(
+            long generation,
+            IRabbitMqConnection connection,
+            int timeoutSeconds,
+            string reason,
+            CancellationTokenSource cts)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(timeoutSeconds), _timeProvider, cts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+            {
+                // Includes ObjectDisposedException if the CTS was disposed between schedule and Token use.
+                RabbitMqLogMessages.CallbackException(_logger, ex.Message);
+                return;
+            }
+
+            var shouldRecover = false;
+            lock (_gate)
+            {
+                // Claim point: only the CTS still installed for this episode may clear state or recover.
+                if (!ReferenceEquals(_blockedTimeoutCts, cts))
+                {
+                    return;
+                }
+
+                _blockedTimeoutCts = null;
+                shouldRecover = !_stopping
+                    && _current is { } current
+                    && current.Generation == generation
+                    && ReferenceEquals(current.Connection, connection);
+            }
+
+            try
+            {
+                cts.Dispose();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Dispose");
+            }
+
+            if (!shouldRecover)
+            {
+                return;
+            }
+
+            RabbitMqLogMessages.ConnectionBlockedTimeout(_logger, generation, timeoutSeconds, reason);
+            RequestRecovery();
+        }
+
+        /// <summary>
+        /// Cancels and clears <see cref="_blockedTimeoutCts"/> under <see cref="_gate"/>.
+        /// </summary>
+        private void CancelBlockedTimeoutLocked()
+        {
+            var cts = _blockedTimeoutCts;
+            _blockedTimeoutCts = null;
+            if (cts is null)
+            {
+                return;
+            }
+
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Cancel");
+            }
+
+            try
+            {
+                cts.Dispose();
+            }
+            catch (ObjectDisposedException ex)
+            {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Dispose");
+            }
         }
 
         /// <summary>
@@ -643,7 +848,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         }
 
         /// <summary>
-        /// Unpublishes the current connection, detaches its loss handler, and disposes it. No-op when none is current.
+        /// Unpublishes the current connection, cancels any blocked-duration timeout, detaches handlers, and disposes it.
+        /// No-op when none is current.
         /// </summary>
         private async Task RetireCurrentAsync()
         {
@@ -652,6 +858,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 current = _current;
                 _current = null;
+                CancelBlockedTimeoutLocked();
             }
 
             if (current is null)
@@ -659,7 +866,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 return;
             }
 
-            current.Connection.ConnectionLost -= OnConnectionLost;
+            DetachConnectionHandlers(current.Connection);
             await DisposeConnectionQuietlyAsync(current.Connection).ConfigureAwait(false);
         }
 

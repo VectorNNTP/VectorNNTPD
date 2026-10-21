@@ -20,7 +20,7 @@ Top-level `RabbitMQ` section. The Common sample is `src/VectorNNTPD.Common/Vecto
 
 NNTPD and StorageServer are not projects in this repository, so their build output is not part of the contract here. BackFiller ships connectivity in `src/VectorNNTPD.BackFillerService/VectorNNTPD.RabbitMQ.json`. Its primary file, `VectorNNTPD.BackFillerService.json`, still must not repeat a top-level `RabbitMQ` section. `BackFiller:Logging:RabbitMQ` is the log sink, not broker connectivity.
 
-`RabbitMqService` owns one process-wide connection, verifies that it is open, and replaces it on connectivity loss while incrementing a monotonic generation. Client automatic recovery is disabled. The AMQP client name comes from `IRabbitMqConnectionNameProvider`. Callers obtain the current connection with `TryGetCurrent` and do not dispose it.
+`RabbitMqService` owns one process-wide connection, verifies that it is open, and replaces it on connectivity loss or when a broker block lasts longer than `ConnectionBlockedTimeoutSeconds`, while incrementing a monotonic generation. Client automatic recovery is disabled. The AMQP client name comes from `IRabbitMqConnectionNameProvider`. Callers obtain the current connection with `TryGetCurrent` and do not dispose it.
 
 There is no application-level RabbitMQ connection pool. `MinConnections` and `MaxConnections` are validated and are not enforced as a pool.
 
@@ -33,10 +33,10 @@ There is no application-level RabbitMQ connection pool. `MinConnections` and `Ma
 | `VirtualHost` | string | `/` | **yes** | RabbitMQ virtual host |
 | `EnableSsl` | bool | `true` | **yes** | Whether the connection uses TLS (TLS 1.2 and 1.3) |
 | `RequestedHeartbeatSeconds` | int | `60` | **yes** | AMQP heartbeat (`0–3600`; `0` disables) |
-| `SocketTimeoutSeconds` | int | `30` | **yes** | Socket read/write timeout (`5–600`) |
+| `SocketTimeoutSeconds` | int | `30` | **yes** | Socket read/write timeout and AMQP connection establishment (`RequestedConnectionTimeout`) (`5–600`) |
 | `RequestedChannelMax` | int | `2047` | **yes** | Requested channel limit per connection (`1–65535`) |
 | `RpcTimeoutSeconds` | int | `30` | **yes** | Client continuation/handshake timeout (`1–3600`) |
-| `ConnectionBlockedTimeoutSeconds` | int | `30` | **yes** | Client connection timeout (`5–3600`; must be ≥ `RpcTimeoutSeconds`) |
+| `ConnectionBlockedTimeoutSeconds` | int | `30` | **yes** | Maximum continuous broker-blocked duration before the connection generation is retired and multi-host reconnect runs (`5–3600`; must be ≥ `RpcTimeoutSeconds`). Not the AMQP dial timeout. |
 | `NetworkRecoveryIntervalSeconds` | int | `5` | **yes** | Client recovery-interval setting (`1–3600`; unused while automatic recovery is disabled) |
 | `PoolReconnectBaseDelayMs` | int | `250` | **yes** | Application reconnect base delay (`50–60000`) |
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |

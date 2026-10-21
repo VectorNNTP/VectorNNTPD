@@ -861,12 +861,39 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             public event EventHandler<RabbitMqConnectionLostEventArgs>? ConnectionLost;
 
             /// <summary>
+            /// Raised by <see cref="SimulateBlocked"/> with the supplied broker block reason.
+            /// </summary>
+            public event EventHandler<RabbitMqConnectionBlockedEventArgs>? ConnectionBlocked;
+
+            /// <summary>
+            /// Raised by <see cref="SimulateUnblocked"/>.
+            /// </summary>
+            public event EventHandler? ConnectionUnblocked;
+
+            /// <summary>
             /// Sets <see cref="IsOpen"/> to <see langword="false"/> and invokes <see cref="ConnectionLost"/> when a handler is attached.
             /// </summary>
             public void SimulateLost()
             {
                 IsOpen = false;
                 ConnectionLost?.Invoke(this, new RabbitMqConnectionLostEventArgs(320, "lost", "Peer"));
+            }
+
+            /// <summary>
+            /// Invokes <see cref="ConnectionBlocked"/> without changing <see cref="IsOpen"/>.
+            /// </summary>
+            /// <param name="reason">Block reason delivered to subscribers.</param>
+            public void SimulateBlocked(string reason = "low on disk")
+            {
+                ConnectionBlocked?.Invoke(this, new RabbitMqConnectionBlockedEventArgs(reason));
+            }
+
+            /// <summary>
+            /// Invokes <see cref="ConnectionUnblocked"/> without changing <see cref="IsOpen"/>.
+            /// </summary>
+            public void SimulateUnblocked()
+            {
+                ConnectionUnblocked?.Invoke(this, EventArgs.Empty);
             }
 
             /// <summary>
