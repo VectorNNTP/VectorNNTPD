@@ -935,6 +935,37 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
         }
 
         /// <summary>
+        /// An unexpected accept-task fault is not treated as an expected dispose observation; cleanup still stops,
+        /// then dispose rethrows so the programming error remains visible.
+        /// </summary>
+        [Fact]
+        public async Task Unexpected_accept_fault_is_not_swallowed_by_dispose()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            service.AcceptAsyncOverride = (_, _) =>
+                ValueTask.FromException<Socket>(new DivideByZeroException("accept boom"));
+
+            await service.StartAsync(CancellationToken.None);
+            var execution = service.Execution;
+            Assert.NotNull(execution);
+            await Assert.ThrowsAnyAsync<Exception>(async () => await execution);
+            Assert.True(execution.IsFaulted);
+
+            var disposeFault = await Record.ExceptionAsync(async () => await service.DisposeAsync());
+            Assert.NotNull(disposeFault);
+            Assert.Contains(
+                disposeFault is AggregateException aggregate
+                    ? aggregate.Flatten().InnerExceptions
+                    : [disposeFault],
+                static ex => ex is DivideByZeroException || ex.GetBaseException() is DivideByZeroException);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5419);
+            Assert.Equal(CacheListenerState.Stopped, service.State);
+        }
+
+        /// <summary>
         /// Cancellation during accept backoff exits the loop without treating shutdown as an unexpected failure.
         /// </summary>
         [Fact]

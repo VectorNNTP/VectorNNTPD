@@ -370,9 +370,14 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <remarks>
         /// State moves to <see cref="CacheListenerState.Retiring"/> before cancel, then to
         /// <see cref="CacheListenerState.Stopped"/> after drain. <see cref="OperationCanceledException"/> from the
-        /// accept task is ignored. Any other accept-task fault is logged and ignored here so drain and the stopped
-        /// state still run; <see cref="Execution"/> already exposed that fault to
+        /// accept task is ignored. Expected accept-task faults
+        /// (<see cref="InvalidOperationException"/> after consecutive accept failures,
+        /// <see cref="ObjectDisposedException"/>, <see cref="SocketException"/>, and
+        /// <see cref="AggregateException"/> containing only those) are logged and ignored here so drain and the
+        /// stopped state still run; <see cref="Execution"/> already exposed those faults to
         /// <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/>.
+        /// Unexpected accept-task <see cref="AggregateException"/> faults are retained, cleanup still reaches
+        /// <see cref="CacheListenerState.Stopped"/>, then the aggregate is rethrown so programming errors stay visible.
         /// Connection-task exceptions are logged and ignored by <see cref="DrainConnectionsAsync"/>.
         /// The run token source is disposed before the stopped state.
         /// </remarks>
@@ -392,24 +397,11 @@ namespace VectorNNTPD.BackFillerService.Listener
             await _runCts.CancelAsync().ConfigureAwait(false);
             CloseListenSockets();
 
+            Exception? unexpectedAcceptFault = null;
             var accept = _acceptTask;
             if (accept is not null)
             {
-                try
-                {
-                    await accept.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    ShutdownObservations.Canceled(_logger, "cache listener accept loop");
-                }
-                // codeql[cs/catch-of-all-exceptions] Accept-loop faults must not skip drain or leave the listener stuck in Retiring.
-                catch (Exception ex)
-                {
-                    CacheListenerLogMessages.AcceptLoopFaultDuringDispose(
-                        _logger,
-                        ex.GetBaseException().GetType().Name);
-                }
+                unexpectedAcceptFault = await ObserveAcceptTaskDuringDisposeAsync(accept).ConfigureAwait(false);
             }
 
             await DrainConnectionsAsync().ConfigureAwait(false);
@@ -421,6 +413,131 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
 
             CacheListenerLogMessages.Stopped(_logger);
+
+            if (unexpectedAcceptFault is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(unexpectedAcceptFault).Throw();
+            }
+        }
+
+        /// <summary>
+        /// Observes <paramref name="accept"/> during dispose without a catch-all. Expected faults are logged;
+        /// unexpected aggregates are returned for rethrow after cleanup reaches <see cref="CacheListenerState.Stopped"/>.
+        /// </summary>
+        /// <param name="accept">The accept-loop task published as <see cref="Execution"/>.</param>
+        /// <returns>An unexpected fault to rethrow after cleanup, or <see langword="null"/>.</returns>
+        private async Task<Exception?> ObserveAcceptTaskDuringDisposeAsync(Task accept)
+        {
+            if (accept.IsCompleted)
+            {
+                return ClassifyCompletedAcceptTask(accept);
+            }
+
+            try
+            {
+                await accept.ConfigureAwait(false);
+                return null;
+            }
+            catch (OperationCanceledException)
+            {
+                ShutdownObservations.Canceled(_logger, "cache listener accept loop");
+                return null;
+            }
+            catch (ObjectDisposedException ex)
+            {
+                ObserveExpectedAcceptLoopFaultDuringDispose(ex);
+                return null;
+            }
+            catch (SocketException ex)
+            {
+                ObserveExpectedAcceptLoopFaultDuringDispose(ex);
+                return null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                ObserveExpectedAcceptLoopFaultDuringDispose(ex);
+                return null;
+            }
+            catch (AggregateException ex)
+            {
+                if (IsExpectedAcceptLoopAggregate(ex))
+                {
+                    ObserveExpectedAcceptLoopFaultDuringDispose(ex);
+                    return null;
+                }
+
+                return ex;
+            }
+        }
+
+        /// <summary>
+        /// Classifies an already-completed accept task using <see cref="Task.Exception"/> (always an aggregate when faulted).
+        /// </summary>
+        /// <param name="accept">Completed accept-loop task.</param>
+        /// <returns>Unexpected aggregate to rethrow after cleanup, or <see langword="null"/>.</returns>
+        private Exception? ClassifyCompletedAcceptTask(Task accept)
+        {
+            if (accept.IsCanceled)
+            {
+                ShutdownObservations.Canceled(_logger, "cache listener accept loop");
+                return null;
+            }
+
+            if (!accept.IsFaulted)
+            {
+                return null;
+            }
+
+            var fault = accept.Exception!;
+            if (IsExpectedAcceptLoopAggregate(fault))
+            {
+                ObserveExpectedAcceptLoopFaultDuringDispose(fault);
+                return null;
+            }
+
+            return fault;
+        }
+
+        /// <summary>
+        /// Logs an expected accept-task fault observed while disposing. Terminal accept failures were already
+        /// logged by the accept loop; this records that dispose continued cleanup.
+        /// </summary>
+        /// <param name="exception">Expected fault from <see cref="_acceptTask"/>.</param>
+        private void ObserveExpectedAcceptLoopFaultDuringDispose(Exception exception) =>
+            CacheListenerLogMessages.AcceptLoopFaultDuringDispose(
+                _logger,
+                exception.GetBaseException().GetType().Name);
+
+        /// <summary>
+        /// Reports whether every flattened inner exception is an expected accept-loop fault type.
+        /// </summary>
+        /// <param name="exception">Fault from <see cref="Task.WhenAll(System.Collections.Generic.IEnumerable{Task})"/> via <see cref="AcceptAllAsync"/>.</param>
+        /// <returns>
+        /// <see langword="true"/> when every inner is <see cref="InvalidOperationException"/>,
+        /// <see cref="ObjectDisposedException"/>, <see cref="SocketException"/>, or
+        /// <see cref="OperationCanceledException"/>.
+        /// </returns>
+        private static bool IsExpectedAcceptLoopAggregate(AggregateException exception)
+        {
+            var inners = exception.Flatten().InnerExceptions;
+            if (inners.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var inner in inners)
+            {
+                if (inner is not (
+                    InvalidOperationException
+                    or ObjectDisposedException
+                    or SocketException
+                    or OperationCanceledException))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>Binds each planned endpoint, skipping unsupported implicit-wildcard families.</summary>
