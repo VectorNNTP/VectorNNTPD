@@ -186,7 +186,9 @@ namespace VectorNNTPD.BackFillerService.Configuration
                 RabbitMq: new BackFillerRabbitMqRuntimeOptions(
                     WorkRequestMaxPayloadBytes: rabbitMq.WorkRequestMaxPayloadBytes ?? 1024,
                     PublishConfirmTimeoutSeconds: rabbitMq.PublishConfirmTimeoutSeconds ?? 10,
-                    ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount),
+                    ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount,
+                    QuorumInitialGroupSize: rabbitMq.ArticleWorkQuorumInitialGroupSize ?? 3,
+                    DeliveryLimit: rabbitMq.ArticleWorkDeliveryLimit ?? 10),
                 NntpDb: new NntpDbRuntimeOptions(
                     nntpDb.ConnectionString.Trim(),
                     nntpDbBuilder.Server ?? string.Empty,

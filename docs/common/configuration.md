@@ -42,6 +42,8 @@ There is no application-level RabbitMQ connection pool. `MinConnections` and `Ma
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
 | `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
 | `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Maximum admitted Article Work request payload bytes (`1–4096`) |
+| `ArticleWorkQuorumInitialGroupSize` | int | `3` | **yes** | Declared `x-quorum-initial-group-size` and readiness membership floor (`1–7`). Applies only at queue creation; RabbitMQ does not grow an existing group when nodes join later. Existing under-provisioned groups require operator membership growth. BackFiller also requires Management HTTP verification of members, online members, and leader before a backbone is ready |
+| `ArticleWorkDeliveryLimit` | int | `10` | **yes** | Declared `x-delivery-limit` and application requeue cap (`1–1000`). Bounds poison-message Raft growth while allowing transient retries. With count `0..(limit-1)` the app may requeue; at `limit` it rejects without requeue. No DLX is declared; exhausted messages are dropped |
 | `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |
 | `MinConnections` | int | `4` | **yes** | Validated; reserved (`1–512`; ≤ `MaxConnections`) |
 | `MaxConnections` | int | `16` | **yes** | Validated; reserved (`1–512`) |

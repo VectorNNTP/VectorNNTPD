@@ -22,7 +22,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Original consumer channel. Settlement never moves to a replacement channel.</summary>
         private readonly IRabbitMqManualAckChannel _channel;
 
-        /// <summary>Channel-scoped delivery tag passed to Basic.Ack or Basic.Nack.</summary>
+        /// <summary>Channel-scoped delivery tag passed to Basic.Ack or Basic.Reject.</summary>
         private readonly ulong _deliveryTag;
 
         /// <summary>Connection generation the channel must still report for the settlement to proceed.</summary>
@@ -102,7 +102,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     }
                     else
                     {
-                        await _channel.BasicNackAsync(_deliveryTag, disposition.Requeue, CancellationToken.None).ConfigureAwait(false);
+                        // basic.reject (not basic.nack): quorum x-delivery-count must increment on RMQ 4.3+.
+                        await _channel.BasicRejectAsync(_deliveryTag, disposition.Requeue, CancellationToken.None)
+                            .ConfigureAwait(false);
                     }
 
                     return true;

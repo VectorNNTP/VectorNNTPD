@@ -214,6 +214,25 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         public ushort? ConsumerPrefetchCount { get; set; }
 
         /// <summary>
+        /// Initial quorum group size declared on Article Work provider queues (<c>x-quorum-initial-group-size</c>).
+        /// </summary>
+        /// <remarks>
+        /// Applies at queue creation time. RabbitMQ does not grow an existing group when cluster nodes join later;
+        /// under-provisioned queues require operator membership growth. Validated range is <c>1–7</c>.
+        /// </remarks>
+        public int? ArticleWorkQuorumInitialGroupSize { get; set; } = 3;
+
+        /// <summary>
+        /// Finite delivery limit declared on Article Work provider queues (<c>x-delivery-limit</c>).
+        /// </summary>
+        /// <remarks>
+        /// Caps how many times a quorum-queue message may be delivered and NACKed before the broker
+        /// dead-letters or drops it. Validated range is <c>1–1000</c>. Default <c>10</c> bounds poison-message
+        /// Raft growth while allowing transient provider and publish failures to retry.
+        /// </remarks>
+        public int? ArticleWorkDeliveryLimit { get; set; } = 10;
+
+        /// <summary>
         /// Optional AMQP CorrelationId used to gate temporary payload diagnostics.
         /// </summary>
         public string? DiagnosticPayloadCorrelationId { get; set; }

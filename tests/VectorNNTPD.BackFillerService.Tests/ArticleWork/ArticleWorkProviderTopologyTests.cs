@@ -44,8 +44,16 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.NotNull(queue.Arguments);
             Assert.True(queue.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var queueType));
             Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+            Assert.True(queue.Arguments.TryGetValue(
+                BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName,
+                out var groupSize));
+            Assert.Equal(3L, groupSize);
+            Assert.True(queue.Arguments.TryGetValue(
+                BackFillerArticleWorkTopology.DeliveryLimitArgumentName,
+                out var deliveryLimit));
+            Assert.Equal(10L, deliveryLimit);
             Assert.False(queue.Arguments.ContainsKey("x-message-ttl"));
-            Assert.Single(queue.Arguments);
+            Assert.Equal(3, queue.Arguments.Count);
             Assert.Equal(
                 ("backfiller.giganews", "backfiller.giganews", "backfiller.giganews"),
                 Assert.Single(topology.BindingDeclarations));
@@ -238,17 +246,30 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
 
-            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(channel, "Giganews", CancellationToken.None);
+            var runtime = RabbitMqServiceTests.CreateFastRuntime();
+            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
+                channel,
+                "Giganews",
+                runtime,
+                CancellationToken.None);
 
             Assert.Single(channel.ExchangeDeclarations);
             Assert.Single(channel.QueueDeclarations);
             Assert.Single(channel.BindingDeclarations);
             Assert.All(channel.QueueDeclarations, static q => Assert.True(q.Durable));
-            Assert.All(channel.QueueDeclarations, static q =>
+            Assert.All(channel.QueueDeclarations, q =>
             {
                 Assert.NotNull(q.Arguments);
                 Assert.True(q.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var type));
                 Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, type);
+                Assert.True(q.Arguments.TryGetValue(
+                    BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName,
+                    out var groupSize));
+                Assert.Equal((long)runtime.RabbitMq.QuorumInitialGroupSize, groupSize);
+                Assert.True(q.Arguments.TryGetValue(
+                    BackFillerArticleWorkTopology.DeliveryLimitArgumentName,
+                    out var deliveryLimit));
+                Assert.Equal((long)runtime.RabbitMq.DeliveryLimit, deliveryLimit);
             });
         }
 

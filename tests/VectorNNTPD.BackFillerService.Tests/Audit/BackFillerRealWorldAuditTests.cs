@@ -331,9 +331,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Audit
             line($"failure malformed outcome={malformed.Outcome} error={malformed.Error}");
             Assert.Equal(ArticleWorkOutcome.InvalidArticle, malformed.Outcome);
 
-            var success = ArticleWorkDispositionPlanner.Create(ArticleWorkOutcome.Success, replyable: true, cancellationRequested: false);
-            var requeue = ArticleWorkDispositionPlanner.Create(ArticleWorkOutcome.ProviderFailure, replyable: true, cancellationRequested: false);
-            var cancelledDisposition = ArticleWorkDispositionPlanner.Create(ArticleWorkOutcome.Success, replyable: true, cancellationRequested: true);
+            var success = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.Success, replyable: true, cancellationRequested: false, deliveryCount: null, redelivered: false, deliveryLimit: 10);
+            var requeue = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.ProviderFailure, replyable: true, cancellationRequested: false, deliveryCount: null, redelivered: false, deliveryLimit: 10);
+            var cancelledDisposition = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.Success, replyable: true, cancellationRequested: true, deliveryCount: null, redelivered: false, deliveryLimit: 10);
             line($"disposition success ack={success.Acknowledge} requeue={success.Requeue}");
             line($"disposition providerFailure ack={requeue.Acknowledge} requeue={requeue.Requeue}");
             line($"disposition cancelled ack={cancelledDisposition.Acknowledge} requeue={cancelledDisposition.Requeue}");

@@ -198,8 +198,12 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// <param name="WorkRequestMaxPayloadBytes">Maximum admitted work-request envelope size.</param>
     /// <param name="PublishConfirmTimeoutSeconds">Publisher-confirm wait for response publications.</param>
     /// <param name="ConsumerPrefetchCount">Optional Basic.Qos prefetch for Article Work consumers.</param>
+    /// <param name="QuorumInitialGroupSize">Declared <c>x-quorum-initial-group-size</c> and readiness membership floor.</param>
+    /// <param name="DeliveryLimit">Declared <c>x-delivery-limit</c> and application requeue cap.</param>
     internal sealed record BackFillerRabbitMqRuntimeOptions(
         int WorkRequestMaxPayloadBytes,
         int PublishConfirmTimeoutSeconds,
-        ushort? ConsumerPrefetchCount);
+        ushort? ConsumerPrefetchCount,
+        int QuorumInitialGroupSize,
+        int DeliveryLimit);
 }

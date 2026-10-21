@@ -281,6 +281,12 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 provider.GetRequiredService<ArticleWorkResponsePublisher>());
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<ArticleWorkResponsePublisher>());
+            builder.Services.AddHttpClient(ArticleWorkQuorumManagementHealthProbe.HttpClientName, static client =>
+            {
+                client.Timeout = Timeout.InfiniteTimeSpan;
+                client.DefaultRequestHeaders.ExpectContinue = false;
+            });
+            builder.Services.AddSingleton<IArticleWorkQuorumHealthProbe, ArticleWorkQuorumManagementHealthProbe>();
             builder.Services.AddSingleton(static provider => new ArticleWorkConsumerService(
                 provider.GetRequiredService<IRabbitMqService>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
@@ -288,7 +294,8 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 provider.GetRequiredService<IArticleWorkResponsePublisher>(),
                 provider.GetRequiredService<ILogger<ArticleWorkConsumerService>>(),
                 provider.GetRequiredService<IBackFillerProviderCatalog>(),
-                provider.GetRequiredService<IBackboneUsableCapacityProvider>()));
+                provider.GetRequiredService<IBackboneUsableCapacityProvider>(),
+                quorumHealth: provider.GetRequiredService<IArticleWorkQuorumHealthProbe>()));
             builder.Services.AddSingleton<IArticleWorkConsumerReconciliation>(static provider =>
                 provider.GetRequiredService<ArticleWorkConsumerService>());
             builder.Services.AddSingleton<IHostedService>(static provider =>

@@ -37,6 +37,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(2048, runtime.RabbitMq.WorkRequestMaxPayloadBytes);
             Assert.Equal(7, runtime.RabbitMq.PublishConfirmTimeoutSeconds);
             Assert.Equal((ushort)3, runtime.RabbitMq.ConsumerPrefetchCount);
+            Assert.Equal(3, runtime.RabbitMq.QuorumInitialGroupSize);
+            Assert.Equal(10, runtime.RabbitMq.DeliveryLimit);
             Assert.True(Path.IsPathRooted(runtime.LogDirectory));
             Assert.True(Path.IsPathRooted(runtime.CertificateDirectory));
             Assert.Equal("127.0.0.1", runtime.NntpDb.Server);

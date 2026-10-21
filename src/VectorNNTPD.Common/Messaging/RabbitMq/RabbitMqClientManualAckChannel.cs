@@ -223,6 +223,13 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         }
 
         /// <inheritdoc />
+        public Task BasicRejectAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            return _channel.BasicRejectAsync(deliveryTag, requeue, cancellationToken).AsTask();
+        }
+
+        /// <inheritdoc />
         public async ValueTask DisposeAsync()
         {
             await EnterLifecycleAsync(CancellationToken.None).ConfigureAwait(false);
@@ -448,7 +455,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 eventArgs.RoutingKey,
                 eventArgs.Exchange,
                 eventArgs.ConsumerTag,
-                Generation);
+                Generation,
+                ReadDeliveryCount(eventArgs.BasicProperties.Headers));
             await handler(delivery).ConfigureAwait(false);
         }
 
@@ -471,6 +479,32 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 string text => text,
                 byte[] bytes => Encoding.UTF8.GetString(bytes),
                 ReadOnlyMemory<byte> memory => Encoding.UTF8.GetString(memory.Span),
+                _ => null,
+            };
+        }
+
+        /// <summary>
+        /// Reads the quorum-queue <c>x-delivery-count</c> header as a non-negative integer.
+        /// </summary>
+        /// <param name="headers">AMQP headers. Missing or unsupported encodings yield <see langword="null"/>.</param>
+        /// <returns>The delivery count, or <see langword="null"/> when absent.</returns>
+        internal static int? ReadDeliveryCount(IDictionary<string, object?>? headers)
+        {
+            if (headers is null
+                || !headers.TryGetValue("x-delivery-count", out var value)
+                || value is null)
+            {
+                return null;
+            }
+
+            return value switch
+            {
+                int i when i >= 0 => i,
+                long l when l >= 0 && l <= int.MaxValue => (int)l,
+                short s when s >= 0 => s,
+                byte b => b,
+                uint ui when ui <= int.MaxValue => (int)ui,
+                ulong ul when ul <= int.MaxValue => (int)ul,
                 _ => null,
             };
         }

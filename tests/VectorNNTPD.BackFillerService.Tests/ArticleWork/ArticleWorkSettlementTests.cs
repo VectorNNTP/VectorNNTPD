@@ -34,7 +34,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             bool publish)
         {
             var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
-            var disposition = ArticleWorkDispositionPlanner.Create(outcome, replyable: true, cancellationRequested: false);
+            var disposition = ArticleWorkDispositionPlanner.Create(
+                outcome,
+                replyable: true,
+                cancellationRequested: false,
+                deliveryCount: null,
+                redelivered: false,
+                deliveryLimit: 10);
             Assert.Equal(acknowledge, disposition.Acknowledge);
             Assert.Equal(requeue, disposition.Requeue);
             Assert.Equal(publish, disposition.PublishResponse);
@@ -49,7 +55,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var disposition = ArticleWorkDispositionPlanner.Create(
                 ArticleWorkOutcome.InvalidRequest,
                 replyable: false,
-                cancellationRequested: false);
+                cancellationRequested: false,
+                deliveryCount: null,
+                redelivered: false,
+                deliveryLimit: 10);
 
             Assert.True(disposition.Acknowledge);
             Assert.False(disposition.Requeue);
@@ -65,10 +74,51 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var disposition = ArticleWorkDispositionPlanner.Create(
                 ArticleWorkOutcome.Success,
                 replyable: true,
-                cancellationRequested: true);
+                cancellationRequested: true,
+                deliveryCount: null,
+                redelivered: false,
+                deliveryLimit: 10);
 
             Assert.False(disposition.Acknowledge);
             Assert.True(disposition.Requeue);
+            Assert.False(disposition.PublishResponse);
+        }
+
+        /// <summary>
+        /// When broker delivery count reaches the configured limit, retryable outcomes NACK without requeue.
+        /// </summary>
+        [Fact]
+        public void Delivery_limit_exhaustion_nacks_without_requeue()
+        {
+            var disposition = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.ProviderFailure,
+                replyable: true,
+                cancellationRequested: false,
+                deliveryCount: 10,
+                redelivered: true,
+                deliveryLimit: 10);
+
+            Assert.False(disposition.Acknowledge);
+            Assert.False(disposition.Requeue);
+            Assert.False(disposition.PublishResponse);
+        }
+
+        /// <summary>
+        /// Cancellation that has already exhausted the delivery limit also discards without requeue.
+        /// </summary>
+        [Fact]
+        public void Cancellation_with_exhausted_delivery_limit_does_not_requeue()
+        {
+            var disposition = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.Success,
+                replyable: true,
+                cancellationRequested: true,
+                deliveryCount: 10,
+                redelivered: true,
+                deliveryLimit: 10);
+
+            Assert.False(disposition.Acknowledge);
+            Assert.False(disposition.Requeue);
             Assert.False(disposition.PublishResponse);
         }
 
@@ -154,7 +204,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var first = await pipeline.ProcessAsync(delivery, "Giganews", channel, static () => true, CancellationToken.None);
             var lease = handler.LastItem!.Settlement;
             var second = await lease.TrySettleAsync(
-                ArticleWorkDispositionPlanner.Create(handlerOutcome, true, false),
+                ArticleWorkDispositionPlanner.Create(handlerOutcome, true, false, deliveryCount: null, redelivered: false, deliveryLimit: 10),
                 channelStillCurrent: true,
                 CancellationToken.None);
 

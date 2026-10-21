@@ -21,6 +21,8 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             var options = new RabbitMqOptions();
 
             Assert.Equal(1024, options.WorkRequestMaxPayloadBytes);
+            Assert.Equal(3, options.ArticleWorkQuorumInitialGroupSize);
+            Assert.Equal(10, options.ArticleWorkDeliveryLimit);
             Assert.Equal(60, options.ChannelLeaseTimeoutSeconds);
             Assert.Equal(30, options.RpcTimeoutSeconds);
             Assert.Equal(30, options.ConnectionBlockedTimeoutSeconds);
@@ -76,6 +78,38 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         {
             var result = new RabbitMqOptionsValidator().Validate(null, CreateValidConnectivityOnly());
             Assert.True(result.Succeeded);
+        }
+
+        /// <summary>
+        /// Article Work quorum initial group size outside <c>1–7</c> fails validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenArticleWorkQuorumInitialGroupSizeOutOfRange()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ArticleWorkQuorumInitialGroupSize = 0;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ArticleWorkQuorumInitialGroupSize", StringComparison.Ordinal)
+                    && failure.Contains("between 1 and 7", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Article Work delivery limit outside <c>1–1000</c> fails validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenArticleWorkDeliveryLimitOutOfRange()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ArticleWorkDeliveryLimit = 1001;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ArticleWorkDeliveryLimit", StringComparison.Ordinal)
+                    && failure.Contains("between 1 and 1000", StringComparison.Ordinal));
         }
 
         /// <summary>

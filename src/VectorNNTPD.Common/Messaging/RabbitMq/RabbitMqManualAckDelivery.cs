@@ -14,6 +14,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
     /// <param name="Exchange">Exchange, when present.</param>
     /// <param name="ConsumerTag">Consumer tag, when present.</param>
     /// <param name="Generation">Connection generation of the consuming channel.</param>
+    /// <param name="DeliveryCount">
+    /// Quorum-queue <c>x-delivery-count</c> header when present. <see langword="null"/> on classic queues
+    /// or the first delivery when the broker omits the header (treated as <c>0</c> by disposition planning).
+    /// </param>
     internal readonly record struct RabbitMqManualAckDelivery(
         ulong DeliveryTag,
         ReadOnlyMemory<byte> Body,
@@ -25,5 +29,6 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         string? RoutingKey,
         string? Exchange,
         string? ConsumerTag,
-        long Generation);
+        long Generation,
+        int? DeliveryCount = null);
 }

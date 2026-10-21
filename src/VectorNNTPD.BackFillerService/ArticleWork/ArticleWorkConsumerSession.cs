@@ -730,6 +730,37 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     delivery.DeliveryTag,
                     reason);
             }
+            else if (IsDeliveryLimitExhausted(delivery, outcome))
+            {
+                ArticleWorkLogMessages.DeliveryLimitExhausted(
+                    _logger,
+                    _backbone,
+                    delivery.Generation,
+                    delivery.DeliveryTag,
+                    delivery.DeliveryCount.GetValueOrDefault(),
+                    _pipeline.DeliveryLimit,
+                    outcome.ToString());
+            }
+        }
+
+        /// <summary>
+        /// True when a retryable outcome was settled after the broker delivery count reached the configured limit.
+        /// </summary>
+        private bool IsDeliveryLimitExhausted(RabbitMqManualAckDelivery delivery, ArticleWorkOutcome outcome)
+        {
+            var effectiveCount = ArticleWorkDispositionPlanner.ResolveEffectiveDeliveryCount(
+                delivery.DeliveryCount,
+                delivery.Redelivered,
+                _pipeline.DeliveryLimit);
+            if (effectiveCount < _pipeline.DeliveryLimit)
+            {
+                return false;
+            }
+
+            return outcome is ArticleWorkOutcome.ProviderFailure
+                or ArticleWorkOutcome.Cancelled
+                or ArticleWorkOutcome.UnexpectedFailure
+                or ArticleWorkOutcome.RetentionRejected;
         }
 
         /// <summary>

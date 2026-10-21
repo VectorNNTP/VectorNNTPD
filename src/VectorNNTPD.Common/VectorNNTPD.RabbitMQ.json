@@ -30,6 +30,8 @@
     "SocketTimeoutSeconds": 30,
     "UnhealthyThreshold": 5,
     "VirtualHost": "/",
-    "WorkRequestMaxPayloadBytes": 1024
+    "WorkRequestMaxPayloadBytes": 1024,
+    "ArticleWorkQuorumInitialGroupSize": 3,
+    "ArticleWorkDeliveryLimit": 10
   }
 }
