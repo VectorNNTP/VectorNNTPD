@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
@@ -491,7 +492,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>
         /// Awaits <paramref name="previous"/> then runs one rebuild so later connection or channel-fault requests are not dropped.
         /// </summary>
-        /// <param name="previous">Earlier rebuild or completed task. Failures are ignored here because that boundary already logged them.</param>
+        /// <param name="previous">
+        /// Earlier rebuild or completed task. Non-fatal failures are ignored here because
+        /// <see cref="RebuildPublishChannelAsync"/> already logged them; <see cref="ExceptionHelpers.IsFatal"/> failures propagate.
+        /// </param>
         /// <returns>A task that completes when the follow-on rebuild finishes.</returns>
         private async Task ContinueRebuildAsync(Task previous)
         {
@@ -499,10 +503,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 await previous.ConfigureAwait(false);
             }
-            // codeql[cs/catch-of-all-exceptions] A prior rebuild already logged; this link must still run the follow-on replace.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
-                // Prior rebuild logged at its boundary; a later request must still run.
+                // Prior rebuild logged at RebuildPublishChannelAsync; continue so a later request is not dropped.
             }
 
             await RebuildPublishChannelAsync().ConfigureAwait(false);
