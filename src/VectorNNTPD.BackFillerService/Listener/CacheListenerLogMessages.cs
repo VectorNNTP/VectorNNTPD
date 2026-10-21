@@ -188,5 +188,61 @@ namespace VectorNNTPD.BackFillerService.Listener
             Level = LogLevel.Warning,
             Message = "Cache Listener accepted socket options failed remote={Remote} error={Error}")]
         internal static partial void AcceptedSocketOptionsFailed(ILogger logger, string Remote, string Error);
+
+        /// <summary>
+        /// Written when <see cref="System.Net.Sockets.Socket.AcceptAsync(System.Threading.CancellationToken)"/> fails while the listener is still running.
+        /// Rate-limited by the accept loop so a persistent fault cannot flood the log.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="SocketError"><see cref="System.Net.Sockets.SocketError"/> name from the failure.</param>
+        /// <param name="ConsecutiveFailures">Consecutive accept failures on this listen socket since the last success.</param>
+        /// <param name="MaxConsecutiveFailures">Configured threshold that stops the accept loop.</param>
+        [LoggerMessage(
+            EventId = 5416,
+            Level = LogLevel.Warning,
+            Message = "Cache Listener accept failed socketError={SocketError} consecutiveFailures={ConsecutiveFailures} maxConsecutiveFailures={MaxConsecutiveFailures}")]
+        internal static partial void AcceptFailed(
+            ILogger logger,
+            string SocketError,
+            int ConsecutiveFailures,
+            int MaxConsecutiveFailures);
+
+        /// <summary>
+        /// Written when accept succeeds after one or more consecutive failures on the same listen socket.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="RecoveredAfterFailures">Consecutive failures cleared by this successful accept.</param>
+        [LoggerMessage(
+            EventId = 5417,
+            Level = LogLevel.Information,
+            Message = "Cache Listener accept recovered afterFailures={RecoveredAfterFailures}")]
+        internal static partial void AcceptRecovered(ILogger logger, int RecoveredAfterFailures);
+
+        /// <summary>
+        /// Written when consecutive accept failures reach the configured threshold and the accept loop faults.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="SocketError"><see cref="System.Net.Sockets.SocketError"/> name from the last failure.</param>
+        /// <param name="ConsecutiveFailures">Consecutive failures that triggered the stop.</param>
+        [LoggerMessage(
+            EventId = 5418,
+            Level = LogLevel.Error,
+            Message = "Cache Listener accept loop stopping after consecutiveFailures={ConsecutiveFailures} lastSocketError={SocketError}")]
+        internal static partial void AcceptLoopStopping(
+            ILogger logger,
+            int ConsecutiveFailures,
+            string SocketError);
+
+        /// <summary>
+        /// Written when dispose observes a non-cancellation fault from the accept task.
+        /// Cleanup continues to the stopped state; the fault was already visible on <c>Execution</c>.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="ErrorType">Runtime exception type name from the accept-task fault.</param>
+        [LoggerMessage(
+            EventId = 5419,
+            Level = LogLevel.Warning,
+            Message = "Cache Listener accept loop fault observed during dispose error={ErrorType}")]
+        internal static partial void AcceptLoopFaultDuringDispose(ILogger logger, string ErrorType);
     }
 }

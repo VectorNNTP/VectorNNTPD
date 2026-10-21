@@ -3,15 +3,18 @@ using System.Net.Security;
 using System.Reflection;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Listener;
 using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.BackFillerService.Retention;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.Retention;
 using System.Net.Sockets;
+using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.Common.Networking.Certificates;
@@ -831,6 +834,212 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
                 CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
             });
             return new TlsClient(tcp, ssl);
+        }
+
+        /// <summary>
+        /// Transient accept SocketException is followed by the configured backoff before the next accept attempt.
+        /// </summary>
+        [Fact]
+        public async Task Transient_accept_failure_delays_before_retry_and_resets_after_success()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            var acceptAttempts = 0;
+            var delayCalls = new ConcurrentBag<TimeSpan>();
+            service.AcceptFailureDelayAsync = (delay, _) =>
+            {
+                delayCalls.Add(delay);
+                return Task.CompletedTask;
+            };
+            service.AcceptAsyncOverride = (listenSocket, cancellationToken) =>
+            {
+                var attempt = Interlocked.Increment(ref acceptAttempts);
+                if (attempt <= 2)
+                {
+                    return ValueTask.FromException<Socket>(
+                        new SocketException((int)SocketError.ConnectionReset));
+                }
+
+                return listenSocket.AcceptAsync(cancellationToken);
+            };
+
+            await service.StartAsync(CancellationToken.None);
+            try
+            {
+                await using var client = await ConnectAsync(port);
+                await ReadGreetingAsync(client.Stream);
+                await ArticleWorkTestDeliveries.WaitUntilAsync(
+                    () => delayCalls.Count >= 2 && acceptAttempts >= 3,
+                    TimeSpan.FromSeconds(5));
+
+                Assert.Equal(2, delayCalls.Count);
+                Assert.All(delayCalls, static delay => Assert.Equal(CacheListenerService.AcceptFailureRetryDelay, delay));
+                Assert.Contains(logger.Entries, static entry => entry.EventId.Id == 5416);
+                Assert.Contains(logger.Entries, static entry => entry.EventId.Id == 5417);
+                Assert.Equal(CacheListenerState.Running, service.State);
+                Assert.False(service.Execution!.IsFaulted);
+            }
+            finally
+            {
+                await service.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// Consecutive accept failures reach the threshold, fault Execution, and stop with rate-limited logging.
+        /// </summary>
+        [Fact]
+        public async Task Consecutive_accept_failures_reach_threshold_and_fault_execution()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            var acceptAttempts = 0;
+            var delayCalls = 0;
+            service.AcceptFailureDelayAsync = (_, _) =>
+            {
+                Interlocked.Increment(ref delayCalls);
+                return Task.CompletedTask;
+            };
+            service.AcceptAsyncOverride = (_, _) =>
+            {
+                Interlocked.Increment(ref acceptAttempts);
+                return ValueTask.FromException<Socket>(
+                    new SocketException((int)SocketError.NetworkDown));
+            };
+
+            await service.StartAsync(CancellationToken.None);
+            var execution = service.Execution;
+            Assert.NotNull(execution);
+            var fault = await Assert.ThrowsAnyAsync<Exception>(async () => await execution);
+            var invalid = Assert.IsType<InvalidOperationException>(
+                fault is AggregateException aggregate
+                    ? Assert.Single(aggregate.Flatten().InnerExceptions.OfType<InvalidOperationException>())
+                    : fault);
+            Assert.Contains("consecutive", invalid.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.IsType<SocketException>(invalid.InnerException);
+            Assert.Equal(CacheListenerService.MaxConsecutiveAcceptFailures, acceptAttempts);
+            Assert.Equal(CacheListenerService.MaxConsecutiveAcceptFailures - 1, delayCalls);
+            Assert.Equal(
+                2,
+                logger.Entries.Count(static entry => entry.EventId.Id == 5416));
+            Assert.Contains(logger.Entries, static entry => entry.EventId.Id == 5418);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5417);
+
+            await service.DisposeAsync();
+            Assert.Equal(CacheListenerState.Stopped, service.State);
+            Assert.Contains(logger.Entries, static entry => entry.EventId.Id == 5419);
+        }
+
+        /// <summary>
+        /// An unexpected accept-task fault is not treated as an expected dispose observation; cleanup still stops,
+        /// then dispose rethrows so the programming error remains visible.
+        /// </summary>
+        [Fact]
+        public async Task Unexpected_accept_fault_is_not_swallowed_by_dispose()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            service.AcceptAsyncOverride = (_, _) =>
+                ValueTask.FromException<Socket>(new DivideByZeroException("accept boom"));
+
+            await service.StartAsync(CancellationToken.None);
+            var execution = service.Execution;
+            Assert.NotNull(execution);
+            await Assert.ThrowsAnyAsync<Exception>(async () => await execution);
+            Assert.True(execution.IsFaulted);
+
+            var disposeFault = await Record.ExceptionAsync(async () => await service.DisposeAsync());
+            Assert.NotNull(disposeFault);
+            Assert.Contains(
+                disposeFault is AggregateException aggregate
+                    ? aggregate.Flatten().InnerExceptions
+                    : [disposeFault],
+                static ex => ex is DivideByZeroException || ex.GetBaseException() is DivideByZeroException);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5419);
+            Assert.Equal(CacheListenerState.Stopped, service.State);
+        }
+
+        /// <summary>
+        /// Cancellation during accept backoff exits the loop without treating shutdown as an unexpected failure.
+        /// </summary>
+        [Fact]
+        public async Task Cancellation_during_accept_backoff_exits_without_faulting_execution()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            var enteredDelay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            service.AcceptAsyncOverride = (_, _) => ValueTask.FromException<Socket>(
+                new SocketException((int)SocketError.Interrupted));
+            service.AcceptFailureDelayAsync = async (_, cancellationToken) =>
+            {
+                enteredDelay.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            };
+
+            await service.StartAsync(CancellationToken.None);
+            var execution = service.Execution;
+            Assert.NotNull(execution);
+            await enteredDelay.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await service.DisposeAsync();
+
+            Assert.True(execution.IsCompletedSuccessfully);
+            Assert.Equal(CacheListenerState.Stopped, service.State);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5418);
+        }
+
+        /// <summary>
+        /// Shutdown cancellation while AcceptAsync is waiting exits cleanly without an unexpected failure log.
+        /// </summary>
+        [Fact]
+        public async Task Shutdown_cancellation_during_accept_exits_cleanly()
+        {
+            var logger = new CollectingLogger<CacheListenerService>();
+            var port = GetFreePort();
+            await using var certificates = TestListenerCertificates.CreatePublishedProvider();
+            var service = CreateListenerService(CreateRuntime(port), certificates, logger);
+            var enteredAccept = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            service.AcceptAsyncOverride = async (_, cancellationToken) =>
+            {
+                enteredAccept.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("Accept override should not resume after cancellation.");
+            };
+
+            await service.StartAsync(CancellationToken.None);
+            var execution = service.Execution;
+            Assert.NotNull(execution);
+            await enteredAccept.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await service.DisposeAsync();
+
+            Assert.True(execution.IsCompletedSuccessfully);
+            Assert.Equal(CacheListenerState.Stopped, service.State);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5416);
+            Assert.DoesNotContain(logger.Entries, static entry => entry.EventId.Id == 5418);
+        }
+
+        /// <summary>Builds a production-shaped listener with injectable logger for accept-loop tests.</summary>
+        private static CacheListenerService CreateListenerService(
+            BackFillerRuntimeOptions runtime,
+            ITlsCertificateContextProvider certificates,
+            ILogger<CacheListenerService> logger)
+        {
+            var readiness = new AcmeCertificateReadiness();
+            readiness.MarkReady();
+            return new CacheListenerService(
+                runtime,
+                certificates,
+                ArticleRetentionAuthorityTests.Create(TimeProvider.System, 1024),
+                readiness,
+                new BackFillerStartupJournal(),
+                logger);
         }
 
         /// <summary>Builds valid runtime options bound to loopback <paramref name="port"/> with a connection cap.</summary>
