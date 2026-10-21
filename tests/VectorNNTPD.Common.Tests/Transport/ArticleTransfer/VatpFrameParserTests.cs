@@ -199,8 +199,8 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
             var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
             Assert.Equal(VatpFrameParseStatus.Success, result.Status);
             Assert.Equal(VatpFrameType.Data, result.Frame!.Value.Header.Type);
-            Assert.Equal(0u, result.Frame.Value.Header.PayloadLength);
-            Assert.Equal(fin, result.Frame.Value.Header.HasFin);
+            Assert.Equal(0u, result.Frame!.Value.Header.PayloadLength);
+            Assert.Equal(fin, result.Frame!.Value.Header.HasFin);
         }
     }
 }
