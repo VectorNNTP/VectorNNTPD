@@ -103,6 +103,26 @@ namespace VectorNNTPD.BackFillerService.Listener
         private int _activeConnections;
 
         /// <summary>
+        /// Delay before retrying <see cref="Socket.AcceptAsync(CancellationToken)"/> after a transient
+        /// <see cref="SocketException"/>. Cancellation-aware via <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/>.
+        /// </summary>
+        internal static readonly TimeSpan AcceptFailureRetryDelay = TimeSpan.FromMilliseconds(250);
+
+        /// <summary>
+        /// Consecutive accept <see cref="SocketException"/> failures on one listen socket before the accept loop faults.
+        /// A faulted <see cref="Execution"/> is observed by
+        /// <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/> as unexpected termination
+        /// (host unhealthy / stop).
+        /// </summary>
+        internal const int MaxConsecutiveAcceptFailures = 5;
+
+        /// <summary>
+        /// Minimum interval between Warning-level accept-failure logs for one accept loop.
+        /// The first failure, the threshold-crossing failure, and failures after this interval are logged.
+        /// </summary>
+        internal static readonly TimeSpan AcceptFailureLogInterval = TimeSpan.FromSeconds(5);
+
+        /// <summary>
         /// Invoked after admission and before <see cref="TcpSocketOptions.Apply"/> on an accepted socket.
         /// Null in production. A <see cref="SocketException"/> or <see cref="ObjectDisposedException"/> from this
         /// delegate is treated as a socket-option failure: the socket is disposed and the admission slot is released.
@@ -114,6 +134,18 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// Exceptions from this delegate are not caught by the accept loop.
         /// </summary>
         internal Action<Socket>? AfterAcceptedSocketConfigured { get; set; }
+
+        /// <summary>
+        /// Replaces <see cref="Socket.AcceptAsync(CancellationToken)"/> when non-null. Null in production.
+        /// Tests use this to inject deterministic accept failures without closing the listen socket.
+        /// </summary>
+        internal Func<Socket, CancellationToken, ValueTask<Socket>>? AcceptAsyncOverride { get; set; }
+
+        /// <summary>
+        /// Replaces the post-failure accept backoff when non-null. Null in production uses
+        /// <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> on <see cref="AcceptFailureRetryDelay"/>.
+        /// </summary>
+        internal Func<TimeSpan, CancellationToken, Task>? AcceptFailureDelayAsync { get; set; }
 
         /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
         /// <param name="runtime">Runtime snapshot. Must not be null.</param>
@@ -338,8 +370,10 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <remarks>
         /// State moves to <see cref="CacheListenerState.Retiring"/> before cancel, then to
         /// <see cref="CacheListenerState.Stopped"/> after drain. <see cref="OperationCanceledException"/> from the
-        /// accept task is ignored. Any other accept-task exception propagates. Connection-task exceptions are
-        /// logged and ignored by <see cref="DrainConnectionsAsync"/> so socket release and the stopped state still run.
+        /// accept task is ignored. Any other accept-task fault is logged and ignored here so drain and the stopped
+        /// state still run; <see cref="Execution"/> already exposed that fault to
+        /// <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/>.
+        /// Connection-task exceptions are logged and ignored by <see cref="DrainConnectionsAsync"/>.
         /// The run token source is disposed before the stopped state.
         /// </remarks>
         public async ValueTask DisposeAsync()
@@ -368,6 +402,13 @@ namespace VectorNNTPD.BackFillerService.Listener
                 catch (OperationCanceledException)
                 {
                     ShutdownObservations.Canceled(_logger, "cache listener accept loop");
+                }
+                // codeql[cs/catch-of-all-exceptions] Accept-loop faults must not skip drain or leave the listener stuck in Retiring.
+                catch (Exception ex)
+                {
+                    CacheListenerLogMessages.AcceptLoopFaultDuringDispose(
+                        _logger,
+                        ex.GetBaseException().GetType().Name);
                 }
             }
 
@@ -451,26 +492,41 @@ namespace VectorNNTPD.BackFillerService.Listener
             await Task.WhenAll(sockets.Select(socket => AcceptLoopAsync(socket, cancellationToken))).ConfigureAwait(false);
         }
 
-        /// <summary>Accepts sockets until cancellation, disposal, or a non-transient socket error.</summary>
+        /// <summary>Accepts sockets until cancellation, disposal, or persistent accept failure.</summary>
         /// <param name="listenSocket">Bound socket sampled by <see cref="AcceptAllAsync"/>.</param>
         /// <param name="cancellationToken">Service run token.</param>
-        /// <returns>A task that completes when the loop breaks.</returns>
+        /// <returns>A task that completes when the loop breaks, or faults after consecutive accept failures.</returns>
         /// <remarks>
         /// Cancellation, <see cref="ObjectDisposedException"/>, and <see cref="SocketException"/> end the loop
         /// when <paramref name="cancellationToken"/> is cancelled. A <see cref="SocketException"/> while the token
-        /// is still active is ignored and the loop continues. Over-capacity sockets are disposed and not processed.
+        /// is still active is logged (rate-limited), delayed by <see cref="AcceptFailureRetryDelay"/>, and retried.
+        /// After <see cref="MaxConsecutiveAcceptFailures"/> consecutive failures the loop throws
+        /// <see cref="InvalidOperationException"/> so <see cref="Execution"/> faults and the host health path observes it.
+        /// A successful accept resets the consecutive-failure count. Over-capacity sockets are disposed and not processed.
         /// An admitted socket is configured with <see cref="TcpSocketOptions.Apply"/> before <see cref="ProcessAsync"/>.
         /// Option failure disposes that socket, releases the admission slot, and continues the loop.
         /// Admitted work is tracked in <see cref="_connections"/> until the task completes.
         /// </remarks>
         private async Task AcceptLoopAsync(Socket listenSocket, CancellationToken cancellationToken)
         {
+            var consecutiveFailures = 0;
+            DateTimeOffset? lastFailureLogUtc = null;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 Socket accepted;
                 try
                 {
-                    accepted = await listenSocket.AcceptAsync(cancellationToken).ConfigureAwait(false);
+                    accepted = AcceptAsyncOverride is not null
+                        ? await AcceptAsyncOverride(listenSocket, cancellationToken).ConfigureAwait(false)
+                        : await listenSocket.AcceptAsync(cancellationToken).ConfigureAwait(false);
+
+                    if (consecutiveFailures > 0)
+                    {
+                        CacheListenerLogMessages.AcceptRecovered(_logger, consecutiveFailures);
+                        consecutiveFailures = 0;
+                        lastFailureLogUtc = null;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -484,9 +540,48 @@ namespace VectorNNTPD.BackFillerService.Listener
                 {
                     break;
                 }
-                catch (SocketException)
+                catch (SocketException ex)
                 {
                     if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    consecutiveFailures++;
+                    var socketError = ex.SocketErrorCode.ToString();
+                    var now = _time.GetUtcNow();
+                    if (ShouldLogAcceptFailure(consecutiveFailures, lastFailureLogUtc, now))
+                    {
+                        CacheListenerLogMessages.AcceptFailed(
+                            _logger,
+                            socketError,
+                            consecutiveFailures,
+                            MaxConsecutiveAcceptFailures);
+                        lastFailureLogUtc = now;
+                    }
+
+                    if (consecutiveFailures >= MaxConsecutiveAcceptFailures)
+                    {
+                        CacheListenerLogMessages.AcceptLoopStopping(_logger, consecutiveFailures, socketError);
+                        throw new InvalidOperationException(
+                            $"Cache Listener accept failed {consecutiveFailures} consecutive times (last error: {socketError}).",
+                            ex);
+                    }
+
+                    try
+                    {
+                        if (AcceptFailureDelayAsync is not null)
+                        {
+                            await AcceptFailureDelayAsync(AcceptFailureRetryDelay, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            await Task.Delay(AcceptFailureRetryDelay, _time, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
                     }
@@ -516,6 +611,27 @@ namespace VectorNNTPD.BackFillerService.Listener
                     this,
                     TaskScheduler.Default);
             }
+        }
+
+        /// <summary>
+        /// Reports whether an accept failure should emit a Warning log given consecutive count and prior log time.
+        /// </summary>
+        /// <param name="consecutiveFailures">Failures since the last successful accept on this loop.</param>
+        /// <param name="lastFailureLogUtc">UTC of the last Warning for this loop, or null when none yet.</param>
+        /// <param name="nowUtc">Current UTC from the service <see cref="TimeProvider"/>.</param>
+        /// <returns><see langword="true"/> for the first failure, threshold crossing, or after <see cref="AcceptFailureLogInterval"/>.</returns>
+        private static bool ShouldLogAcceptFailure(
+            int consecutiveFailures,
+            DateTimeOffset? lastFailureLogUtc,
+            DateTimeOffset nowUtc)
+        {
+            if (consecutiveFailures == 1 || consecutiveFailures >= MaxConsecutiveAcceptFailures)
+            {
+                return true;
+            }
+
+            return lastFailureLogUtc is null
+                   || nowUtc - lastFailureLogUtc.Value >= AcceptFailureLogInterval;
         }
 
         /// <summary>Handshakes one accepted socket and runs a single NNTP session.</summary>
