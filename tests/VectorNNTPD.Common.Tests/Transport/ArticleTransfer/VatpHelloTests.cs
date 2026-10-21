@@ -27,6 +27,35 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
         }
 
         /// <summary>
+        /// ParseOneFrame accepts a correctly encoded HELLO (valid magic and non-zero maxFramePayload).
+        /// </summary>
+        [Fact]
+        public void ParseOneFrame_ValidHello_Succeeds()
+        {
+            var frame = VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeHello(1024));
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Success, result.Status);
+            Assert.Equal(VatpErrorCode.None, result.Error);
+            Assert.Equal(frame.Length, result.ConsumedBytes);
+            Assert.True(VatpHello.TryDecode(result.Frame!.Value.Payload, out var hello, out var decodeError));
+            Assert.Equal(VatpErrorCode.None, decodeError);
+            Assert.Equal(1024u, hello.MaxFramePayload);
+        }
+
+        /// <summary>
+        /// A 12-byte all-zero HELLO payload is rejected by the parser (magic is not <c>VNATP01\0</c>).
+        /// </summary>
+        [Fact]
+        public void ParseOneFrame_AllZeroHelloPayload_IsRejected()
+        {
+            var frame = BuildHelloFrame(new byte[VatpProtocol.HelloPayloadLength]);
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Invalid, result.Status);
+            Assert.Equal(VatpErrorCode.InvalidHello, result.Error);
+            Assert.Equal(frame.Length, result.ConsumedBytes);
+        }
+
+        /// <summary>
         /// Replacing the first magic byte rejects the payload as <see cref="VatpErrorCode.InvalidHello"/>.
         /// </summary>
         [Fact]
@@ -37,6 +66,23 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
             payload[0] = (byte)'X';
             Assert.False(VatpHello.TryDecode(payload, out _, out var error));
             Assert.Equal(VatpErrorCode.InvalidHello, error);
+        }
+
+        /// <summary>
+        /// ParseOneFrame rejects a HELLO whose magic does not match <see cref="VatpProtocol.HelloMagic"/>.
+        /// </summary>
+        [Theory]
+        [InlineData(0, (byte)'X')]
+        [InlineData(7, (byte)0x01)]
+        public void ParseOneFrame_InvalidHelloMagic_IsRejected(int magicIndex, byte replacement)
+        {
+            Span<byte> payload = stackalloc byte[VatpProtocol.HelloPayloadLength];
+            VatpHello.Encode(payload, 1024);
+            payload[magicIndex] = replacement;
+            var frame = BuildHelloFrame(payload);
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Invalid, result.Status);
+            Assert.Equal(VatpErrorCode.InvalidHello, result.Error);
         }
 
         /// <summary>
@@ -53,6 +99,22 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
         }
 
         /// <summary>
+        /// ParseOneFrame rejects a HELLO whose advertised maxFramePayload is zero.
+        /// </summary>
+        [Fact]
+        public void ParseOneFrame_ZeroMaxFramePayload_IsRejected()
+        {
+            Span<byte> payload = stackalloc byte[VatpProtocol.HelloPayloadLength];
+            VatpProtocol.HelloMagic.CopyTo(payload);
+            BinaryPrimitives.WriteUInt32BigEndian(payload.Slice(8, 4), 0);
+            var frame = BuildHelloFrame(payload);
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Invalid, result.Status);
+            Assert.Equal(VatpErrorCode.InvalidMaxFramePayload, result.Error);
+            Assert.Equal(frame.Length, result.ConsumedBytes);
+        }
+
+        /// <summary>
         /// A payload shorter than the HELLO layout is <see cref="VatpErrorCode.InvalidHello"/>.
         /// </summary>
         [Fact]
@@ -60,6 +122,24 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
         {
             Assert.False(VatpHello.TryDecode("VNATP01"u8, out _, out var error));
             Assert.Equal(VatpErrorCode.InvalidHello, error);
+        }
+
+        /// <summary>
+        /// Truncated and oversized HELLO declared lengths are rejected as <see cref="VatpErrorCode.InvalidHello"/>.
+        /// </summary>
+        [Theory]
+        [InlineData(0)]
+        [InlineData(8)]
+        [InlineData(11)]
+        [InlineData(13)]
+        public void ParseOneFrame_HelloWrongPayloadLength_IsRejected(int payloadLength)
+        {
+            var header = new byte[16];
+            VatpFrameHeader.Create(VatpFrameType.Hello, 0, (uint)payloadLength).WriteTo(header);
+            var frame = VatpTestArticles.Concat(header, new byte[payloadLength]);
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Invalid, result.Status);
+            Assert.Equal(VatpErrorCode.InvalidHello, result.Error);
         }
 
         /// <summary>
@@ -73,6 +153,68 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
             var frame = VatpTestArticles.Concat(header, new byte[8]);
             var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
             Assert.Equal(VatpErrorCode.InvalidHello, result.Error);
+        }
+
+        /// <summary>
+        /// ParseOneFrame and <see cref="VatpHello.TryDecode(ReadOnlySpan{byte}, out VatpHello.HelloPayload, out VatpErrorCode)"/>
+        /// agree on validity and error codes for representative HELLO payloads.
+        /// </summary>
+        [Theory]
+        [InlineData("valid", VatpErrorCode.None)]
+        [InlineData("all-zero", VatpErrorCode.InvalidHello)]
+        [InlineData("bad-magic", VatpErrorCode.InvalidHello)]
+        [InlineData("zero-max", VatpErrorCode.InvalidMaxFramePayload)]
+        public void ParseOneFrame_And_TryDecode_Agree_On_HelloPayloadValidity(string kind, VatpErrorCode expectedError)
+        {
+            Span<byte> payload = stackalloc byte[VatpProtocol.HelloPayloadLength];
+            switch (kind)
+            {
+                case "valid":
+                    VatpHello.Encode(payload, VatpProtocol.DefaultMaxFramePayload);
+                    break;
+                case "all-zero":
+                    payload.Clear();
+                    break;
+                case "bad-magic":
+                    VatpHello.Encode(payload, 2048);
+                    payload[0] = (byte)'Z';
+                    break;
+                case "zero-max":
+                    VatpProtocol.HelloMagic.CopyTo(payload);
+                    BinaryPrimitives.WriteUInt32BigEndian(payload.Slice(8, 4), 0);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown HELLO fixture kind.");
+            }
+
+            var decodeOk = VatpHello.TryDecode(payload, out _, out var decodeError);
+            var frame = BuildHelloFrame(payload);
+            var parsed = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+
+            if (expectedError == VatpErrorCode.None)
+            {
+                Assert.True(decodeOk);
+                Assert.Equal(VatpErrorCode.None, decodeError);
+                Assert.Equal(VatpFrameParseStatus.Success, parsed.Status);
+                Assert.Equal(VatpErrorCode.None, parsed.Error);
+            }
+            else
+            {
+                Assert.False(decodeOk);
+                Assert.Equal(expectedError, decodeError);
+                Assert.Equal(VatpFrameParseStatus.Invalid, parsed.Status);
+                Assert.Equal(expectedError, parsed.Error);
+            }
+        }
+
+        /// <summary>Builds a stream-0 HELLO frame around an exact 12-byte payload.</summary>
+        private static byte[] BuildHelloFrame(ReadOnlySpan<byte> payload)
+        {
+            Assert.Equal(VatpProtocol.HelloPayloadLength, payload.Length);
+            var header = new byte[16];
+            VatpFrameHeader.Create(VatpFrameType.Hello, VatpProtocol.ConnectionStreamId, (uint)payload.Length)
+                .WriteTo(header);
+            return VatpTestArticles.Concat(header, payload.ToArray());
         }
     }
 }

@@ -185,5 +185,22 @@ namespace VectorNNTPD.Common.Tests.Transport.ArticleTransfer
             Assert.Equal(VatpErrorCode.FrameTooLarge, result.Error);
             Assert.True(allocated < 64 * 1024, $"allocated {allocated}");
         }
+
+        /// <summary>
+        /// Empty DATA (including non-FIN) remains accepted at the frame-parser boundary; stream state rejects empty non-FIN.
+        /// </summary>
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void ParseOneFrame_EmptyData_Succeeds_AtParserBoundary(bool fin)
+        {
+            var encoded = VatpFrameEncoder.EncodeData(1, ReadOnlyMemory<byte>.Empty, fin);
+            var frame = VatpFrameEncoder.ToSingleBuffer(encoded);
+            var result = VatpFrameParser.ParseOneFrame(frame, VatpProtocol.DefaultMaxFramePayload);
+            Assert.Equal(VatpFrameParseStatus.Success, result.Status);
+            Assert.Equal(VatpFrameType.Data, result.Frame!.Value.Header.Type);
+            Assert.Equal(0u, result.Frame!.Value.Header.PayloadLength);
+            Assert.Equal(fin, result.Frame!.Value.Header.HasFin);
+        }
     }
 }
