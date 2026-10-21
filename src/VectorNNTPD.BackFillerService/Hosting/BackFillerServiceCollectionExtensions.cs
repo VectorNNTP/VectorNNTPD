@@ -132,7 +132,8 @@ namespace VectorNNTPD.BackFillerService.Hosting
             builder.Services.AddSingleton<VectorNNTPD.Common.Acme.IAcmeCertificateObservation>(static provider =>
                 new AcmeCertificateWatchdog(
                     provider.GetRequiredService<BackFillerApplicationHealth>(),
-                    provider.GetRequiredService<ILogger<AcmeCertificateWatchdog>>()));
+                    provider.GetRequiredService<ILogger<AcmeCertificateWatchdog>>(),
+                    provider.GetRequiredService<TimeProvider>()));
             VectorNNTPD.Common.Hosting.AcmeCloudflareServiceCollectionExtensions.AddAcmeCloudflareInfrastructure(
                 builder.Services);
             VectorNNTPD.Common.Hosting.NntpDbServiceCollectionExtensions.AddNntpDbOptions(builder.Services);
@@ -159,7 +160,8 @@ namespace VectorNNTPD.BackFillerService.Hosting
 
             // Register systemd lifecycle notifier before other hosted services so it is
             // constructed early and observes ApplicationStarted/Stopping for READY/STOPPING.
-            builder.Services.AddSingleton<BackFillerApplicationHealth>();
+            builder.Services.AddSingleton(static provider =>
+                new BackFillerApplicationHealth(provider.GetRequiredService<TimeProvider>()));
             builder.Services.AddSingleton<IApplicationHealth>(static provider =>
                 provider.GetRequiredService<BackFillerApplicationHealth>());
             builder.Services.TryAddSingleton<ISystemdNotifyBridge, SystemdNotifyBridge>();

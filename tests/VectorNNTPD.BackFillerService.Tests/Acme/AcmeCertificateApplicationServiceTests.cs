@@ -121,60 +121,130 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         }
 
         /// <summary>
-        /// Repeated renewal failure inside the safety window blocks watchdog keep-alives. A later replacement clears the block.
+        /// Renewal failure inside the safety window keeps watchdog keep-alives while the current certificate remains usable.
+        /// A later successful replacement still leaves the process healthy.
         /// </summary>
-        /// <remarks>
-        /// A second reader holds a certificate lease across both checks and reads watchdog health before releasing it.
-        /// The reader waits on a signal. It does not spin, so the renewal continuation and other tests can run.
-        /// </remarks>
         [Fact]
-        public async Task Renewal_failure_inside_the_window_blocks_health_until_a_replacement_is_published()
+        public async Task Renewal_failure_inside_the_window_keeps_health_while_certificate_remains_usable()
         {
             var started = DateTimeOffset.UtcNow;
             var issuer = new ScriptedIssuer((call, domains, password) => call switch
             {
                 1 => CreateMaterial(domains, password, started.AddDays(20)),
-                2 => throw new InvalidOperationException("renewal failed"),
+                2 => throw new AcmeOrderException("finalize_failed", "ca rejected"),
                 _ => CreateMaterial(domains, password, started.AddDays(90)),
             });
             await using var observed = CreateObservedRenewal(started, issuer, notAfter: null, seedDisk: false);
             observed.Health.MarkStarted();
             await observed.Service.StartAsync(CancellationToken.None);
             Assert.True(observed.Health.IsHealthyForWatchdog);
-            using (observed.Publisher.Acquire())
-            {
-                var releaseReader = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                var readerHolding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                var reader = Task.Run(async () =>
-                {
-                    _ = observed.Health.IsHealthyForWatchdog;
-                    using var current = observed.Publisher.Acquire();
-                    readerHolding.TrySetResult();
-                    await releaseReader.Task.ConfigureAwait(false);
-                    _ = observed.Health.IsHealthyForWatchdog;
-                });
 
-                await readerHolding.Task.WaitAsync(TimeSpan.FromSeconds(2));
-                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
-                observed.Time.Advance(TimeSpan.FromHours(6));
-                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
-                Assert.False(observed.Health.IsHealthyForWatchdog);
-
-                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 2, TimeSpan.FromSeconds(2));
-                observed.Time.Advance(TimeSpan.FromHours(6));
-                await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 2, TimeSpan.FromSeconds(2));
-                Assert.True(observed.Health.IsHealthyForWatchdog);
-                Assert.True(observed.Publisher.IsAvailable);
-
-                releaseReader.TrySetResult();
-                await reader.WaitAsync(TimeSpan.FromSeconds(2));
-            }
-
-            using (observed.Publisher.Acquire())
-            {
-            }
-
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 1, TimeSpan.FromSeconds(2));
+            observed.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 1, TimeSpan.FromSeconds(2));
             Assert.True(observed.Health.IsHealthyForWatchdog);
+            Assert.False(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
+                new CertificateStatus(
+                    Usable: true,
+                    DueForRenewal: true,
+                    Material: CreateMaterial(["backfiller01.usenet.ninja"], "x", started.AddDays(20)),
+                    Reason: "renewal_threshold"),
+                renewalReplacedCertificate: false,
+                utcNow: observed.Time.GetUtcNow()));
+
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalWaitsStarted == 2, TimeSpan.FromSeconds(2));
+            observed.Time.Advance(TimeSpan.FromHours(6));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(() => observed.Service.RenewalChecksCompleted == 2, TimeSpan.FromSeconds(2));
+            Assert.True(observed.Health.IsHealthyForWatchdog);
+            Assert.True(observed.Publisher.IsAvailable);
+        }
+
+        /// <summary>
+        /// After a usable observation, advancing the clock past not-after fails closed without a new ACME observation.
+        /// Health is also false at the exact not-after instant (<c>UtcNow &gt;= NotAfter</c>).
+        /// </summary>
+        [Fact]
+        public void Watchdog_health_expires_with_the_clock_after_a_usable_observation()
+        {
+            var started = DateTimeOffset.UtcNow;
+            var time = new ManualTimeProvider(started);
+            var health = new BackFillerApplicationHealth(time);
+            health.MarkStarted();
+            var watchdog = new AcmeCertificateWatchdog(
+                health,
+                NullLogger<AcmeCertificateWatchdog>.Instance,
+                time);
+            var notAfter = started.AddHours(1);
+            var material = CreateMaterial(["backfiller01.usenet.ninja"], "x", notAfter);
+
+            watchdog.OnObserved(
+                new CertificateStatus(Usable: true, DueForRenewal: false, Material: material, Reason: "ok"),
+                renewalReplacedCertificate: false);
+            Assert.True(health.IsHealthyForWatchdog);
+            Assert.False(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
+                new CertificateStatus(Usable: true, DueForRenewal: false, Material: material, Reason: "ok"),
+                renewalReplacedCertificate: false,
+                utcNow: time.GetUtcNow()));
+
+            time.Advance(TimeSpan.FromHours(1));
+            Assert.Equal(notAfter, time.GetUtcNow());
+            Assert.False(health.IsHealthyForWatchdog);
+            Assert.True(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
+                new CertificateStatus(Usable: true, DueForRenewal: false, Material: material, Reason: "ok"),
+                renewalReplacedCertificate: false,
+                utcNow: time.GetUtcNow()));
+
+            time.Advance(TimeSpan.FromHours(1));
+            Assert.False(health.IsHealthyForWatchdog);
+        }
+
+        /// <summary>
+        /// Marking a certificate unavailable while its recorded not-after is already past never reports healthy.
+        /// </summary>
+        [Fact]
+        public void Watchdog_health_stays_unhealthy_when_unavailable_after_expiry()
+        {
+            var started = DateTimeOffset.UtcNow;
+            var time = new ManualTimeProvider(started);
+            var health = new BackFillerApplicationHealth(time);
+            health.MarkStarted();
+            var notAfter = started.AddMinutes(30);
+            health.MarkCertificateAvailable(notAfter);
+            Assert.True(health.IsHealthyForWatchdog);
+
+            time.Advance(TimeSpan.FromHours(1));
+            Assert.False(health.IsHealthyForWatchdog);
+            health.MarkCertificateUnavailable();
+            Assert.False(health.IsHealthyForWatchdog);
+        }
+
+        /// <summary>
+        /// A successful replacement observation records the new not-after for subsequent health reads.
+        /// </summary>
+        [Fact]
+        public void Watchdog_health_follows_replacement_certificate_not_after()
+        {
+            var started = DateTimeOffset.UtcNow;
+            var time = new ManualTimeProvider(started);
+            var health = new BackFillerApplicationHealth(time);
+            health.MarkStarted();
+            var watchdog = new AcmeCertificateWatchdog(
+                health,
+                NullLogger<AcmeCertificateWatchdog>.Instance,
+                time);
+            var shortLived = CreateMaterial(["backfiller01.usenet.ninja"], "x", started.AddHours(1));
+            var replacement = CreateMaterial(["backfiller01.usenet.ninja"], "x", started.AddDays(90));
+
+            watchdog.OnObserved(
+                new CertificateStatus(Usable: true, DueForRenewal: true, Material: shortLived, Reason: "renewal_threshold"),
+                renewalReplacedCertificate: false);
+            Assert.True(health.IsHealthyForWatchdog);
+
+            watchdog.OnObserved(
+                new CertificateStatus(Usable: true, DueForRenewal: false, Material: replacement, Reason: "ok"),
+                renewalReplacedCertificate: true);
+            time.Advance(TimeSpan.FromHours(2));
+            Assert.True(health.IsHealthyForWatchdog);
         }
 
         /// <summary>
@@ -187,7 +257,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             var expires = started.AddHours(5);
             var issuer = new ScriptedIssuer((call, domains, password) => call == 1
                 ? CreateMaterial(domains, password, expires)
-                : throw new InvalidOperationException("renewal failed"));
+                : throw new AcmeOrderException("finalize_failed", "ca rejected"));
             await using var observed = CreateObservedRenewal(started, issuer, notAfter: null, seedDisk: false);
             observed.Health.MarkStarted();
             await observed.Service.StartAsync(CancellationToken.None);
@@ -200,10 +270,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             Assert.False(observed.Health.IsHealthyForWatchdog);
             Assert.True(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
                 new CertificateStatus(Usable: false, DueForRenewal: true, Material: null, Reason: "expired"),
-                renewalReplacedCertificate: false));
+                renewalReplacedCertificate: false,
+                utcNow: observed.Time.GetUtcNow()));
             Assert.True(AcmeCertificateWatchdog.CertificateRequiresWatchdogBlock(
                 new CertificateStatus(Usable: false, DueForRenewal: true, Material: null, Reason: "absent"),
-                renewalReplacedCertificate: true));
+                renewalReplacedCertificate: true,
+                utcNow: observed.Time.GetUtcNow()));
         }
 
         /// <summary>
@@ -423,7 +495,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
                 includeNewsHostname: false);
             var readiness = new AcmeCertificateReadiness();
             var publisher = new TlsCertificateContextProvider(NullLogger<TlsCertificateContextProvider>.Instance);
-            var health = new BackFillerApplicationHealth();
+            var health = new BackFillerApplicationHealth(time);
             var service = new AcmeCertificateService(
                 Options.Create<AcmeCloudflareOptions>(options),
                 new InjectedManagerFactory(manager, Options.Create<AcmeCloudflareOptions>(options)),
@@ -431,7 +503,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
                 readiness,
                 NullLogger<AcmeCertificateService>.Instance,
                 time,
-                new AcmeCertificateWatchdog(health, NullLogger<AcmeCertificateWatchdog>.Instance));
+                new AcmeCertificateWatchdog(health, NullLogger<AcmeCertificateWatchdog>.Instance, time));
             return new ObservedRenewal(service, health, time, publisher, dir);
         }
 

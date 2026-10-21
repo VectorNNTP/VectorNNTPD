@@ -1,4 +1,8 @@
+using System.Net.Http;
+using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using VectorNNTPD.Common.Acme.Protocol;
 
 namespace VectorNNTPD.Common.Acme
 {
@@ -162,6 +166,11 @@ namespace VectorNNTPD.Common.Acme
         /// <summary>Reuses a usable certificate or issues a new one (startup path).</summary>
         /// <param name="cancellationToken">Cancels the in-process gate wait, the issuance lock wait, and issuance.</param>
         /// <returns>The reused or newly stored material.</returns>
+        /// <remarks>
+        /// A usable, unexpired certificate that is due for renewal still starts the process when replacement
+        /// issuance fails. Cancellation is not treated as a renewal failure. Missing, unreadable, or expired
+        /// material still requires successful issuance.
+        /// </remarks>
         internal async Task<CertificateMaterial> EnsureCertificateAsync(CancellationToken cancellationToken)
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -178,15 +187,30 @@ namespace VectorNNTPD.Common.Acme
                     return status.Material;
                 }
 
-                if (status is { Usable: true, DueForRenewal: true })
+                if (status is { Usable: true, Material: not null, DueForRenewal: true })
                 {
                     AcmeLogMessages.ExistingCertificateDueForRenewal(_logger);
-                }
-                else
-                {
-                    AcmeLogMessages.NoUsableCertificate(_logger, status.Reason);
+                    var prior = status.Material;
+                    var publishedBefore = Volatile.Read(ref _published);
+                    try
+                    {
+                        return await IssueAndPersistAsync(cancellationToken, _pfxPassword).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (IsRecoverableIssuanceFailure(ex, cancellationToken))
+                    {
+                        if (!ReferenceEquals(Volatile.Read(ref _published), publishedBefore))
+                        {
+                            return Volatile.Read(ref _published)!.Material;
+                        }
+
+                        _current = prior;
+                        PublishCredential(prior, _store.CurrentPfxPassword);
+                        AcmeLogMessages.RenewalFailedPreservingExisting(_logger, AcmeFailureSanitizer.Sanitize(ex));
+                        return prior;
+                    }
                 }
 
+                AcmeLogMessages.NoUsableCertificate(_logger, status.Reason);
                 return await IssueAndPersistAsync(cancellationToken, _pfxPassword).ConfigureAwait(false);
             }
             finally
@@ -233,7 +257,7 @@ namespace VectorNNTPD.Common.Acme
                     _ = await IssueAndPersistAsync(cancellationToken, issuePassword).ConfigureAwait(false);
                     return true;
                 }
-                catch (Exception ex) when (prior is not null && ex is not OperationCanceledException)
+                catch (Exception ex) when (prior is not null && IsRecoverableIssuanceFailure(ex, cancellationToken))
                 {
                     if (!ReferenceEquals(Volatile.Read(ref _published), publishedBefore))
                     {
@@ -241,6 +265,7 @@ namespace VectorNNTPD.Common.Acme
                     }
 
                     _current = prior;
+                    PublishCredential(prior, _store.CurrentPfxPassword);
                     AcmeLogMessages.RenewalFailedPreservingExisting(_logger, AcmeFailureSanitizer.Sanitize(ex));
                     return false;
                 }
@@ -332,6 +357,39 @@ namespace VectorNNTPD.Common.Acme
                     DateTimeOffset.UtcNow);
                 throw;
             }
+        }
+
+        /// <summary>
+        /// True when a failed replacement may keep a still-usable prior certificate.
+        /// Caller or host cancellation always propagates. Local store and configuration failures
+        /// and unexpected programming errors also propagate. Remote ACME, DNS, and transport failures
+        /// are recoverable.
+        /// </summary>
+        /// <param name="ex">Exception thrown from <see cref="IssueAndPersistAsync"/>.</param>
+        /// <param name="cancellationToken">Token that was passed to issuance; when cancelled, cancel exceptions are not recoverable.</param>
+        /// <returns>True when the preserve-on-failure path may run.</returns>
+        private static bool IsRecoverableIssuanceFailure(Exception ex, CancellationToken cancellationToken)
+        {
+            if (ex is OperationCanceledException)
+            {
+                return !cancellationToken.IsCancellationRequested;
+            }
+
+            if (ex is AcmeStorageException or AcmeConfigurationException)
+            {
+                return false;
+            }
+
+            if (ex is AcmeException or AcmeCaException)
+            {
+                return true;
+            }
+
+            return ex is HttpRequestException
+                or IOException
+                or SocketException
+                or TimeoutException
+                or CryptographicException;
         }
 
         /// <summary>Publishes <paramref name="material"/> and <paramref name="password"/> together for <see cref="CreateTlsCertificate"/>.</summary>
