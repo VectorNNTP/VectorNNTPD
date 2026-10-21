@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Messaging.RabbitMq;
+
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
     /// <summary>
@@ -353,5 +355,41 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             Level = LogLevel.Error,
             Message = "Article Work reconcile loop failed and will retry: {Reason}")]
         internal static partial void ConsumerReconcileFailed(ILogger logger, string Reason);
+
+        /// <summary>
+        /// Writes a Warning event when a running consumer session observes an unexpected channel fault or broker consumer cancellation.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="backbone">Provider backbone label.</param>
+        /// <param name="generation">Connection generation of the faulted channel.</param>
+        /// <param name="kind">Fault classification.</param>
+        /// <param name="reason">Broker or client reason text.</param>
+        [LoggerMessage(
+            EventId = 5323,
+            Level = LogLevel.Warning,
+            Message = "Article Work consumer channel faulted backbone={Backbone} generation={Generation} kind={Kind}: {Reason}")]
+        internal static partial void ConsumerChannelFaulted(
+            ILogger logger,
+            string backbone,
+            long generation,
+            RabbitMqChannelFaultKind kind,
+            string reason);
+
+        /// <summary>
+        /// Writes a Warning event when the response publisher observes an unexpected publish-channel fault and will rebuild on the current connection.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="generation">Connection generation of the faulted channel.</param>
+        /// <param name="kind">Fault classification.</param>
+        /// <param name="reason">Broker or client reason text.</param>
+        [LoggerMessage(
+            EventId = 5324,
+            Level = LogLevel.Warning,
+            Message = "Article Work publish channel faulted generation={Generation} kind={Kind}: {Reason}")]
+        internal static partial void PublisherChannelFaulted(
+            ILogger logger,
+            long generation,
+            RabbitMqChannelFaultKind kind,
+            string reason);
     }
 }

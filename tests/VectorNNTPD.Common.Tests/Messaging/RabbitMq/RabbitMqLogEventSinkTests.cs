@@ -982,6 +982,13 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             /// </value>
             public bool IsOpen { get; private set; } = true;
 
+            /// <inheritdoc />
+            public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted
+            {
+                add { }
+                remove { }
+            }
+
             /// <summary>
             /// Number of <see cref="DisposeAsync"/> calls.
             /// </summary>

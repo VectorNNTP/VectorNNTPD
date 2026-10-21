@@ -21,6 +21,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         bool IsOpen { get; }
 
         /// <summary>
+        /// Raised once when this channel becomes unexpectedly unusable while the process connection may still be open.
+        /// Expected application cancel and disposal do not raise this event.
+        /// </summary>
+        event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
+
+        /// <summary>
         /// Declares an exchange. Idempotent for compatible existing entities; incompatible
         /// existing entities fail closed (never deleted or mutated).
         /// </summary>

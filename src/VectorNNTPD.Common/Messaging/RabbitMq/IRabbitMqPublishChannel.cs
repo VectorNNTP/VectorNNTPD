@@ -17,6 +17,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         bool IsOpen { get; }
 
         /// <summary>
+        /// Raised once when this publish channel becomes unexpectedly unusable while the process connection may still be open.
+        /// Disposal does not raise this event.
+        /// </summary>
+        event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
+
+        /// <summary>
         /// Publishes one message described by <paramref name="publication"/> and waits for a publisher confirmation.
         /// </summary>
         /// <param name="publication">Publication properties and body.</param>
