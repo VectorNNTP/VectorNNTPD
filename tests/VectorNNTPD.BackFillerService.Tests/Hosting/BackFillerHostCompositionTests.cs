@@ -62,6 +62,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.Same(
                 host.Services.GetRequiredService<BackFillerApplicationHealth>(),
                 host.Services.GetRequiredService<IApplicationHealth>());
+            Assert.IsType<AcmeCertificateWatchdog>(
+                host.Services.GetRequiredService<IAcmeCertificateObservation>());
             Assert.NotNull(host.Services.GetRequiredService<ISystemdNotifyBridge>());
             Assert.NotNull(host.Services.GetRequiredService<ISystemdRuntime>());
             Assert.DoesNotContain(

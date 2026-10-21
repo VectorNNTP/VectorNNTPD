@@ -176,12 +176,13 @@ namespace VectorNNTPD.Common.Acme
 
         /// <summary>
         /// Written when the on-disk certificate is still usable but <see cref="CertificateStatus.DueForRenewal"/> is true, before replacement issuance.
+        /// Startup and the renewal loop keep the existing certificate when that issuance fails.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         [LoggerMessage(
             EventId = 1915,
             Level = LogLevel.Information,
-            Message = "Existing certificate due for renewal; issuing replacement")]
+            Message = "Existing certificate due for renewal; attempting replacement")]
         internal static partial void ExistingCertificateDueForRenewal(ILogger logger);
 
         /// <summary>
