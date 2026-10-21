@@ -27,6 +27,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Send and receive limits come from <see cref="NntpSessionOptions.TcpSendBufferBytes"/> and
         /// <see cref="NntpSessionOptions.TcpReceiveBufferBytes"/>. <see cref="NntpSessionOptions.ReceiveBufferBytes"/>
         /// is the managed reader size and is not copied onto the socket. Nagle is disabled.
+        /// TCP keepalive uses <see cref="NntpSessionOptions.EffectiveTcpKeepAlive"/> and does not consult
+        /// <see cref="BackFillerProviderDefinition.KeepAliveSeconds"/>.
         /// The TCP connect uses <see cref="NntpSessionOptions.ConnectTimeout"/> linked with <paramref name="cancellationToken"/>.
         /// Implicit TLS then gets another full <see cref="NntpSessionOptions.ConnectTimeout"/>, linked only with <paramref name="cancellationToken"/>.
         /// Any failure, including <see cref="System.Net.Sockets.SocketException"/>, disposes the client and rethrows.
@@ -45,13 +47,22 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
             try
             {
-                TcpSocketOptions.Apply(client.Client, options.TcpSendBufferBytes, options.TcpReceiveBufferBytes);
+                var keepAlive = options.EffectiveTcpKeepAlive;
+                TcpSocketOptions.Apply(
+                    client.Client,
+                    options.TcpSendBufferBytes,
+                    options.TcpReceiveBufferBytes,
+                    keepAlive);
                 using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectCts.CancelAfter(options.ConnectTimeout);
                 await client.ConnectAsync(provider.Host, provider.Port, connectCts.Token).ConfigureAwait(false);
                 // ConnectAsync(string) can replace the socket when the resolved address family differs.
                 // Re-apply on the connected socket before the first TLS or NNTP byte.
-                TcpSocketOptions.Apply(client.Client, options.TcpSendBufferBytes, options.TcpReceiveBufferBytes);
+                TcpSocketOptions.Apply(
+                    client.Client,
+                    options.TcpSendBufferBytes,
+                    options.TcpReceiveBufferBytes,
+                    keepAlive);
                 Stream stream = client.GetStream();
                 if (!provider.UseTls)
                 {

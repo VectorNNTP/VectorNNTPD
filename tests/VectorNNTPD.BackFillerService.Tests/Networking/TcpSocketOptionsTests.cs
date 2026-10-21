@@ -7,6 +7,47 @@ namespace VectorNNTPD.BackFillerService.Tests.Networking
     /// <summary>Applies TCP options on real accepted sockets before any application write.</summary>
     public sealed class TcpSocketOptionsTests
     {
+        /// <summary>Issue #191: keepalive and probe timings are set on an accepted socket.</summary>
+        [Fact]
+        public async Task Apply_enables_keepalive_and_probe_timings_when_supported()
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            using var accepted = await listener.AcceptSocketAsync();
+            var settings = new TcpKeepAliveSettings(12, 4, 6);
+
+            TcpSocketOptions.Apply(accepted, 128 * 1024, 256 * 1024, settings);
+
+            Assert.True(TcpSocketOptions.IsKeepAliveEnabled(accepted));
+            AssertProbeOption(accepted, SocketOptionName.TcpKeepAliveTime, settings.TimeSeconds);
+            AssertProbeOption(accepted, SocketOptionName.TcpKeepAliveInterval, settings.IntervalSeconds);
+            AssertProbeOption(accepted, SocketOptionName.TcpKeepAliveRetryCount, settings.RetryCount);
+        }
+
+        /// <summary>Out-of-range keepalive settings fail before the socket is mutated.</summary>
+        [Fact]
+        public async Task Apply_rejects_invalid_keepalive_settings_before_mutating_the_socket()
+        {
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            using var accepted = await listener.AcceptSocketAsync();
+            Assert.False(accepted.NoDelay);
+            Assert.False(TcpSocketOptions.IsKeepAliveEnabled(accepted));
+
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => TcpSocketOptions.Apply(
+                    accepted,
+                    128 * 1024,
+                    256 * 1024,
+                    new TcpKeepAliveSettings(0, 5, 3)));
+            Assert.False(accepted.NoDelay);
+            Assert.False(TcpSocketOptions.IsKeepAliveEnabled(accepted));
+        }
+
         /// <summary>An IPv4 accepted socket gets independent buffers and Nagle off before the first byte.</summary>
         [Fact]
         public async Task Apply_configures_an_ipv4_accepted_socket_before_any_write()
@@ -48,8 +89,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Networking
             using var first = await listener.AcceptSocketAsync();
             using var second = await listener.AcceptSocketAsync();
 
-            TcpSocketOptions.Apply(first, 128 * 1024, 256 * 1024);
-            TcpSocketOptions.Apply(second, 64 * 1024, 512 * 1024);
+            TcpSocketOptions.Apply(first, 128 * 1024, 256 * 1024, TcpKeepAliveSettings.Default);
+            TcpSocketOptions.Apply(second, 64 * 1024, 512 * 1024, TcpKeepAliveSettings.Default);
 
             AssertRequested(first, 128 * 1024, 256 * 1024);
             AssertRequested(second, 64 * 1024, 512 * 1024);
@@ -68,11 +109,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Networking
             using var accepted = await listener.AcceptSocketAsync();
             Assert.False(accepted.NoDelay);
 
-            Assert.Throws<ArgumentOutOfRangeException>(() => TcpSocketOptions.Apply(accepted, 1024, 128 * 1024));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => TcpSocketOptions.Apply(accepted, 1024, 128 * 1024, TcpKeepAliveSettings.Default));
             Assert.False(accepted.NoDelay);
 
             accepted.Dispose();
-            Assert.Throws<ObjectDisposedException>(() => TcpSocketOptions.Apply(accepted, 128 * 1024, 256 * 1024));
+            Assert.Throws<ObjectDisposedException>(
+                () => TcpSocketOptions.Apply(accepted, 128 * 1024, 256 * 1024, TcpKeepAliveSettings.Default));
         }
 
         /// <summary>Connects one client, applies distinct buffers, checks them, then writes one byte.</summary>
@@ -88,8 +131,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Networking
             using var accepted = await listen.AcceptAsync();
             Assert.False(accepted.NoDelay);
 
-            TcpSocketOptions.Apply(accepted, 128 * 1024, 256 * 1024);
+            TcpSocketOptions.Apply(accepted, 128 * 1024, 256 * 1024, TcpKeepAliveSettings.Default);
             AssertRequested(accepted, 128 * 1024, 256 * 1024);
+            Assert.True(TcpSocketOptions.IsKeepAliveEnabled(accepted));
 
             await accepted.SendAsync(new byte[] { 9 });
             var received = new byte[1];
@@ -108,6 +152,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Networking
             Assert.True(socket.SendBufferSize >= send, $"send buffer {socket.SendBufferSize} is below {send}");
             Assert.True(socket.ReceiveBufferSize >= receive, $"receive buffer {socket.ReceiveBufferSize} is below {receive}");
             Assert.NotEqual(socket.SendBufferSize, socket.ReceiveBufferSize);
+        }
+
+        /// <summary>
+        /// Asserts a probe option when the platform can read it; otherwise requires only that the read was classified unsupported.
+        /// </summary>
+        private static void AssertProbeOption(Socket socket, SocketOptionName name, int expected)
+        {
+            if (TcpSocketOptions.TryGetTcpKeepAliveProbeOption(socket, name, out var actual))
+            {
+                Assert.Equal(expected, actual);
+            }
         }
     }
 }

@@ -64,6 +64,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
             ValidateShutdown(options, failures);
             ValidateListener(options, failures);
             ValidateNntp(options, failures);
+            ValidateTcpKeepAlive(options, failures);
             ValidateAccountRefresh(options, failures);
             ValidateArticleRetention(options, failures);
             ValidateSystemd(options, failures);
@@ -306,6 +307,43 @@ namespace VectorNNTPD.BackFillerService.Configuration
 
             ValidateBufferSize("BackFiller:Nntp:SendBufferBytes", nntp.SendBufferBytes, failures);
             ValidateBufferSize("BackFiller:Nntp:ReceiveBufferBytes", nntp.ReceiveBufferBytes, failures);
+        }
+
+        /// <summary>
+        /// Appends failures when TCP keepalive timings are outside the ranges shared with
+        /// <see cref="TcpKeepAliveSettings"/>.
+        /// </summary>
+        /// <param name="options">Options whose <see cref="BackFillerOptions.TcpKeepAlive"/> section is checked.</param>
+        /// <param name="failures">Failure list to append. Not cleared.</param>
+        private static void ValidateTcpKeepAlive(BackFillerOptions options, List<string> failures)
+        {
+            var keepAlive = options.TcpKeepAlive;
+            if (keepAlive.TimeSeconds
+                is < TcpKeepAliveSettings.MinimumPositive
+                or > TcpKeepAliveSettings.MaximumTimeSeconds)
+            {
+                failures.Add(
+                    "BackFiller:TcpKeepAlive:TimeSeconds must be between "
+                    + $"{TcpKeepAliveSettings.MinimumPositive} and {TcpKeepAliveSettings.MaximumTimeSeconds}.");
+            }
+
+            if (keepAlive.IntervalSeconds
+                is < TcpKeepAliveSettings.MinimumPositive
+                or > TcpKeepAliveSettings.MaximumIntervalSeconds)
+            {
+                failures.Add(
+                    "BackFiller:TcpKeepAlive:IntervalSeconds must be between "
+                    + $"{TcpKeepAliveSettings.MinimumPositive} and {TcpKeepAliveSettings.MaximumIntervalSeconds}.");
+            }
+
+            if (keepAlive.RetryCount
+                is < TcpKeepAliveSettings.MinimumPositive
+                or > TcpKeepAliveSettings.MaximumRetryCount)
+            {
+                failures.Add(
+                    "BackFiller:TcpKeepAlive:RetryCount must be between "
+                    + $"{TcpKeepAliveSettings.MinimumPositive} and {TcpKeepAliveSettings.MaximumRetryCount}.");
+            }
         }
 
         /// <summary>Appends a failure when a TCP buffer limit is outside 16 KiB through 16 MiB.</summary>

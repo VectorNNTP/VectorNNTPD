@@ -210,6 +210,15 @@ namespace VectorNNTPD.BackFillerService.Configuration
         public BackFillerNntpOptions Nntp { get; set; } = new();
 
         /// <summary>
+        /// Gets or sets TCP keepalive probe timings for upstream NNTP sockets and accepted listener sockets.
+        /// </summary>
+        /// <remarks>
+        /// Required. Defaults and ranges live on <see cref="BackFillerTcpKeepAliveOptions"/>.
+        /// Independent of per-provider MySQL <c>keepalive</c> (NNTP <c>DATE</c>).
+        /// </remarks>
+        public BackFillerTcpKeepAliveOptions TcpKeepAlive { get; set; } = new();
+
+        /// <summary>
         /// Gets or sets Linux systemd notify/watchdog options.
         /// </summary>
         /// <remarks>Defaults live on <see cref="BackFillerSystemdOptions"/>. Windows hosts still bind the section.</remarks>
@@ -479,5 +488,47 @@ namespace VectorNNTPD.BackFillerService.Configuration
         /// <summary>Sweep cadence in seconds.</summary>
         /// <remarks>Default 1. Validation accepts 1–60. The snapshot stores a <see cref="TimeSpan"/>.</remarks>
         public int SweepIntervalSeconds { get; set; } = 1;
+    }
+
+    /// <summary>
+    /// TCP keepalive timings for upstream provider sockets and accepted cache-listener sockets.
+    /// </summary>
+    /// <remarks>
+    /// Applied by <see cref="Networking.TcpSocketOptions"/> before NNTP or TLS traffic.
+    /// Does not replace application-level NNTP <c>DATE</c> keepalive from MySQL <c>keepalive</c>.
+    /// Defaults match <see cref="Networking.TcpKeepAliveSettings.Default"/>.
+    /// </remarks>
+    internal sealed class BackFillerTcpKeepAliveOptions
+    {
+        /// <summary>
+        /// Idle seconds before the first TCP keepalive probe.
+        /// </summary>
+        /// <remarks>
+        /// Default <see cref="Networking.TcpKeepAliveSettings.DefaultTimeSeconds"/>.
+        /// Validation accepts <see cref="Networking.TcpKeepAliveSettings.MinimumPositive"/>–
+        /// <see cref="Networking.TcpKeepAliveSettings.MaximumTimeSeconds"/>.
+        /// </remarks>
+        public int TimeSeconds { get; set; } = Networking.TcpKeepAliveSettings.DefaultTimeSeconds;
+
+        /// <summary>
+        /// Seconds between consecutive TCP keepalive probes.
+        /// </summary>
+        /// <remarks>
+        /// Default <see cref="Networking.TcpKeepAliveSettings.DefaultIntervalSeconds"/>.
+        /// Validation accepts <see cref="Networking.TcpKeepAliveSettings.MinimumPositive"/>–
+        /// <see cref="Networking.TcpKeepAliveSettings.MaximumIntervalSeconds"/>.
+        /// </remarks>
+        public int IntervalSeconds { get; set; } = Networking.TcpKeepAliveSettings.DefaultIntervalSeconds;
+
+        /// <summary>
+        /// Unanswered probe count before the stack drops the connection.
+        /// </summary>
+        /// <remarks>
+        /// Default <see cref="Networking.TcpKeepAliveSettings.DefaultRetryCount"/>.
+        /// Validation accepts <see cref="Networking.TcpKeepAliveSettings.MinimumPositive"/>–
+        /// <see cref="Networking.TcpKeepAliveSettings.MaximumRetryCount"/>.
+        /// Platforms that cannot set retry count keep OS defaults after enabling <c>SO_KEEPALIVE</c>.
+        /// </remarks>
+        public int RetryCount { get; set; } = Networking.TcpKeepAliveSettings.DefaultRetryCount;
     }
 }

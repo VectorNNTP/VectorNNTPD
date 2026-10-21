@@ -35,6 +35,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// <param name="NntpDb">NntpDB connection projection. <see cref="NntpDbRuntimeOptions.ConnectionString"/> is secret.</param>
     /// <param name="AccountRefreshInterval">MySQL account-refresh poll interval.</param>
     /// <param name="Nntp">Validated outbound NNTP provider session bounds.</param>
+    /// <param name="TcpKeepAlive">Validated TCP keepalive timings for upstream and accepted listener sockets.</param>
     internal sealed record BackFillerRuntimeOptions(
         int ServerId,
         BackFillerRuntimeDnsIdentity DnsIdentity,
@@ -48,7 +49,8 @@ namespace VectorNNTPD.BackFillerService.Configuration
         BackFillerRabbitMqRuntimeOptions RabbitMq,
         NntpDbRuntimeOptions NntpDb,
         TimeSpan AccountRefreshInterval,
-        BackFillerNntpRuntimeOptions Nntp)
+        BackFillerNntpRuntimeOptions Nntp,
+        Networking.TcpKeepAliveSettings TcpKeepAlive)
     {
         /// <summary>Canonical DNS suffix. Updated by <see cref="ApplySharedDnsIdentity"/>.</summary>
         internal string DnsSuffix => DnsIdentity.DnsSuffix;

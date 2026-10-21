@@ -1,3 +1,5 @@
+using VectorNNTPD.BackFillerService.Networking;
+
 namespace VectorNNTPD.BackFillerService.Nntp
 {
     /// <summary>
@@ -18,6 +20,9 @@ namespace VectorNNTPD.BackFillerService.Nntp
     /// <param name="TcpReceiveBufferBytes">
     /// Requested TCP receive-buffer limit for the upstream socket. Article bodies arrive on this window.
     /// </param>
+    /// <param name="TcpKeepAlive">
+    /// TCP keepalive timings for each upstream socket. Independent of provider MySQL <c>keepalive</c> (<c>DATE</c>).
+    /// </param>
     /// <param name="ServerCertificateValidationCallback">
     /// Optional TLS certificate callback. <see langword="null"/> uses platform validation
     /// (production default). Tests may supply a callback; this is not a configuration setting.
@@ -31,11 +36,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
         TimeSpan ReceiveTimeout,
         int TcpSendBufferBytes,
         int TcpReceiveBufferBytes,
+        TcpKeepAliveSettings TcpKeepAlive = default,
         System.Net.Security.RemoteCertificateValidationCallback? ServerCertificateValidationCallback = null)
     {
         /// <summary>
         /// Reader buffer 64 KiB, TCP send 1 MiB, TCP receive 2 MiB, 16 KiB status lines, 5 MiB articles,
-        /// 30 s connect/command, 2 min receive.
+        /// 30 s connect/command, 2 min receive, and <see cref="TcpKeepAliveSettings.Default"/> keepalive.
         /// </summary>
         /// <remarks>
         /// The TCP sizes match <see cref="Configuration.BackFillerNntpOptions"/> defaults.
@@ -50,6 +56,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
             CommandTimeout: TimeSpan.FromSeconds(30),
             ReceiveTimeout: TimeSpan.FromMinutes(2),
             TcpSendBufferBytes: Configuration.BackFillerNntpOptions.DefaultSendBufferBytes,
-            TcpReceiveBufferBytes: Configuration.BackFillerNntpOptions.DefaultReceiveBufferBytes);
+            TcpReceiveBufferBytes: Configuration.BackFillerNntpOptions.DefaultReceiveBufferBytes,
+            TcpKeepAlive: TcpKeepAliveSettings.Default);
+
+        /// <summary>
+        /// Effective keepalive timings. A default-constructed option (all zeros) resolves to
+        /// <see cref="TcpKeepAliveSettings.Default"/> so older test constructors stay valid.
+        /// </summary>
+        internal TcpKeepAliveSettings EffectiveTcpKeepAlive =>
+            TcpKeepAlive.TimeSeconds == 0
+            && TcpKeepAlive.IntervalSeconds == 0
+            && TcpKeepAlive.RetryCount == 0
+                ? TcpKeepAliveSettings.Default
+                : TcpKeepAlive;
     }
 }

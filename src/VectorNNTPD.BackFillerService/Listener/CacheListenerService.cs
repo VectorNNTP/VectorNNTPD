@@ -852,7 +852,8 @@ namespace VectorNNTPD.BackFillerService.Listener
                 TcpSocketOptions.Apply(
                     accepted,
                     _runtime.Listener.SendBufferBytes,
-                    _runtime.Listener.ReceiveBufferBytes);
+                    _runtime.Listener.ReceiveBufferBytes,
+                    _runtime.TcpKeepAlive);
             }
             catch (Exception ex) when (ex is SocketException or ObjectDisposedException or ArgumentOutOfRangeException)
             {
