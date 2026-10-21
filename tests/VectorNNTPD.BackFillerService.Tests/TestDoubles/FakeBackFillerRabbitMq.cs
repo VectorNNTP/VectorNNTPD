@@ -411,6 +411,12 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <summary>When set, thrown from queue declare instead of recording the declaration.</summary>
         public Exception? QueueDeclareException { get; set; }
 
+        /// <summary>
+        /// When it returns an exception, that queue name fails and clears <see cref="IsOpen"/> to model a broker channel close.
+        /// Checked before <see cref="QueueDeclareException"/>.
+        /// </summary>
+        public Func<string, Exception?>? QueueDeclareFailure { get; set; }
+
         /// <summary>When set, thrown from queue bind instead of recording the binding.</summary>
         public Exception? QueueBindException { get; set; }
 
@@ -493,8 +499,16 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(queue);
             cancellationToken.ThrowIfCancellationRequested();
+            if (QueueDeclareFailure?.Invoke(queue) is { } selectiveFailure)
+            {
+                // Broker PRECONDITION_FAILED and similar declare failures close the AMQP channel.
+                IsOpen = false;
+                throw selectiveFailure;
+            }
+
             if (QueueDeclareException is not null)
             {
+                IsOpen = false;
                 throw QueueDeclareException;
             }
 

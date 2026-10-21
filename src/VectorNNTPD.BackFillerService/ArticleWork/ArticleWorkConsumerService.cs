@@ -1,3 +1,4 @@
+using RabbitMQ.Client.Exceptions;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Nntp;
@@ -730,8 +731,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Backbones whose declaration succeeded. Empty when there is nothing to declare, the connection is not ready, or every declaration failed.
         /// </returns>
         /// <remarks>
-        /// When a current connection exists, one manual-ack channel is opened for the pass and disposed of afterward. A failure for one backbone is logged and skipped.
-        /// A failure to open the channel is logged for every backbone not already declared. <see cref="OperationCanceledException"/> is not logged.
+        /// Declarations reuse one manual-ack channel while it remains open. A failed declaration disposes that channel
+        /// before the next backbone is attempted, because RabbitMQ closes the channel on broker-side declare failures
+        /// such as <c>PRECONDITION_FAILED</c>. A later backbone therefore never reuses an unusable channel.
+        /// The connection generation is rechecked before each channel open. <see cref="OperationCanceledException"/> is not logged.
         /// </remarks>
         private async Task<HashSet<string>> EnsureProviderTopologyAsync(
             IEnumerable<string> backbones,
@@ -749,7 +752,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return ready;
             }
 
-            if (!_connections.TryGetCurrent(out var handle))
+            if (!_connections.TryGetCurrent(out _))
             {
                 foreach (var backbone in unique)
                 {
@@ -766,15 +769,24 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             IRabbitMqManualAckChannel? channel = null;
             try
             {
-                channel = await handle.Connection
-                    .CreateManualAckChannelAsync(handle.Generation, cancellationToken)
-                    .ConfigureAwait(false);
                 foreach (var backbone in unique.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     var queue = BackFillerRabbitMqTopology.ComposeProviderEntity(backbone);
                     try
                     {
+                        channel = await EnsureOpenTopologyChannelAsync(channel, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (channel is null)
+                        {
+                            ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
+                                _logger,
+                                backbone,
+                                queue,
+                                "RabbitMQ connection is not ready for topology declaration.");
+                            continue;
+                        }
+
                         await BackFillerArticleWorkTopology
                             .DeclareProviderEndpointAsync(channel, backbone, cancellationToken)
                             .ConfigureAwait(false);
@@ -787,35 +799,95 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             _logger,
                             backbone,
                             queue,
-                            ex.Message);
+                            FormatTopologyDeclareFailure(ex));
+                        channel = await DisposeTopologyChannelAsync(channel).ConfigureAwait(false);
                     }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                foreach (var backbone in unique)
-                {
-                    if (ready.Contains(backbone))
-                    {
-                        continue;
-                    }
-
-                    ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
-                        _logger,
-                        backbone,
-                        BackFillerRabbitMqTopology.ComposeProviderEntity(backbone),
-                        ex.Message);
                 }
             }
             finally
             {
-                if (channel is not null)
-                {
-                    await channel.DisposeAsync().ConfigureAwait(false);
-                }
+                _ = await DisposeTopologyChannelAsync(channel).ConfigureAwait(false);
             }
 
             return ready;
+        }
+
+        /// <summary>
+        /// Returns <paramref name="channel"/> when it is still open; otherwise disposes it and opens a new channel on the current generation.
+        /// </summary>
+        /// <param name="channel">Previous topology channel, or <see langword="null"/>.</param>
+        /// <param name="cancellationToken">Cancels channel creation.</param>
+        /// <returns>
+        /// An open manual-ack channel, or <see langword="null"/> when no current connection is available.
+        /// </returns>
+        private async Task<IRabbitMqManualAckChannel?> EnsureOpenTopologyChannelAsync(
+            IRabbitMqManualAckChannel? channel,
+            CancellationToken cancellationToken)
+        {
+            if (channel is { IsOpen: true })
+            {
+                return channel;
+            }
+
+            _ = await DisposeTopologyChannelAsync(channel).ConfigureAwait(false);
+            if (!_connections.TryGetCurrent(out var handle) || !handle.IsCurrent)
+            {
+                return null;
+            }
+
+            return await handle.Connection
+                .CreateManualAckChannelAsync(handle.Generation, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        /// <summary>Disposes <paramref name="channel"/> when non-null and returns <see langword="null"/>.</summary>
+        /// <param name="channel">Topology channel to release.</param>
+        /// <returns><see langword="null"/> so the caller can clear its local handle.</returns>
+        private static async Task<IRabbitMqManualAckChannel?> DisposeTopologyChannelAsync(
+            IRabbitMqManualAckChannel? channel)
+        {
+            if (channel is not null)
+            {
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Formats a topology declaration failure, preferring structured AMQP shutdown details when present.
+        /// </summary>
+        /// <param name="exception">Failure from channel creation or declare/bind.</param>
+        /// <returns>Stable log text that includes reply code and text for broker channel closes.</returns>
+        private static string FormatTopologyDeclareFailure(Exception exception)
+        {
+            if (exception is OperationInterruptedException interrupted
+                && interrupted.ShutdownReason is { } interruptedShutdown)
+            {
+                return FormatAmqpShutdownFailure(interruptedShutdown, interrupted.Message);
+            }
+
+            if (exception is AlreadyClosedException alreadyClosed
+                && alreadyClosed.ShutdownReason is { } closedShutdown)
+            {
+                return FormatAmqpShutdownFailure(closedShutdown, alreadyClosed.Message);
+            }
+
+            return exception.Message;
+        }
+
+        /// <summary>Formats broker channel-close metadata without credentials or payload bytes.</summary>
+        /// <param name="shutdown">Client shutdown details from the failed RPC.</param>
+        /// <param name="fallbackMessage">Exception message appended for context.</param>
+        /// <returns>Log text including reply code, reply text, and initiator.</returns>
+        private static string FormatAmqpShutdownFailure(
+            RabbitMQ.Client.Events.ShutdownEventArgs shutdown,
+            string fallbackMessage)
+        {
+            var replyText = string.IsNullOrWhiteSpace(shutdown.ReplyText)
+                ? "(none)"
+                : shutdown.ReplyText;
+            return $"AMQP channel closed replyCode={shutdown.ReplyCode} text={replyText} initiator={shutdown.Initiator}: {fallbackMessage}";
         }
 
         /// <summary>
