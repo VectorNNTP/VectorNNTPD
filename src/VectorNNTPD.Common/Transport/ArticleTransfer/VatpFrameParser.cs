@@ -167,8 +167,12 @@ namespace VectorNNTPD.Common.Transport.ArticleTransfer
         /// other mismatches use <see cref="VatpErrorCode.InvalidFrameLength"/>.
         /// </returns>
         /// <remarks>
+        /// HELLO is validated through <see cref="VatpHello.TryDecode(in ReadOnlySequence{byte}, out VatpHello.HelloPayload, out VatpErrorCode)"/>
+        /// so magic and non-zero <c>maxFramePayload</c> are enforced at the parser boundary, not only by later callers.
         /// END and CANCEL must be empty. WINDOW is 4 bytes. FAIL is 2 bytes plus at most
         /// <see cref="VatpProtocol.FailMaxReasonLength"/> reason bytes. STORE is 32 bytes. RESULT is 1 byte.
+        /// Empty non-FIN DATA is intentionally accepted here; <see cref="ArticleTransferReceiveStream"/> rejects it.
+        /// Empty FIN DATA remains legal after exact <c>ArtSize</c> bytes.
         /// </remarks>
         private static VatpErrorCode ValidatePayloadShape(in VatpFrameHeader header, in ReadOnlySequence<byte> payload)
         {
@@ -179,9 +183,9 @@ namespace VectorNNTPD.Common.Transport.ArticleTransfer
 
             return header.Type switch
             {
-                VatpFrameType.Hello => header.PayloadLength == VatpProtocol.HelloPayloadLength
+                VatpFrameType.Hello => VatpHello.TryDecode(payload, out _, out var helloError)
                     ? VatpErrorCode.None
-                    : VatpErrorCode.InvalidHello,
+                    : helloError,
                 VatpFrameType.Open => header.PayloadLength == VatpProtocol.OpenPayloadLength
                     ? VatpErrorCode.None
                     : VatpErrorCode.InvalidOpen,
