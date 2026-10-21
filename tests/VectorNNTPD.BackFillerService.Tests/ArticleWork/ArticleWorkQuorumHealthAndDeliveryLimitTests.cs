@@ -885,19 +885,19 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 _bodyBytes = Encoding.UTF8.GetBytes(body);
             }
 
-            protected override Task<HttpResponseMessage> SendAsync(
+            protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
-                // HttpClient owns disposal of the returned response and its content.
-                var response = new HttpResponseMessage(_statusCode)
+                await Task.CompletedTask.ConfigureAwait(false);
+                // Returned to HttpClient; InspectAsync disposes the response with using.
+                return new HttpResponseMessage(_statusCode)
                 {
                     Content = new ByteArrayContent(_bodyBytes)
                     {
                         Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json") },
                     },
                 };
-                return Task.FromResult(response);
             }
         }
     }

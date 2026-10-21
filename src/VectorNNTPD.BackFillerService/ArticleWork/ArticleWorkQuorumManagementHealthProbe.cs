@@ -14,16 +14,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
     /// Uses <c>GET /api/queues/{vhost}/{name}</c>. AMQP <c>queue.declare-ok</c> is never treated as membership proof.
     /// When <see cref="RabbitMqManagementOptions.BaseUrl"/> is unset, every inspection is
     /// <see cref="ArticleWorkQuorumHealthKind.Unverifiable"/>.
+    /// Deserialization uses <see cref="ArticleWorkQuorumManagementJsonContext"/> for Native AOT.
     /// </remarks>
     internal sealed class ArticleWorkQuorumManagementHealthProbe : IArticleWorkQuorumHealthProbe
     {
         /// <summary>Named <see cref="IHttpClientFactory"/> client for Management calls.</summary>
         internal const string HttpClientName = "VectorNNTPD.ArticleWork.QuorumManagement";
-
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            PropertyNameCaseInsensitive = true,
-        };
 
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IOptions<RabbitMqOptions> _options;
@@ -111,7 +107,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     .ReadAsStreamAsync(timeoutCts.Token)
                     .ConfigureAwait(false);
                 var document = await JsonSerializer
-                    .DeserializeAsync<ManagementQueueDocument>(stream, JsonOptions, timeoutCts.Token)
+                    .DeserializeAsync(
+                        stream,
+                        ArticleWorkQuorumManagementJsonContext.Default.ArticleWorkQuorumManagementQueueDocument,
+                        timeoutCts.Token)
                     .ConfigureAwait(false);
 
                 if (document is null)
@@ -129,8 +128,25 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 throw;
             }
-            // codeql[cs/catch-of-all-exceptions] Management faults must become Unverifiable, not crash reconcile.
-            catch (Exception ex)
+            catch (HttpRequestException ex)
+            {
+                return Unverifiable(
+                    requiredMembers,
+                    "Management API request failed: " + ex.GetType().Name + ".");
+            }
+            catch (JsonException ex)
+            {
+                return Unverifiable(
+                    requiredMembers,
+                    "Management API request failed: " + ex.GetType().Name + ".");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Unverifiable(
+                    requiredMembers,
+                    "Management API request failed: " + ex.GetType().Name + ".");
+            }
+            catch (IOException ex)
             {
                 return Unverifiable(
                     requiredMembers,
@@ -140,7 +156,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>Maps a Management queue document to a health result.</summary>
         private static ArticleWorkQuorumHealthResult Evaluate(
-            ManagementQueueDocument document,
+            ArticleWorkQuorumManagementQueueDocument document,
             int requiredMembers)
         {
             var members = document.Members?.Count;
@@ -217,18 +233,5 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 OnlineMembers: null,
                 Leader: null,
                 Reason: reason);
-
-        /// <summary>Subset of the Management queue JSON used for quorum health.</summary>
-        private sealed class ManagementQueueDocument
-        {
-            /// <summary>Configured quorum member node names.</summary>
-            public List<string>? Members { get; set; }
-
-            /// <summary>Online quorum member node names.</summary>
-            public List<string>? Online { get; set; }
-
-            /// <summary>Current Raft leader node name.</summary>
-            public string? Leader { get; set; }
-        }
     }
 }

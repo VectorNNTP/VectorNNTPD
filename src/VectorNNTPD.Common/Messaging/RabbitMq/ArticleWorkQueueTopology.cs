@@ -79,6 +79,11 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// </summary>
         /// <param name="hosts">Configured host list. Null is treated as empty.</param>
         /// <returns>Unique host count.</returns>
+        /// <remarks>
+        /// Filters blank entries before unique counting. Validation remains the authoritative rejection
+        /// of empty and whitespace-only <see cref="RabbitMqOptions.Hosts"/> lists; this helper only
+        /// projects topology from already-trimmed non-empty values.
+        /// </remarks>
         internal static int CountUniqueHosts(IEnumerable<string?>? hosts)
         {
             if (hosts is null)
@@ -86,16 +91,11 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 return 0;
             }
 
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var host in hosts)
-            {
-                if (!string.IsNullOrWhiteSpace(host))
-                {
-                    set.Add(host.Trim());
-                }
-            }
-
-            return set.Count;
+            return hosts
+                .Where(static host => !string.IsNullOrWhiteSpace(host))
+                .Select(static host => host!.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
         }
     }
 }
