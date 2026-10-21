@@ -20,11 +20,22 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Configured queue <c>x-delivery-limit</c>; application requeue cap uses the same value.</summary>
         private readonly int _deliveryLimit;
 
+        /// <summary>
+        /// When <see langword="true"/>, a redelivery without <c>x-delivery-count</c> is treated as exhausted (quorum).
+        /// Classic queues pass <see langword="false"/>.
+        /// </summary>
+        private readonly bool _treatMissingRedeliveryCountAsExhausted;
+
         /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
         internal int MaxPayloadBytes => _maxPayloadBytes;
 
         /// <summary>Finite delivery limit applied to retryable dispositions.</summary>
         internal int DeliveryLimit => _deliveryLimit;
+
+        /// <summary>
+        /// Whether missing broker delivery-count on redelivery is treated as exhausted.
+        /// </summary>
+        internal bool TreatMissingRedeliveryCountAsExhausted => _treatMissingRedeliveryCountAsExhausted;
 
         /// <summary>
         /// Initializes a new pipeline.
@@ -36,6 +47,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Finite delivery limit mirrored from queue declaration. Must be at least 1.
         /// Defaults to <c>10</c> so existing tests retain the production default.
         /// </param>
+        /// <param name="treatMissingRedeliveryCountAsExhausted">
+        /// Quorum topology passes <see langword="true"/> (default). Classic topology passes <see langword="false"/>.
+        /// </param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> or <paramref name="publisher"/> is null.</exception>
         /// <exception cref="ArgumentOutOfRangeException">
         /// Thrown when <paramref name="maxPayloadBytes"/> or <paramref name="deliveryLimit"/> is less than 1.
@@ -44,7 +58,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             IArticleWorkHandler handler,
             IArticleWorkResponsePublisher publisher,
             int maxPayloadBytes,
-            int deliveryLimit = 10)
+            int deliveryLimit = 10,
+            bool treatMissingRedeliveryCountAsExhausted = true)
         {
             ArgumentNullException.ThrowIfNull(handler);
             ArgumentNullException.ThrowIfNull(publisher);
@@ -54,6 +69,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             _publisher = publisher;
             _maxPayloadBytes = maxPayloadBytes;
             _deliveryLimit = deliveryLimit;
+            _treatMissingRedeliveryCountAsExhausted = treatMissingRedeliveryCountAsExhausted;
         }
 
         /// <summary>
@@ -122,7 +138,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     cancellationRequested: false,
                     delivery.DeliveryCount,
                     delivery.Redelivered,
-                    _deliveryLimit);
+                    _deliveryLimit,
+                    _treatMissingRedeliveryCountAsExhausted);
                 if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
                 {
                     return ArticleWorkOutcome.InvalidRequest;
@@ -204,7 +221,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 cancellationToken.IsCancellationRequested || outcome == ArticleWorkOutcome.Cancelled,
                 delivery.DeliveryCount,
                 delivery.Redelivered,
-                _deliveryLimit);
+                _deliveryLimit,
+                _treatMissingRedeliveryCountAsExhausted);
 
             if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
             {
@@ -286,7 +304,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 cancellationRequested: false,
                 deliveryCount,
                 redelivered,
-                _deliveryLimit);
+                _deliveryLimit,
+                _treatMissingRedeliveryCountAsExhausted);
 
         /// <summary>
         /// Settles after a publication attempt. A required publication that is cancelled or fails NACK-requeues

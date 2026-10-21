@@ -48,7 +48,7 @@ namespace VectorNNTPD.BackFillerService.Hosting
         /// <see cref="ArticleWorkResponsePublisher"/>,
         /// then <see cref="ArticleWorkConsumerService"/>. Article Work consume
         /// is reconciled from usable NNTP capacity. Before consumers start for a usable
-        /// backbone, BackFiller declares that backbone's quorum <c>backfiller.*</c> topology.
+        /// backbone, BackFiller declares that backbone's Hosts-derived classic or quorum <c>backfiller.*</c> topology.
         /// RabbitMQ is not registered into BackFiller <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/>.
         /// </para>
         /// <para>

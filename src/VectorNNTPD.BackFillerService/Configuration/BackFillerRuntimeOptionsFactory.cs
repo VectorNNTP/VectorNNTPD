@@ -57,7 +57,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
                 CloudFlareZoneId = string.Empty,
                 DnsSuffix = options.DnsSuffix,
             };
-            return Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
+            return Create(options, nntpDb, acme, CreateDefaultRabbitMqForProjection(), contentRootPath);
         }
 
         /// <summary>
@@ -77,7 +77,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
             NntpDbOptions nntpDb,
             AcmeCloudflareOptions acme,
             string? contentRootPath = null) =>
-            Create(options, nntpDb, acme, new RabbitMqOptions(), contentRootPath);
+            Create(options, nntpDb, acme, CreateDefaultRabbitMqForProjection(), contentRootPath);
 
         /// <summary>
         /// Projects validated options, ACME settings, and RabbitMQ Article Work knobs into the immutable runtime snapshot.
@@ -187,7 +187,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     WorkRequestMaxPayloadBytes: rabbitMq.WorkRequestMaxPayloadBytes ?? 1024,
                     PublishConfirmTimeoutSeconds: rabbitMq.PublishConfirmTimeoutSeconds ?? 10,
                     ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount,
-                    QuorumInitialGroupSize: rabbitMq.ArticleWorkQuorumInitialGroupSize ?? 3,
+                    QueueTopology: ArticleWorkQueueTopology.FromConfiguredHosts(rabbitMq.Hosts),
                     DeliveryLimit: rabbitMq.ArticleWorkDeliveryLimit ?? 10),
                 NntpDb: new NntpDbRuntimeOptions(
                     nntpDb.ConnectionString.Trim(),
@@ -203,6 +203,17 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     tcpKeepAlive.IntervalSeconds,
                     tcpKeepAlive.RetryCount));
         }
+
+        /// <summary>
+        /// RabbitMQ projection defaults when callers omit <see cref="RabbitMqOptions"/>.
+        /// Supplies a single host so Article Work topology derives classic queues for tests and partial Create overloads.
+        /// Production hosting always passes validated options after <see cref="RabbitMqOptionsValidator"/>.
+        /// </summary>
+        private static RabbitMqOptions CreateDefaultRabbitMqForProjection() =>
+            new()
+            {
+                Hosts = ["127.0.0.1"],
+            };
 
         /// <summary>Resolves the file-log directory, or returns empty when that directory is blank.</summary>
         /// <param name="options">Options whose logging file target is read. A null logging section or file target uses <see cref="BackFillerFileLoggingTargetOptions"/> defaults.</param>

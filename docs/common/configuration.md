@@ -26,7 +26,7 @@ There is no application-level RabbitMQ connection pool. `MinConnections` and `Ma
 
 | Key | Type | Default | Required? | Description |
 |-----|------|---------|-----------|-------------|
-| `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query). When TLS is enabled, each host is dialed with that hostname as the TLS SNI / certificate identity (not `Hosts[0]` for every endpoint). |
+| `Hosts` | string array | _(none)_ | **yes** | Broker hostnames or IP addresses (no URI scheme, credentials, path, or query). Entries must be unique (case-insensitive); unique count is `1–7`. When TLS is enabled, each host is dialed with that hostname as the TLS SNI / certificate identity (not `Hosts[0]` for every endpoint). Article Work queue type is derived from unique count: one host → classic queue; two or more → quorum queue with `x-quorum-initial-group-size` equal to that count. All entries must belong to the same RabbitMQ cluster; this list does not establish cluster membership. Changing from one host to multiple (or the reverse) changes the desired queue type and may require an explicit operator migration—queues are never deleted or recreated automatically. |
 | `Port` | int | `5672` | **yes** | AMQP TCP port (`1–65535`) |
 | `Username` | string | _(none)_ | **yes** | Broker username. Maximum 45 characters. Never log |
 | `Password` | string | _(none)_ | **yes** | Broker password. Maximum 45 characters. Never commit or log |
@@ -42,8 +42,7 @@ There is no application-level RabbitMQ connection pool. `MinConnections` and `Ma
 | `PoolReconnectMaxDelayMs` | int | `30000` | **yes** | Application reconnect max delay (`50–300000`; ≥ base) |
 | `ChannelLeaseTimeoutSeconds` | int | `60` | **yes** | Validated; reserved for later channel work (`1–3600`; ≥ `RpcTimeoutSeconds`) |
 | `WorkRequestMaxPayloadBytes` | int | `1024` | **yes** | Maximum admitted Article Work request payload bytes (`1–4096`) |
-| `ArticleWorkQuorumInitialGroupSize` | int | `3` | **yes** | Declared `x-quorum-initial-group-size` and readiness membership floor (`1–7`). Applies only at queue creation; RabbitMQ does not grow an existing group when nodes join later. Existing under-provisioned groups require operator membership growth. BackFiller also requires Management HTTP verification of members, online members, and leader before a backbone is ready |
-| `ArticleWorkDeliveryLimit` | int | `10` | **yes** | Declared `x-delivery-limit` and application requeue cap (`1–1000`). Bounds poison-message Raft growth while allowing transient retries. With count `0..(limit-1)` the app may requeue; at `limit` it rejects without requeue. No DLX is declared; exhausted messages are dropped |
+| `ArticleWorkDeliveryLimit` | int | `10` | **yes** | Declared as `x-delivery-limit` on quorum Article Work queues and used as the application requeue cap when broker delivery-count metadata is available (`1–1000`). Not declared on classic single-host queues (broker does not accept that argument there). With count `0..(limit-1)` the app may requeue; at `limit` it rejects without requeue. No DLX is declared; exhausted messages are dropped |
 | `ChannelPoolSize` | int | `512` | **yes** | Validated; reserved for later consumer buffering (`1–8192`) |
 | `MinConnections` | int | `4` | **yes** | Validated; reserved (`1–512`; ≤ `MaxConnections`) |
 | `MaxConnections` | int | `16` | **yes** | Validated; reserved (`1–512`) |

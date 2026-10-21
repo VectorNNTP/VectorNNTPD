@@ -68,6 +68,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary>
         /// RabbitMQ broker host endpoints used for connection establishment.
         /// </summary>
+        /// <remarks>
+        /// Entries must be unique (case-insensitive). Validated unique count is <c>1–7</c>.
+        /// Article Work queue type is derived from that count: one host declares classic queues;
+        /// two or more declare quorum queues with <c>x-quorum-initial-group-size</c> equal to the
+        /// configured unique host count. All entries must belong to the same RabbitMQ cluster;
+        /// this list is a client connection target list and does not establish cluster membership.
+        /// Changing from one host to multiple (or the reverse) changes the desired queue type and may
+        /// require an explicit operator migration; queues are never deleted or recreated automatically.
+        /// </remarks>
         public string[]? Hosts { get; set; } = [];
 
         /// <summary>
@@ -214,21 +223,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         public ushort? ConsumerPrefetchCount { get; set; }
 
         /// <summary>
-        /// Initial quorum group size declared on Article Work provider queues (<c>x-quorum-initial-group-size</c>).
+        /// Finite delivery limit declared on Article Work quorum queues (<c>x-delivery-limit</c>) and used as the
+        /// application requeue cap when broker delivery-count metadata is available.
         /// </summary>
         /// <remarks>
-        /// Applies at queue creation time. RabbitMQ does not grow an existing group when cluster nodes join later;
-        /// under-provisioned queues require operator membership growth. Validated range is <c>1–7</c>.
-        /// </remarks>
-        public int? ArticleWorkQuorumInitialGroupSize { get; set; } = 3;
-
-        /// <summary>
-        /// Finite delivery limit declared on Article Work provider queues (<c>x-delivery-limit</c>).
-        /// </summary>
-        /// <remarks>
-        /// Caps how many times a quorum-queue message may be delivered and NACKed before the broker
-        /// dead-letters or drops it. Validated range is <c>1–1000</c>. Default <c>10</c> bounds poison-message
-        /// Raft growth while allowing transient provider and publish failures to retry.
+        /// Validated range is <c>1–1000</c>. Default <c>10</c>. Declared only when Article Work uses quorum queues
+        /// (<see cref="Hosts"/> count ≥ 2). Classic single-host queues do not support this broker argument.
         /// </remarks>
         public int? ArticleWorkDeliveryLimit { get; set; } = 10;
 

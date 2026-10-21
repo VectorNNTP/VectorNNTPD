@@ -613,7 +613,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 _handler,
                 _publisher,
                 _runtime.RabbitMq.WorkRequestMaxPayloadBytes,
-                _runtime.RabbitMq.DeliveryLimit);
+                _runtime.RabbitMq.DeliveryLimit,
+                treatMissingRedeliveryCountAsExhausted: _runtime.RabbitMq.QueueTopology.RequiresQuorumHealth);
             var prefetch = _runtime.RabbitMq.ConsumerPrefetchCount is { } configured and > 0
                 ? configured
                 : (ushort)1;
@@ -738,21 +739,23 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>
-        /// Declares durable quorum fanout topology for each backbone that is about to receive
+        /// Declares durable Hosts-derived classic or quorum fanout topology for each backbone that is about to receive
         /// consumers. Topology is never deleted when capacity later drops to zero.
         /// </summary>
         /// <param name="backbones">Backbones that still need consumers. Blank names are ignored. Comparison is ordinal ignore-case.</param>
         /// <param name="cancellationToken">Cancels channel creation and each declaration. Cancellation propagates.</param>
         /// <returns>
-        /// Backbones whose declaration and quorum-membership verification both succeeded.
+        /// Backbones whose declaration succeeded and, when quorum topology is selected, whose Management-plane
+        /// membership verification also succeeded. Classic single-host topology becomes ready after successful declaration.
         /// Empty when there is nothing to declare, the connection is not ready, every declaration failed,
-        /// or membership could not be verified as healthy.
+        /// or (for quorum) membership could not be verified as healthy.
         /// </returns>
         /// <remarks>
         /// Declarations reuse one manual-ack channel while it remains open. A failed declaration disposes that channel
         /// before the next backbone is attempted, because RabbitMQ closes the channel on broker-side declare failures
         /// such as <c>PRECONDITION_FAILED</c>. A later backbone therefore never reuses an unusable channel.
-        /// Successful declaration alone does not mark a backbone ready; Management-plane membership must also be healthy.
+        /// For quorum topology, successful declaration alone does not mark a backbone ready; Management-plane membership
+        /// must also be healthy. Classic topology does not call the quorum Management probe.
         /// The connection generation is rechecked before each channel open. <see cref="OperationCanceledException"/> is not logged.
         /// </remarks>
         private async Task<HashSet<string>> EnsureProviderTopologyAsync(
@@ -773,12 +776,15 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             if (!_connections.TryGetCurrent(out _))
             {
+                var topology = _runtime.RabbitMq.QueueTopology;
                 foreach (var backbone in unique)
                 {
                     ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                         _logger,
                         backbone,
                         BackFillerRabbitMqTopology.ComposeProviderEntity(backbone),
+                        topology.Kind.ToString(),
+                        topology.ConfiguredHostCount,
                         "RabbitMQ connection is not ready for topology declaration.");
                 }
 
@@ -798,10 +804,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             .ConfigureAwait(false);
                         if (channel is null)
                         {
+                            var notReadyTopology = _runtime.RabbitMq.QueueTopology;
                             ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                                 _logger,
                                 backbone,
                                 queue,
+                                notReadyTopology.Kind.ToString(),
+                                notReadyTopology.ConfiguredHostCount,
                                 "RabbitMQ connection is not ready for topology declaration.");
                             continue;
                         }
@@ -809,10 +818,22 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         await BackFillerArticleWorkTopology
                             .DeclareProviderEndpointAsync(channel, backbone, _runtime, cancellationToken)
                             .ConfigureAwait(false);
-                        ArticleWorkLogMessages.ProviderTopologyDeclared(_logger, backbone, queue);
+                        var topology = _runtime.RabbitMq.QueueTopology;
+                        ArticleWorkLogMessages.ProviderTopologyDeclared(
+                            _logger,
+                            backbone,
+                            queue,
+                            topology.Kind.ToString(),
+                            topology.ConfiguredHostCount);
+
+                        if (!topology.RequiresQuorumHealth)
+                        {
+                            ready.Add(backbone);
+                            continue;
+                        }
 
                         var health = await _quorumHealth
-                            .InspectAsync(queue, _runtime.RabbitMq.QuorumInitialGroupSize, cancellationToken)
+                            .InspectAsync(queue, topology.QuorumInitialGroupSize!.Value, cancellationToken)
                             .ConfigureAwait(false);
                         LogQuorumHealthTransition(backbone, queue, health);
                         if (health.Kind == ArticleWorkQuorumHealthKind.Healthy)
@@ -822,10 +843,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
+                        var topology = _runtime.RabbitMq.QueueTopology;
                         ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                             _logger,
                             backbone,
                             queue,
+                            topology.Kind.ToString(),
+                            topology.ConfiguredHostCount,
                             FormatTopologyDeclareFailure(ex));
                         channel = await DisposeTopologyChannelAsync(channel).ConfigureAwait(false);
                     }

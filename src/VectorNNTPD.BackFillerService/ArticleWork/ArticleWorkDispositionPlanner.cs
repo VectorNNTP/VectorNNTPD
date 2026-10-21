@@ -10,11 +10,16 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// </summary>
         /// <param name="deliveryCount">Broker <c>x-delivery-count</c> when present and non-negative.</param>
         /// <param name="redelivered">AMQP redelivered flag from the delivery.</param>
-        /// <param name="deliveryLimit">Configured finite limit. Used when metadata is missing on a redelivery.</param>
+        /// <param name="deliveryLimit">Configured finite limit. Used when metadata is missing on a quorum redelivery.</param>
+        /// <param name="treatMissingRedeliveryCountAsExhausted">
+        /// When <see langword="true"/> (quorum), a redelivery without a usable count is treated as exhausted so
+        /// missing metadata cannot bypass the finite retry policy. When <see langword="false"/> (classic),
+        /// missing count remains <c>0</c> because classic queues do not provide <c>x-delivery-count</c>.
+        /// </param>
         /// <returns>
         /// <paramref name="deliveryCount"/> when present; <c>0</c> on a first delivery without the header;
-        /// <paramref name="deliveryLimit"/> when a redelivery omits or cannot supply a usable count so the
-        /// finite-retry guarantee cannot be bypassed by missing metadata.
+        /// <paramref name="deliveryLimit"/> when <paramref name="treatMissingRedeliveryCountAsExhausted"/> is
+        /// <see langword="true"/> and a redelivery omits a usable count; otherwise <c>0</c>.
         /// </returns>
         /// <remarks>
         /// Quorum queues include <c>x-delivery-count</c> on redelivered messages. The broker discards when
@@ -26,7 +31,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         internal static int ResolveEffectiveDeliveryCount(
             int? deliveryCount,
             bool redelivered,
-            int deliveryLimit)
+            int deliveryLimit,
+            bool treatMissingRedeliveryCountAsExhausted = true)
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(deliveryLimit, 1);
             if (deliveryCount is { } count && count >= 0)
@@ -34,7 +40,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return count;
             }
 
-            return redelivered ? deliveryLimit : 0;
+            if (treatMissingRedeliveryCountAsExhausted && redelivered)
+            {
+                return deliveryLimit;
+            }
+
+            return 0;
         }
 
         /// <summary>
@@ -59,6 +70,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// to this value, an otherwise-requeue disposition becomes NACK without requeue so poison work cannot
         /// retry indefinitely. Must be at least 1.
         /// </param>
+        /// <param name="treatMissingRedeliveryCountAsExhausted">
+        /// Quorum queues pass <see langword="true"/>; classic queues pass <see langword="false"/>.
+        /// </param>
         /// <returns>
         /// The disposition to apply. An unrecognized <paramref name="outcome"/> is NACK requeue without publication
         /// unless the delivery limit is exhausted.
@@ -70,9 +84,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             bool cancellationRequested,
             int? deliveryCount,
             bool redelivered,
-            int deliveryLimit)
+            int deliveryLimit,
+            bool treatMissingRedeliveryCountAsExhausted = true)
         {
-            var effectiveCount = ResolveEffectiveDeliveryCount(deliveryCount, redelivered, deliveryLimit);
+            var effectiveCount = ResolveEffectiveDeliveryCount(
+                deliveryCount,
+                redelivered,
+                deliveryLimit,
+                treatMissingRedeliveryCountAsExhausted);
             var retriesExhausted = effectiveCount >= deliveryLimit;
 
             if (cancellationRequested)

@@ -290,16 +290,23 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         internal static partial void ConsumerReconcileCompleted(ILogger logger, int sessionCount);
 
         /// <summary>
-        /// Writes an Information event after one backbone's provider exchange, quorum queue, and binding are declared.
+        /// Writes an Information event after one backbone's provider exchange, queue, and binding are declared.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="backbone">Backbone whose topology declaration succeeded.</param>
         /// <param name="queue">Provider entity name that was declared.</param>
+        /// <param name="desiredQueueType">Hosts-derived queue type (<c>Classic</c> or <c>Quorum</c>).</param>
+        /// <param name="configuredHostCount">Unique configured <c>RabbitMQ:Hosts</c> count used to derive topology.</param>
         [LoggerMessage(
             EventId = 5319,
             Level = LogLevel.Information,
-            Message = "Article Work provider topology declared backbone={Backbone} queue={Queue}")]
-        internal static partial void ProviderTopologyDeclared(ILogger logger, string backbone, string queue);
+            Message = "Article Work provider topology declared backbone={Backbone} queue={Queue} desiredQueueType={DesiredQueueType} configuredHostCount={ConfiguredHostCount}")]
+        internal static partial void ProviderTopologyDeclared(
+            ILogger logger,
+            string backbone,
+            string queue,
+            string desiredQueueType,
+            int configuredHostCount);
 
         /// <summary>
         /// Writes an Error event when provider topology cannot be declared because the connection is not ready, channel creation fails, or that backbone's declaration fails.
@@ -307,6 +314,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="backbone">Backbone whose declaration did not succeed.</param>
         /// <param name="queue">Provider entity name that was not left ready.</param>
+        /// <param name="desiredQueueType">Hosts-derived queue type that was attempted.</param>
+        /// <param name="configuredHostCount">Unique configured host count that selected that queue type.</param>
         /// <param name="reason">
         /// Caller-supplied failure text. The service passes <see cref="Exception.Message"/> or a fixed not-ready message.
         /// <see cref="OperationCanceledException"/> is not logged here. This method does not throw.
@@ -314,11 +323,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         [LoggerMessage(
             EventId = 5320,
             Level = LogLevel.Error,
-            Message = "Article Work provider topology declaration failed backbone={Backbone} queue={Queue}: {Reason}")]
+            Message = "Article Work provider topology declaration failed backbone={Backbone} queue={Queue} desiredQueueType={DesiredQueueType} configuredHostCount={ConfiguredHostCount}: {Reason}")]
         internal static partial void ProviderTopologyDeclareFailed(
             ILogger logger,
             string backbone,
             string queue,
+            string desiredQueueType,
+            int configuredHostCount,
             string reason);
 
         /// <summary>

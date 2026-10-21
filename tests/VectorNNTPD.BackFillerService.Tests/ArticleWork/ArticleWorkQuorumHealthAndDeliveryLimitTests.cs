@@ -23,20 +23,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         private const int QuorumMembershipHealthyEventId = 5326;
 
         /// <summary>
-        /// New queue declarations carry configured initial group size and delivery limit.
+        /// One configured host declares classic topology without quorum or delivery-limit arguments.
         /// </summary>
         [Fact]
-        public async Task Declare_includes_configured_quorum_group_size_and_delivery_limit()
+        public async Task One_host_declares_classic_topology()
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
-            var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
-            rabbit.ArticleWorkQuorumInitialGroupSize = 5;
-            rabbit.ArticleWorkDeliveryLimit = 7;
-            var runtime = BackFillerRuntimeOptionsFactory.Create(
-                BackFillerTestOptions.CreateValid(),
-                BackFillerTestOptions.CreateValidNntpDb(),
-                BackFillerTestOptions.CreateValidAcme(),
-                rabbit);
+            var runtime = CreateRuntime(hostCount: 1, deliveryLimit: 7);
 
             await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
                 channel,
@@ -45,8 +38,94 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CancellationToken.None);
 
             var declaration = Assert.Single(channel.QueueDeclarations);
-            Assert.Equal(5L, declaration.Arguments![BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(
+                BackFillerArticleWorkTopology.ClassicQueueType,
+                declaration.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+            Assert.False(declaration.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
+            Assert.False(declaration.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
+            Assert.Equal(ArticleWorkQueueKind.Classic, runtime.RabbitMq.QueueTopology.Kind);
+            Assert.Equal(1, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
+            Assert.Null(runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
+            Assert.False(runtime.RabbitMq.QueueTopology.RequiresQuorumHealth);
+        }
+
+        /// <summary>
+        /// Two configured hosts declare quorum topology with initial group size 2 and delivery limit.
+        /// </summary>
+        [Fact]
+        public async Task Two_hosts_declare_quorum_topology_with_group_size_2()
+        {
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var runtime = CreateRuntime(hostCount: 2, deliveryLimit: 7);
+
+            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
+                channel,
+                "Giganews",
+                runtime,
+                CancellationToken.None);
+
+            var declaration = Assert.Single(channel.QueueDeclarations);
+            Assert.Equal(
+                BackFillerArticleWorkTopology.QuorumQueueType,
+                declaration.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+            Assert.Equal(2L, declaration.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
             Assert.Equal(7L, declaration.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.Equal(2, runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
+        }
+
+        /// <summary>
+        /// Three configured hosts declare quorum topology with initial group size 3.
+        /// </summary>
+        [Fact]
+        public async Task Three_hosts_declare_quorum_topology_with_group_size_3()
+        {
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var runtime = CreateRuntime(hostCount: 3, deliveryLimit: 10);
+
+            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
+                channel,
+                "Giganews",
+                runtime,
+                CancellationToken.None);
+
+            var declaration = Assert.Single(channel.QueueDeclarations);
+            Assert.Equal(3L, declaration.Arguments![BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(3, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
+        }
+
+        /// <summary>
+        /// A larger supported host count maps to the same initial group size without clamping.
+        /// </summary>
+        [Fact]
+        public async Task Seven_hosts_declare_quorum_topology_with_group_size_7()
+        {
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var runtime = CreateRuntime(hostCount: 7, deliveryLimit: 10);
+
+            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
+                channel,
+                "Giganews",
+                runtime,
+                CancellationToken.None);
+
+            var declaration = Assert.Single(channel.QueueDeclarations);
+            Assert.Equal(7L, declaration.Arguments![BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(7, runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
+        }
+
+        /// <summary>
+        /// Configured host count (not live reachability) remains the topology source when a host is unavailable.
+        /// </summary>
+        [Fact]
+        public void Unavailable_configured_host_does_not_change_queue_type_or_group_size()
+        {
+            var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(3);
+            // Simulate an outage: configuration still lists three hosts; topology must not shrink.
+            var topology = ArticleWorkQueueTopology.FromConfiguredHosts(rabbit.Hosts);
+            Assert.Equal(ArticleWorkQueueKind.Quorum, topology.Kind);
+            Assert.Equal(3, topology.ConfiguredHostCount);
+            Assert.Equal(3, topology.QuorumInitialGroupSize);
+            Assert.True(topology.RequiresQuorumHealth);
         }
 
         /// <summary>
@@ -102,6 +181,37 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
+        /// Single-host classic readiness does not call the quorum Management probe.
+        /// </summary>
+        [Fact]
+        public async Task Single_host_readiness_does_not_call_quorum_management_probe()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+
+            var probe = new ControllableArticleWorkQuorumHealthProbe
+            {
+                Next = Deficient(required: 3, observed: 1, online: 1),
+            };
+            var consumer = CreateConsumer(
+                connections,
+                CreateCatalog([("Giganews", 1)]),
+                CreateCapacity([("Giganews", 1)]),
+                quorumHealth: probe,
+                hostCount: 1);
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            var session = Assert.Single(consumer.Sessions);
+            Assert.Equal(ArticleWorkConsumerState.Running, session.State);
+            Assert.Equal(0, probe.InspectCount);
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        /// <summary>
         /// Successful declaration with insufficient membership leaves the backbone unready.
         /// </summary>
         [Fact]
@@ -121,7 +231,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
                 logger,
-                probe);
+                probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
 
@@ -156,7 +267,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
                 logger,
-                probe);
+                probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
 
@@ -194,7 +306,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 connections,
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
-                quorumHealth: probe);
+                quorumHealth: probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
 
@@ -223,7 +336,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 connections,
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
-                quorumHealth: probe);
+                quorumHealth: probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
             Assert.Empty(consumer.Sessions);
@@ -257,7 +371,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 connections,
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
-                quorumHealth: probe);
+                quorumHealth: probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
             var original = Assert.Single(consumer.Sessions);
@@ -412,17 +527,18 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// A redelivery missing <c>x-delivery-count</c> is treated as exhausted so missing metadata cannot disable the cap.
+        /// On quorum topology, a redelivery missing <c>x-delivery-count</c> is treated as exhausted so missing metadata cannot disable the cap.
         /// </summary>
         [Fact]
-        public async Task Redelivery_without_delivery_count_does_not_requeue()
+        public async Task Quorum_redelivery_without_delivery_count_does_not_requeue()
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
                 new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
-                deliveryLimit: 5);
+                deliveryLimit: 5,
+                treatMissingRedeliveryCountAsExhausted: true);
 
             var delivery = ArticleWorkTestDeliveries.Create(ArticleWorkTestDeliveries.CanonicalRequestJson) with
             {
@@ -441,6 +557,39 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.False(settlement.Requeue);
+        }
+
+        /// <summary>
+        /// Classic queues lack <c>x-delivery-count</c>; missing count on redelivery must not force discard.
+        /// </summary>
+        [Fact]
+        public async Task Classic_redelivery_without_delivery_count_still_requeues()
+        {
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var pipeline = new ArticleWorkDeliveryPipeline(
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new RecordingArticleWorkResponsePublisher(),
+                maxPayloadBytes: 1024,
+                deliveryLimit: 5,
+                treatMissingRedeliveryCountAsExhausted: false);
+
+            var delivery = ArticleWorkTestDeliveries.Create(ArticleWorkTestDeliveries.CanonicalRequestJson) with
+            {
+                Redelivered = true,
+                DeliveryCount = null,
+            };
+
+            var outcome = await pipeline.ProcessAsync(
+                delivery,
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.True(settlement.Requeue);
         }
 
         /// <summary>
@@ -497,7 +646,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CreateCatalog([("Giganews", 1)]),
                 CreateCapacity([("Giganews", 1)]),
                 logger,
-                probe);
+                probe,
+                hostCount: 3);
 
             await consumer.StartAsync(CancellationToken.None);
 
@@ -612,15 +762,27 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Leader: "rabbit@node-a",
                 Reason: "Configured quorum membership is below the required group size. Operator membership growth is required for pre-existing queues.");
 
+        private static BackFillerRuntimeOptions CreateRuntime(int hostCount, int deliveryLimit)
+        {
+            var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(hostCount);
+            rabbit.ArticleWorkDeliveryLimit = deliveryLimit;
+            return BackFillerRuntimeOptionsFactory.Create(
+                BackFillerTestOptions.CreateValid(),
+                BackFillerTestOptions.CreateValidNntpDb(),
+                BackFillerTestOptions.CreateValidAcme(),
+                rabbit);
+        }
+
         private static ArticleWorkConsumerService CreateConsumer(
             IRabbitMqService connections,
             IBackFillerProviderCatalog catalog,
             BackboneUsableCapacityState capacity,
             ILogger<ArticleWorkConsumerService>? logger = null,
-            IArticleWorkQuorumHealthProbe? quorumHealth = null) =>
+            IArticleWorkQuorumHealthProbe? quorumHealth = null,
+            int hostCount = 3) =>
             new(
                 connections,
-                RabbitMqServiceTests.CreateFastRuntime(),
+                RabbitMqServiceTests.CreateFastRuntime(hostCount),
                 new DeferredArticleWorkHandler(),
                 new RecordingArticleWorkResponsePublisher(),
                 logger ?? NullLogger<ArticleWorkConsumerService>.Instance,

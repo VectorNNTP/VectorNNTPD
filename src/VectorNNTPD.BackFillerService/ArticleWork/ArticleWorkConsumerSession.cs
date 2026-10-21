@@ -751,7 +751,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var effectiveCount = ArticleWorkDispositionPlanner.ResolveEffectiveDeliveryCount(
                 delivery.DeliveryCount,
                 delivery.Redelivered,
-                _pipeline.DeliveryLimit);
+                _pipeline.DeliveryLimit,
+                _pipeline.TreatMissingRedeliveryCountAsExhausted);
             if (effectiveCount < _pipeline.DeliveryLimit)
             {
                 return false;

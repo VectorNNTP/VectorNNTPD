@@ -4,8 +4,8 @@ namespace VectorNNTPD.BackFillerService.RabbitMq
     /// Canonical <c>backfiller.*</c> topology names consumed by Article Work.
     /// </summary>
     /// <remarks>
-    /// BackFiller declares durable fanout exchanges and quorum queues for each backbone that
-    /// becomes usable. This type does not declare, bind, or delete broker entities.
+    /// BackFiller declares durable fanout exchanges and Hosts-derived classic or quorum queues for each
+    /// backbone that becomes usable. This type does not declare, bind, or delete broker entities.
     /// <c>cache.requests</c> is the NNTPD→StorageServer fleet article-presence fanout exchange
     /// (not a BackFiller consume target and not a shared work queue).
     /// Legacy <c>grabbers.*</c> names are out of scope.

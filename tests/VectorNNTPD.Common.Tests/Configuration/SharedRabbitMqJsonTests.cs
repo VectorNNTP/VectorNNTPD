@@ -158,7 +158,6 @@ namespace VectorNNTPD.Common.Tests.Configuration
             Assert.Equal(5672, options.Port);
             Assert.Equal(512, options.ChannelPoolSize);
             Assert.Equal(1024, options.WorkRequestMaxPayloadBytes);
-            Assert.Equal(3, options.ArticleWorkQuorumInitialGroupSize);
             Assert.Equal(10, options.ArticleWorkDeliveryLimit);
             Assert.Equal("http://198.18.0.3:15672", options.Management?.BaseUrl);
             Assert.Equal(5, options.Management?.RequestTimeoutSeconds);

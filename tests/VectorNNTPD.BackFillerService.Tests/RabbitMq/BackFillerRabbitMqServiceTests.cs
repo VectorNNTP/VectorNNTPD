@@ -794,11 +794,18 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 logger ?? NullLogger<RabbitMqService>.Instance);
         }
 
-        /// <summary>Runtime options with RabbitMQ pool reconnect delays minimized for unit tests.</summary>
+        /// <summary>Runtime options with RabbitMQ pool reconnect delays minimized for unit tests (single-host classic).</summary>
+        internal static BackFillerRuntimeOptions CreateFastRuntime() =>
+            CreateFastRuntime(hostCount: 1);
 
-        internal static BackFillerRuntimeOptions CreateFastRuntime()
+        /// <summary>
+        /// Runtime options with minimized reconnect delays and the given unique host count
+        /// (classic when 1, quorum when ≥ 2).
+        /// </summary>
+        /// <param name="hostCount">Unique configured host count in <c>1–7</c>.</param>
+        internal static BackFillerRuntimeOptions CreateFastRuntime(int hostCount)
         {
-            var rabbit = BackFillerTestOptions.CreateValidRabbitMq();
+            var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(hostCount);
             rabbit.PoolReconnectBaseDelayMs = 1;
             rabbit.PoolReconnectMaxDelayMs = 1;
             return BackFillerRuntimeOptionsFactory.Create(
