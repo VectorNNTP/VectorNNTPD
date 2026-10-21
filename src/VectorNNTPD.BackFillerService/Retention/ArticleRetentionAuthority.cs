@@ -60,10 +60,9 @@ namespace VectorNNTPD.BackFillerService.Retention
         private readonly Dictionary<Guid, RetainedEntry> _byRequestId = [];
 
         /// <summary>
-        /// Admission order, oldest at <see cref="LinkedList{T}.First"/>. FIFO reclaim and TTL sweep
-        /// walk from that end. <see cref="RetainedEntry.ExpiresUtc"/> is the admission time plus
-        /// <see cref="_ttl"/>, so this order matches expiry order when <see cref="_time"/> does not
-        /// move backward. <see cref="ExpireEligibleLocked"/> then stops at the first unexpired node.
+        /// Admission order, oldest at <see cref="LinkedList{T}.First"/>. FIFO reclaim walks from that end.
+        /// TTL sweep also walks from that end but examines every node: expiry timestamps need not match
+        /// insertion order when <see cref="_time"/> moves backward between admissions.
         /// </summary>
         private readonly LinkedList<RetainedEntry> _insertionOrder = [];
 
@@ -755,7 +754,7 @@ namespace VectorNNTPD.BackFillerService.Retention
             });
         }
 
-        /// <summary>Reclaims TTL-expired entries in insertion order.</summary>
+        /// <summary>Reclaims every TTL-expired entry, walking insertion order without assuming expiry order.</summary>
         /// <returns>
         /// Payload bytes the authority released on this pass. Zero when the authority is disposed or nothing expired.
         /// An active transfer does not keep those bytes in the retained total.
@@ -763,9 +762,8 @@ namespace VectorNNTPD.BackFillerService.Retention
         /// <remarks>
         /// Does not throw <see cref="ObjectDisposedException"/>. Does not close admission.
         /// Writes <see cref="ArticleRetentionLogMessages.Swept"/> only when the returned total is positive.
-        /// The walk stops at the first entry with <see cref="RetainedEntry.ExpiresUtc"/> still in the future.
-        /// That is complete when admission timestamps are non-decreasing, because every entry uses the same
-        /// <see cref="_ttl"/>. A clock that moves backward can leave a later, already-expired node in the list.
+        /// Every entry with <see cref="RetainedEntry.ExpiresUtc"/> less than or equal to the current clock is removed,
+        /// including later insertions that expired earlier after a backward clock step.
         /// </remarks>
         public long SweepExpired()
         {
@@ -895,17 +893,17 @@ namespace VectorNNTPD.BackFillerService.Retention
         }
 
         /// <summary>
-        /// Unindexes every expired entry from the oldest insertion-order node until the first
-        /// <see cref="RetainedEntry.ExpiresUtc"/> still in the future.
+        /// Unindexes every entry whose <see cref="RetainedEntry.ExpiresUtc"/> is less than or equal to
+        /// <paramref name="now"/>, walking the full insertion-order list.
         /// </summary>
         /// <param name="now">Clock reading compared with <see cref="RetainedEntry.ExpiresUtc"/>.</param>
         /// <returns>
         /// Bytes the authority detached. An active transfer does not delay that subtraction.
         /// </returns>
         /// <remarks>
-        /// The early stop is valid when <see cref="_time"/> does not move backward between admissions.
-        /// <see cref="RetainedEntry.ExpiresUtc"/> is the admission timestamp plus the same <see cref="_ttl"/>,
-        /// so a later node then expires later. A backward clock step can leave a later expired node unvisited.
+        /// Captures <see cref="LinkedListNode{T}.Next"/> before removal so unindex is safe during the walk.
+        /// Unexpired nodes are skipped rather than ending the walk, so a backward clock step cannot leave a
+        /// later-expired entry resident behind an earlier unexpired neighbor.
         /// </remarks>
         private long ExpireEligibleLocked(DateTimeOffset now)
         {
@@ -915,12 +913,7 @@ namespace VectorNNTPD.BackFillerService.Retention
             {
                 var entry = node.Value;
                 var next = node.Next;
-                if (entry.ExpiresUtc > now)
-                {
-                    break;
-                }
-
-                if (RemoveExpiredLocked(entry))
+                if (IsExpiredLocked(entry, now) && RemoveExpiredLocked(entry))
                 {
                     released += entry.WasPhysicallyDisposedThisRemoval ? entry.PayloadBytes : 0;
                 }

@@ -77,6 +77,19 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             }
         }
 
+        /// <summary>
+        /// Sets the clock to an absolute UTC instant without firing timers.
+        /// Used to simulate NTP or operator steps, including a backward adjustment.
+        /// </summary>
+        /// <param name="utcNow">New instant returned from <see cref="GetUtcNow"/>.</param>
+        internal void SetUtcNow(DateTimeOffset utcNow)
+        {
+            lock (_gate)
+            {
+                _utcNow = utcNow;
+            }
+        }
+
         /// <summary>Adds a timer created by <see cref="CreateTimer"/> to the set evaluated during <see cref="Advance"/>.</summary>
         /// <param name="timer">Timer instance to track; must belong to this provider.</param>
         private void Register(ManualTimer timer)
