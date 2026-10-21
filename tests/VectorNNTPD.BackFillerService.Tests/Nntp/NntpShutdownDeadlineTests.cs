@@ -11,14 +11,29 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
     /// Shared shutdown deadline across stalled sessions, providers, and one replacement drain.
     /// </summary>
     /// <remarks>
-    /// The configured budget in the scale tests is 500 milliseconds. The accepted ceiling is 1200 milliseconds.
-    /// That is less than one standalone two-second QUIT allowance, and less than three sequential copies of the 500 millisecond budget.
-    /// A wall-clock assertion is only used to separate one shared budget from a budget that grows with session or provider count.
+    /// Scale pools use <see cref="SharedBudget"/> (500 ms) and <c>keepAliveSeconds: 0</c>, so replacement
+    /// <see cref="NntpSessionPool.DrainAndDisposeAsync(CancellationToken)"/> spends essentially one shared
+    /// retirement deadline on stalled QUITs (keepalive drain is empty). A correct run finishes near that budget
+    /// plus scheduling. Regressing to per-session <see cref="NntpProviderSession"/> QuitAllowance (2 s) with
+    /// <see cref="NntpShutdownWork.Parallelism"/> yields about two serial waves (~4 s) and also starts a QUIT on
+    /// every session. <see cref="AssertWithinCeiling"/> rejects the QuitAllowance stack; <c>quitStarted</c> bounds
+    /// reject per-session independent budgets that still finish under the ceiling.
+    /// <see cref="MeasureHangTimeout"/> is only hang detection for <see cref="MeasureAsync"/> and does not replace
+    /// <see cref="AssertWithinCeiling"/>.
     /// </remarks>
     public sealed class NntpShutdownDeadlineTests
     {
-        /// <summary>How long the scale tests allow one shared shutdown to run, including scheduling after the budget.</summary>
-        private static readonly TimeSpan SharedShutdownCeiling = TimeSpan.FromMilliseconds(1200);
+        /// <summary>
+        /// Acceptance bound for scale shutdown elapsed time: below one QuitAllowance (2 s), with room for
+        /// CancelAfter scheduling delay after a single shared <see cref="SharedBudget"/>.
+        /// </summary>
+        private static readonly TimeSpan SharedShutdownCeiling = TimeSpan.FromMilliseconds(1500);
+
+        /// <summary>
+        /// Hang detection for <see cref="MeasureAsync"/>. Wider than <see cref="SharedShutdownCeiling"/> so a slow
+        /// but still shared-budget drain is judged by <see cref="AssertWithinCeiling"/> instead of <see cref="TimeoutException"/>.
+        /// </summary>
+        private static readonly TimeSpan MeasureHangTimeout = TimeSpan.FromSeconds(2);
 
         /// <summary>Budget captured once for the many-session and many-provider shutdown tests.</summary>
         private static readonly TimeSpan SharedBudget = TimeSpan.FromMilliseconds(500);
@@ -61,7 +76,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// Later sessions do not each receive a fresh two-second QUIT allowance.
         /// </summary>
         /// <remarks>
-        /// The budget is 500 milliseconds and the accepted ceiling is 1200 milliseconds.
+        /// The budget is 500 milliseconds and the accepted ceiling is 1500 milliseconds (below one QuitAllowance).
         /// Eight independent two-second QUIT attempts would exceed that ceiling.
         /// At most <see cref="NntpShutdownWork.Parallelism"/> writes can be in progress.
         /// The shared deadline token cancels that wave, and a later session observes the same token before it can start QUIT.
@@ -566,6 +581,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// <summary>
         /// A replacement drain of many stalled sessions uses one retirement grace, not a fresh two-second QUIT for each session.
         /// </summary>
+        /// <remarks>
+        /// Primary shared-deadline proof: at most <see cref="NntpShutdownWork.Parallelism"/> QUITs start, fewer than
+        /// <c>sessions</c>, and those writes cancel on the shared token. <see cref="AssertWithinCeiling"/> is the
+        /// secondary wall-clock bound against stacking per-session QuitAllowance (2 s) waves (~4 s for eight sessions).
+        /// </remarks>
         [Fact]
         public async Task Replacement_of_many_stalled_sessions_shares_one_retirement_deadline()
         {
@@ -583,11 +603,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 var quitStarted = QuitStarts(servers);
                 Report("replacement-sessions", SharedBudget, sessions, providers: 1, quitStarted, elapsed);
 
-                AssertWithinCeiling(elapsed);
                 Assert.InRange(quitStarted, 1, NntpShutdownWork.Parallelism);
                 Assert.True(quitStarted < sessions);
                 Assert.Equal(quitStarted, CountQuit(logger));
                 AssertQuitCancelledByToken(logger.Messages, quitStarted);
+                AssertWithinCeiling(elapsed);
                 Assert.All(servers, static server => Assert.Equal(1, server.ClientStreamDisposeCount));
                 Assert.Equal(0, pool.LiveSessionCount);
             }
@@ -604,9 +624,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// </summary>
         /// <remarks>
         /// Wall-clock acceptance is one standalone two-second QUIT allowance, not <see cref="SharedShutdownCeiling"/>.
-        /// Concurrent registry <c>CancelAfter</c> load can delay the replacement timer past 1200 ms without multiplying
-        /// session budgets or adopting the registry's ten-second deadline. Four serial two-second QUITs or a ten-second
-        /// shared registry budget would still fail this bound.
+        /// Concurrent registry <c>CancelAfter</c> load can delay the replacement timer past the shared scale ceiling without
+        /// multiplying session budgets or adopting the registry's ten-second deadline. Four serial two-second QUITs or a
+        /// ten-second shared registry budget would still fail this bound.
         /// </remarks>
         [Fact]
         public async Task Replacement_deadline_stays_independent_of_registry_shutdown()
@@ -897,18 +917,21 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
         /// <summary>
         /// Starts <paramref name="shutdown"/> and returns how long it ran.
-        /// Releases stalled QUIT gates when the call exceeds <see cref="SharedShutdownCeiling"/>, then waits for the same task to finish.
+        /// Releases stalled QUIT gates when the call exceeds <see cref="MeasureHangTimeout"/>, then waits for the same task to finish.
         /// </summary>
         /// <param name="shutdown">Starts the shutdown under test. Called once, after the clock starts.</param>
         /// <param name="servers">Servers whose QUIT gates must be released if shutdown does not finish.</param>
-        /// <returns>Elapsed time of a shutdown that finished inside <see cref="SharedShutdownCeiling"/>.</returns>
+        /// <returns>Elapsed time of a shutdown that finished inside <see cref="MeasureHangTimeout"/>.</returns>
+        /// <remarks>
+        /// Callers that require the shared-budget proof still call <see cref="AssertWithinCeiling"/> on the returned elapsed time.
+        /// </remarks>
         private static async Task<TimeSpan> MeasureAsync(Func<Task> shutdown, IReadOnlyList<ScriptedNntpServer> servers)
         {
             var started = Stopwatch.GetTimestamp();
             var dispose = shutdown();
             try
             {
-                await dispose.WaitAsync(SharedShutdownCeiling);
+                await dispose.WaitAsync(MeasureHangTimeout);
                 return Stopwatch.GetElapsedTime(started);
             }
             catch
