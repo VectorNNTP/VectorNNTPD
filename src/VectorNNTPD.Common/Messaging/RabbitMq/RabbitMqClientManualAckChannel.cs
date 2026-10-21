@@ -42,6 +42,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary><c>1</c> after the first <see cref="DisposeAsync"/> has marked the channel disposed.</summary>
         private int _disposed;
 
+        /// <summary><c>1</c> after an unexpected fault has been raised once for this channel.</summary>
+        private int _faultRaised;
+
+        /// <summary>
+        /// <c>1</c> after this wrapper initiates <see cref="BasicCancelAsync"/> so broker
+        /// <see cref="AsyncEventingBasicConsumer.UnregisteredAsync"/> is treated as expected.
+        /// </summary>
+        private int _applicationCancel;
+
         /// <summary>
         /// Initializes a new wrapper around an opened channel.
         /// </summary>
@@ -52,10 +61,14 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             ArgumentNullException.ThrowIfNull(channel);
             _channel = channel;
             Generation = generation;
+            _channel.ChannelShutdownAsync += OnChannelShutdownAsync;
         }
 
         /// <inheritdoc />
         public long Generation { get; }
+
+        /// <inheritdoc />
+        public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
 
         /// <summary>Threads currently waiting to enter consumer registration or disposal.</summary>
         internal int LifecycleWaiters => Volatile.Read(ref _lifecycleWaiters);
@@ -163,6 +176,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 var consumer = new AsyncEventingBasicConsumer(_channel);
                 _onDelivery = onDelivery;
                 consumer.ReceivedAsync += OnReceivedAsync;
+                consumer.UnregisteredAsync += OnConsumerUnregisteredAsync;
+                consumer.ShutdownAsync += OnConsumerShutdownAsync;
                 try
                 {
                     var consumerTag = await _channel
@@ -174,7 +189,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 catch (Exception)
                 {
                     _onDelivery = null;
-                    consumer.ReceivedAsync -= OnReceivedAsync;
+                    DetachConsumerHandlers(consumer);
                     throw;
                 }
             }
@@ -189,6 +204,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(consumerTag);
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+            Interlocked.Exchange(ref _applicationCancel, 1);
             return _channel.BasicCancelAsync(consumerTag, cancellationToken: cancellationToken);
         }
 
@@ -223,6 +239,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     }
 
                     DetachConsumer();
+                    _channel.ChannelShutdownAsync -= OnChannelShutdownAsync;
                     close = true;
                 }
 
@@ -286,11 +303,94 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         {
             if (_consumer is not null)
             {
-                _consumer.ReceivedAsync -= OnReceivedAsync;
+                DetachConsumerHandlers(_consumer);
                 _consumer = null;
             }
 
             _onDelivery = null;
+        }
+
+        /// <summary>Removes delivery and fault handlers from <paramref name="consumer"/>.</summary>
+        /// <param name="consumer">Consumer previously attached by <see cref="BasicConsumeAsync"/>.</param>
+        private void DetachConsumerHandlers(AsyncEventingBasicConsumer consumer)
+        {
+            consumer.ReceivedAsync -= OnReceivedAsync;
+            consumer.UnregisteredAsync -= OnConsumerUnregisteredAsync;
+            consumer.ShutdownAsync -= OnConsumerShutdownAsync;
+        }
+
+        /// <summary>Raises <see cref="ChannelFaulted"/> once for an unexpected channel shutdown.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Client shutdown details.</param>
+        private Task OnChannelShutdownAsync(object sender, ShutdownEventArgs eventArgs)
+        {
+            TryRaiseChannelFaulted(
+                RabbitMqChannelFaultKind.ChannelShutdown,
+                FormatShutdownReason(eventArgs));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Raises <see cref="ChannelFaulted"/> when the broker cancels the consumer and this wrapper did not issue cancel.
+        /// </summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Cancelled consumer tags from the client.</param>
+        private Task OnConsumerUnregisteredAsync(object sender, ConsumerEventArgs eventArgs)
+        {
+            if (Volatile.Read(ref _applicationCancel) == 1)
+            {
+                return Task.CompletedTask;
+            }
+
+            var tags = eventArgs.ConsumerTags is { Length: > 0 }
+                ? string.Join(',', eventArgs.ConsumerTags)
+                : "(none)";
+            TryRaiseChannelFaulted(
+                RabbitMqChannelFaultKind.ConsumerCancelled,
+                $"Consumer unregistered by broker (tags={tags}).");
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Raises <see cref="ChannelFaulted"/> once for a consumer-scoped shutdown.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Client shutdown details.</param>
+        private Task OnConsumerShutdownAsync(object sender, ShutdownEventArgs eventArgs)
+        {
+            TryRaiseChannelFaulted(
+                RabbitMqChannelFaultKind.ChannelShutdown,
+                FormatShutdownReason(eventArgs));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Raises <see cref="ChannelFaulted"/> at most once when disposal has not marked the channel closed.
+        /// </summary>
+        /// <param name="kind">Fault classification.</param>
+        /// <param name="reason">Broker or client reason text.</param>
+        private void TryRaiseChannelFaulted(RabbitMqChannelFaultKind kind, string reason)
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
+
+            if (Interlocked.Exchange(ref _faultRaised, 1) == 1)
+            {
+                return;
+            }
+
+            ChannelFaulted?.Invoke(this, new RabbitMqChannelFaultedEventArgs(kind, reason));
+        }
+
+        /// <summary>Formats a client shutdown reason without credentials or payload bytes.</summary>
+        /// <param name="eventArgs">Client shutdown details.</param>
+        /// <returns>Stable reason text for logs and recovery.</returns>
+        private static string FormatShutdownReason(ShutdownEventArgs eventArgs)
+        {
+            var replyText = string.IsNullOrWhiteSpace(eventArgs.ReplyText)
+                ? "(none)"
+                : eventArgs.ReplyText;
+            return $"Channel shutdown initiator={eventArgs.Initiator} code={eventArgs.ReplyCode} text={replyText}";
         }
 
         /// <summary>

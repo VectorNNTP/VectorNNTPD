@@ -9,8 +9,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
     /// </summary>
     /// <remarks>
     /// Startup fails if a publishing channel cannot be opened on the current generation.
-    /// After start, connection replacement rebuilds the publisher channel. This type
-    /// does not implement a second connection-recovery loop and never ACK/NACKs deliveries.
+    /// After start, connection replacement and independent publish-channel faults rebuild the publisher channel
+    /// on the current connection generation. This type does not implement a second connection-recovery loop
+    /// and never ACK/NACKs deliveries.
     /// Completing <see cref="PublishAsync"/> means the broker confirmed and the publication generation was still current afterward.
     /// Confirmation is not permission to ACK the original delivery.
     /// One publication holds <see cref="_publishGate"/>. The confirmation wait is cancelled by the caller token, disposal, or the configured confirmation timeout.
@@ -213,6 +214,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             ArticleWorkLogMessages.PublisherRetiring(_logger, Generation);
             _connections.ConnectionReplaced -= OnConnectionReplaced;
+            DetachPublishChannelFaultHandler();
             await _runCts.CancelAsync().ConfigureAwait(false);
 
             Task replace;
@@ -306,6 +308,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             try
             {
                 ThrowIfNotRunning();
+                await EnsureOpenPublishChannelAsync(linked.Token).ConfigureAwait(false);
                 var channel = CurrentOpenChannelOrThrow();
                 generation = channel.Generation;
                 if (!IsPublisherGenerationCurrent(generation))
@@ -400,6 +403,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 else
                 {
                     replaced = _channel;
+                    if (replaced is not null)
+                    {
+                        replaced.ChannelFaulted -= OnPublishChannelFaulted;
+                    }
+
+                    candidate.ChannelFaulted += OnPublishChannelFaulted;
                     _channel = candidate;
                 }
             }
@@ -429,6 +438,45 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return;
             }
 
+            ScheduleChannelRebuild();
+        }
+
+        /// <summary>
+        /// Schedules a publish-channel rebuild when the installed channel faults independently of connection replacement.
+        /// </summary>
+        /// <param name="sender">Faulted channel. Ignored when it is not the installed channel.</param>
+        /// <param name="eventArgs">Fault classification and reason.</param>
+        private void OnPublishChannelFaulted(object? sender, RabbitMqChannelFaultedEventArgs eventArgs)
+        {
+            long generation;
+            lock (_gate)
+            {
+                if (_stopping || _channel is null || !ReferenceEquals(_channel, sender))
+                {
+                    return;
+                }
+
+                generation = _channel.Generation;
+            }
+
+            ArticleWorkLogMessages.PublisherChannelFaulted(
+                _logger,
+                generation,
+                eventArgs.Kind,
+                eventArgs.Reason);
+            ScheduleChannelRebuild();
+        }
+
+        /// <summary>
+        /// Chains a non-cancelling rebuild after any in-flight rebuild when disposal has not started.
+        /// </summary>
+        /// <remarks>
+        /// Overwriting <see cref="_replaceTask"/> with a sibling <see cref="RebuildPublishChannelAsync"/> left prior
+        /// waiters on <see cref="_replaceGate"/> unobserved; disposal could then dispose the semaphore while those
+        /// waiters were still queued. Chaining keeps every rebuild on the task Dispose awaits.
+        /// </remarks>
+        private void ScheduleChannelRebuild()
+        {
             lock (_gate)
             {
                 if (_stopping)
@@ -436,16 +484,37 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     return;
                 }
 
-                _replaceTask = RebuildAfterReplacementAsync();
+                _replaceTask = ContinueRebuildAsync(_replaceTask);
             }
         }
 
-        /// <summary>Rebuilds the publication channel after a connection replacement unless the startup never succeeded or disposal has started.</summary>
+        /// <summary>
+        /// Awaits <paramref name="previous"/> then runs one rebuild so later connection or channel-fault requests are not dropped.
+        /// </summary>
+        /// <param name="previous">Earlier rebuild or completed task. Failures are ignored here because that boundary already logged them.</param>
+        /// <returns>A task that completes when the follow-on rebuild finishes.</returns>
+        private async Task ContinueRebuildAsync(Task previous)
+        {
+            try
+            {
+                await previous.ConfigureAwait(false);
+            }
+            // codeql[cs/catch-of-all-exceptions] A prior rebuild already logged; this link must still run the follow-on replace.
+            catch (Exception)
+            {
+                // Prior rebuild logged at its boundary; a later request must still run.
+            }
+
+            await RebuildPublishChannelAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>Rebuilds the publication channel on the current connection unless startup never succeeded or disposal has started.</summary>
         /// <returns>A task that completes when the rebuild attempt finishes. Failures are logged and not rethrown.</returns>
         /// <remarks>
         /// Waits on <see cref="_replaceGate"/> without a cancellation token, then opens the channel with <see cref="_runCts"/>.
+        /// Used for both connection replacement and independent channel faults.
         /// </remarks>
-        private async Task RebuildAfterReplacementAsync()
+        private async Task RebuildPublishChannelAsync()
         {
             await _replaceGate.WaitAsync().ConfigureAwait(false);
             try
@@ -472,6 +541,48 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 _replaceGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Waits for any in-flight rebuild and, when the installed channel is closed, schedules another rebuild on the current connection.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the wait for an in-flight rebuild.</param>
+        /// <remarks>
+        /// Does not take <see cref="_replaceGate"/> while holding <see cref="_publishGate"/>; it only awaits the tracked rebuild task.
+        /// </remarks>
+        private async Task EnsureOpenPublishChannelAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Task replace;
+            var open = false;
+            lock (_gate)
+            {
+                if (_channel is { IsOpen: true })
+                {
+                    open = true;
+                    replace = Task.CompletedTask;
+                }
+                else if (_stopping)
+                {
+                    replace = Task.CompletedTask;
+                }
+                else if (!_replaceTask.IsCompleted)
+                {
+                    replace = _replaceTask;
+                }
+                else
+                {
+                    _replaceTask = ContinueRebuildAsync(_replaceTask);
+                    replace = _replaceTask;
+                }
+            }
+
+            if (open)
+            {
+                return;
+            }
+
+            await replace.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>Opens a publication channel on the current connection and installs it when the generation is still current.</summary>
@@ -525,12 +636,29 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             lock (_gate)
             {
                 channel = _channel;
+                if (channel is not null)
+                {
+                    channel.ChannelFaulted -= OnPublishChannelFaulted;
+                }
+
                 _channel = null;
             }
 
             if (channel is not null)
             {
                 await channel.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>Unsubscribes the fault handler from the installed channel without disposing it.</summary>
+        private void DetachPublishChannelFaultHandler()
+        {
+            lock (_gate)
+            {
+                if (_channel is not null)
+                {
+                    _channel.ChannelFaulted -= OnPublishChannelFaulted;
+                }
             }
         }
 

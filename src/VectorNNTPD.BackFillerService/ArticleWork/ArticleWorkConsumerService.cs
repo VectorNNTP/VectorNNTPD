@@ -528,6 +528,32 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             _ = ReconcileObservedAsync();
         }
 
+        /// <summary>
+        /// Schedules an observed reconcile after a running session reports an unexpected channel fault.
+        /// Does not open a new AMQP connection.
+        /// </summary>
+        private void OnSessionChannelFaulted()
+        {
+            if (!IsRunning)
+            {
+                return;
+            }
+
+            _ = ReconcileObservedAsync();
+        }
+
+        /// <summary>
+        /// Returns whether a tracked session still owns an open broker consumer.
+        /// <see cref="ArticleWorkConsumerState.Running"/> alone is not sufficient after channel failure.
+        /// </summary>
+        /// <param name="session">Tracked session candidate.</param>
+        /// <returns>
+        /// <see langword="true"/> when the session is running and its consume channel reports itself open.
+        /// </returns>
+        private static bool IsHealthyRunningSession(ArticleWorkConsumerSession session) =>
+            session.State == ArticleWorkConsumerState.Running
+            && session.Channel is { IsOpen: true };
+
         /// <summary>Reconciles after a capacity snapshot.</summary>
         /// <returns>
         /// A task that completes when <see cref="ReconcileAsync"/> finishes or its exception has been logged.
@@ -558,8 +584,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Sessions whose topology did declare are still started.
         /// </returns>
         /// <remarks>
-        /// A tracked running session whose key is still desired is kept. Any other tracked session whose key is no longer desired is removed and retired.
-        /// A desired key with no running tracked session is started. Prefetch is the configured positive count, otherwise 1.
+        /// A tracked running session whose key is still desired and whose consume channel is open is kept.
+        /// Any other tracked session is removed and retired, including a Running session whose channel is closed.
+        /// A desired key with no healthy tracked session is started. Prefetch is the configured positive count, otherwise 1.
         /// Sessions started in one pass share a new pipeline. A start failure disposes sessions started in that pass and propagates; they are not tracked.
         /// If shutdown is set before publication, those new sessions are disposed of instead of tracked.
         /// No desired slots is success. A desired slot whose topology is not ready is not success and does not log completion.
@@ -581,17 +608,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 foreach (var pair in _sessions.ToArray())
                 {
-                    if (desired.ContainsKey(pair.Key) && pair.Value.State == ArticleWorkConsumerState.Running)
+                    if (desired.ContainsKey(pair.Key) && IsHealthyRunningSession(pair.Value))
                     {
                         desired.Remove(pair.Key);
                         continue;
                     }
 
-                    if (!desired.ContainsKey(pair.Key))
-                    {
-                        _sessions.Remove(pair.Key);
-                        stale.Add(pair.Value);
-                    }
+                    _sessions.Remove(pair.Key);
+                    stale.Add(pair.Value);
                 }
             }
 
@@ -637,7 +661,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         _logger,
                         _runtime.Shutdown,
                         identity.ConnectionNumber,
-                        identity.ConnectionLimit);
+                        identity.ConnectionLimit)
+                    {
+                        UnexpectedChannelFault = OnSessionChannelFaulted,
+                    };
                     await session.StartAsync(cancellationToken).ConfigureAwait(false);
                     started.Add(session);
                 }

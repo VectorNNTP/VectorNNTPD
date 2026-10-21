@@ -363,6 +363,9 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <summary>Writable open flag; when false, consume and settlement operations throw.</summary>
         public bool IsOpen { get; set; } = true;
 
+        /// <summary>Raised by <see cref="SimulateChannelShutdown"/> / <see cref="SimulateConsumerCancelled"/>; not wired to a real broker.</summary>
+        public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
+
         /// <summary>Number of exclusive dispose passes completed on this channel.</summary>
         public int DisposeCount { get; private set; }
 
@@ -561,7 +564,7 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             return Task.FromResult(ConsumerTag);
         }
 
-        /// <summary>Increments <see cref="CancelCount"/> without unregistering the consumer callback.</summary>
+        /// <summary>Increments <see cref="CancelCount"/> without unregistering the consumer callback or raising <see cref="ChannelFaulted"/>.</summary>
         /// <param name="consumerTag">Validated but not matched against <see cref="ConsumerTag"/>.</param>
         /// <param name="cancellationToken">Honored before incrementing the counter.</param>
         public Task BasicCancelAsync(string consumerTag, CancellationToken cancellationToken)
@@ -570,6 +573,32 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             cancellationToken.ThrowIfCancellationRequested();
             CancelCount++;
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Marks the channel closed and raises <see cref="ChannelFaulted"/> as an unexpected channel shutdown.
+        /// Leaves the process connection open.
+        /// </summary>
+        /// <param name="reason">Fault reason text.</param>
+        internal void SimulateChannelShutdown(string reason = "channel closed by broker")
+        {
+            IsOpen = false;
+            ChannelFaulted?.Invoke(
+                this,
+                new RabbitMqChannelFaultedEventArgs(RabbitMqChannelFaultKind.ChannelShutdown, reason));
+        }
+
+        /// <summary>
+        /// Marks the channel closed and raises <see cref="ChannelFaulted"/> as a broker-originated consumer cancellation.
+        /// Leaves the process connection open.
+        /// </summary>
+        /// <param name="reason">Fault reason text.</param>
+        internal void SimulateConsumerCancelled(string reason = "consumer cancelled by broker")
+        {
+            IsOpen = false;
+            ChannelFaulted?.Invoke(
+                this,
+                new RabbitMqChannelFaultedEventArgs(RabbitMqChannelFaultKind.ConsumerCancelled, reason));
         }
 
         /// <summary>
@@ -760,6 +789,9 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <summary>Writable open flag; when false, publish throws; some confirm failures also clear this flag.</summary>
         public bool IsOpen { get; set; } = true;
 
+        /// <summary>Raised by <see cref="SimulateChannelShutdown"/>; not wired to a real broker.</summary>
+        public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
+
         /// <summary>Number of dispose calls completed on this publish channel.</summary>
         public int DisposeCount { get; private set; }
 
@@ -848,6 +880,11 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                     throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
                 case FakePublishConfirmBehavior.CloseChannel:
                     IsOpen = false;
+                    ChannelFaulted?.Invoke(
+                        this,
+                        new RabbitMqChannelFaultedEventArgs(
+                            RabbitMqChannelFaultKind.ChannelShutdown,
+                            "channel closed during confirmation"));
                     throw new InvalidOperationException("RabbitMQ publish channel closed during confirmation.");
                 default:
                     if (ConfirmGate is not null)
@@ -863,6 +900,19 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 
         /// <summary>When set, thrown after incrementing dispose count and clearing <see cref="IsOpen"/>.</summary>
         public Exception? DisposeException { get; set; }
+
+        /// <summary>
+        /// Marks the channel closed and raises <see cref="ChannelFaulted"/> as an unexpected channel shutdown.
+        /// Leaves the process connection open.
+        /// </summary>
+        /// <param name="reason">Fault reason text.</param>
+        internal void SimulateChannelShutdown(string reason = "publish channel closed by broker")
+        {
+            IsOpen = false;
+            ChannelFaulted?.Invoke(
+                this,
+                new RabbitMqChannelFaultedEventArgs(RabbitMqChannelFaultKind.ChannelShutdown, reason));
+        }
 
         /// <summary>Increments dispose count, marks the channel closed, and optionally throws <see cref="DisposeException"/>.</summary>
         public ValueTask DisposeAsync()

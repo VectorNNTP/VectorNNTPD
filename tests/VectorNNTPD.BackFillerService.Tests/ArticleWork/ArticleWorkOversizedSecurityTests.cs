@@ -102,6 +102,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             public bool IsOpen => true;
 
             /// <inheritdoc />
+            public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted
+            {
+                add { }
+                remove { }
+            }
+
+            /// <inheritdoc />
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
             /// <inheritdoc />

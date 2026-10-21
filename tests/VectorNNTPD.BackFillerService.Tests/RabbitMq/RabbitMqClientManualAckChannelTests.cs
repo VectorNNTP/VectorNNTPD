@@ -436,6 +436,11 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
             {
                 ArgumentNullException.ThrowIfNull(targetMethod);
+                if (targetMethod.Name is "add_ChannelShutdownAsync" or "remove_ChannelShutdownAsync")
+                {
+                    return null;
+                }
+
                 if (targetMethod.Name == "get_IsOpen")
                 {
                     return IsOpen;

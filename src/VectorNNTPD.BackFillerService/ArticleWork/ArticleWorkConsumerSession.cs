@@ -99,6 +99,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         private int _disposed;
 
         /// <summary>
+        /// Optional callback invoked when an unexpected channel fault retires this session while it was running.
+        /// The consumer service uses it to schedule an observed reconcile without reconnecting.
+        /// </summary>
+        internal Action? UnexpectedChannelFault { get; set; }
+
+        /// <summary>
         /// Initializes a new session with the default drain-and-finish shutdown policy for connection slot 1 of 1.
         /// </summary>
         /// <param name="backbone">Provider backbone label.</param>
@@ -316,22 +322,36 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     .BasicConsumeAsync(_queue, _prefetch, OnDeliveryAsync, cancellationToken)
                     .ConfigureAwait(false);
 
+                // Install identity under the gate before subscribing so a fault callback can match this session.
+                // A ChannelFaulted raised in the gap before subscribe is recovered by the IsOpen check below.
+                IRabbitMqManualAckChannel installed;
                 lock (_gate)
                 {
-                    _channel = channel;
+                    installed = channel;
+                    _channel = installed;
                     _consumerTag = tag;
                     Generation = handle.Generation;
                     _state = ArticleWorkConsumerState.Running;
                     channel = null;
                 }
 
+                installed.ChannelFaulted += OnChannelFaulted;
                 ArticleWorkLogMessages.ConsumerRunning(_logger, _backbone, _queue, Generation, tag);
+                if (!installed.IsOpen)
+                {
+                    OnChannelFaulted(
+                        installed,
+                        new RabbitMqChannelFaultedEventArgs(
+                            RabbitMqChannelFaultKind.ChannelShutdown,
+                            "Channel closed during consumer start."));
+                }
             }
             catch (Exception ex)
             {
                 ArticleWorkLogMessages.ConsumerStartFailed(_logger, _backbone, _queue, ex.Message);
                 if (channel is not null)
                 {
+                    channel.ChannelFaulted -= OnChannelFaulted;
                     await channel.DisposeAsync().ConfigureAwait(false);
                 }
 
@@ -500,6 +520,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             if (channel is not null)
             {
+                channel.ChannelFaulted -= OnChannelFaulted;
                 await channel.DisposeAsync().ConfigureAwait(false);
             }
 
@@ -511,6 +532,35 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             }
 
             ArticleWorkLogMessages.ConsumerStopped(_logger, _backbone, Generation);
+        }
+
+        /// <summary>
+        /// Retires this session when its installed channel reports an unexpected fault, then notifies the service to reconcile.
+        /// </summary>
+        /// <param name="sender">Faulted channel. Ignored when it is not the installed channel.</param>
+        /// <param name="eventArgs">Fault classification and reason.</param>
+        /// <remarks>
+        /// Late callbacks from a retired channel are ignored via identity check.
+        /// Expected application cancel and disposal do not raise <see cref="IRabbitMqManualAckChannel.ChannelFaulted"/>.
+        /// </remarks>
+        private void OnChannelFaulted(object? sender, RabbitMqChannelFaultedEventArgs eventArgs)
+        {
+            lock (_gate)
+            {
+                if (!ReferenceEquals(_channel, sender) || _state != ArticleWorkConsumerState.Running)
+                {
+                    return;
+                }
+            }
+
+            ArticleWorkLogMessages.ConsumerChannelFaulted(
+                _logger,
+                _backbone,
+                Generation,
+                eventArgs.Kind,
+                eventArgs.Reason);
+            UnexpectedChannelFault?.Invoke();
+            _ = RetireAsync();
         }
 
         /// <summary>

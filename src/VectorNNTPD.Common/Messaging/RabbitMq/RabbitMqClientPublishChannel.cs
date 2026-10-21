@@ -1,4 +1,5 @@
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
@@ -22,19 +23,26 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
+        /// <summary><c>1</c> after an unexpected fault has been raised once for this channel.</summary>
+        private int _faultRaised;
+
         /// <summary>Initializes a new wrapper around an opened confirm-enabled channel.</summary>
         internal RabbitMqClientPublishChannel(IChannel channel, long generation)
         {
             ArgumentNullException.ThrowIfNull(channel);
             _channel = channel;
             Generation = generation;
+            _channel.ChannelShutdownAsync += OnChannelShutdownAsync;
         }
 
         /// <inheritdoc />
         public long Generation { get; }
 
         /// <inheritdoc />
-        public bool IsOpen => _channel.IsOpen;
+        public event EventHandler<RabbitMqChannelFaultedEventArgs>? ChannelFaulted;
+
+        /// <inheritdoc />
+        public bool IsOpen => Volatile.Read(ref _disposed) == 0 && _channel.IsOpen;
 
         /// <inheritdoc />
         public Task PublishConfirmedAsync(
@@ -119,6 +127,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 return;
             }
 
+            _channel.ChannelShutdownAsync -= OnChannelShutdownAsync;
+
             try
             {
                 if (_channel.IsOpen)
@@ -131,6 +141,32 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
 
             await _channel.DisposeAsync().ConfigureAwait(false);
+        }
+
+        /// <summary>Raises <see cref="ChannelFaulted"/> once for an unexpected channel shutdown.</summary>
+        /// <param name="sender">Unused.</param>
+        /// <param name="eventArgs">Client shutdown details.</param>
+        private Task OnChannelShutdownAsync(object sender, ShutdownEventArgs eventArgs)
+        {
+            if (Volatile.Read(ref _disposed) == 1)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (Interlocked.Exchange(ref _faultRaised, 1) == 1)
+            {
+                return Task.CompletedTask;
+            }
+
+            var replyText = string.IsNullOrWhiteSpace(eventArgs.ReplyText)
+                ? "(none)"
+                : eventArgs.ReplyText;
+            ChannelFaulted?.Invoke(
+                this,
+                new RabbitMqChannelFaultedEventArgs(
+                    RabbitMqChannelFaultKind.ChannelShutdown,
+                    $"Channel shutdown initiator={eventArgs.Initiator} code={eventArgs.ReplyCode} text={replyText}"));
+            return Task.CompletedTask;
         }
 
         /// <summary>
