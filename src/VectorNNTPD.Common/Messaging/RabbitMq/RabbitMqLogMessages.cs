@@ -229,5 +229,21 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             Exception exception,
             long Generation,
             string Subscriber);
+
+        /// <summary>
+        /// Logs event 2821 (debug): blocked-timeout CTS cancel or dispose raced with another cleanup path.
+        /// Cleanup continues; this is not a recovery failure.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="exception">The <see cref="ObjectDisposedException"/> from the raced CTS.</param>
+        /// <param name="Operation"><c>Cancel</c> or <c>Dispose</c>.</param>
+        [LoggerMessage(
+            EventId = 2821,
+            Level = LogLevel.Debug,
+            Message = "RabbitMQ blocked-timeout CTS was already disposed during {Operation}")]
+        internal static partial void BlockedTimeoutCtsAlreadyDisposed(
+            ILogger logger,
+            Exception exception,
+            string Operation);
     }
 }

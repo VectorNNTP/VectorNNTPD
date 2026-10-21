@@ -754,8 +754,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 cts.Dispose();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Dispose");
             }
 
             if (!shouldRecover)
@@ -783,16 +784,18 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 cts.Cancel();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Cancel");
             }
 
             try
             {
                 cts.Dispose();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                RabbitMqLogMessages.BlockedTimeoutCtsAlreadyDisposed(_logger, ex, "Dispose");
             }
         }
 
