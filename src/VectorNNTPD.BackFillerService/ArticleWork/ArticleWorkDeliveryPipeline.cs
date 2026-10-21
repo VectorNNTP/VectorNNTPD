@@ -17,8 +17,25 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
         private readonly int _maxPayloadBytes;
 
+        /// <summary>Configured queue <c>x-delivery-limit</c>; application requeue cap uses the same value.</summary>
+        private readonly int _deliveryLimit;
+
+        /// <summary>
+        /// When <see langword="true"/>, a redelivery without <c>x-delivery-count</c> is treated as exhausted (quorum).
+        /// Classic queues pass <see langword="false"/>.
+        /// </summary>
+        private readonly bool _treatMissingRedeliveryCountAsExhausted;
+
         /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
         internal int MaxPayloadBytes => _maxPayloadBytes;
+
+        /// <summary>Finite delivery limit applied to retryable dispositions.</summary>
+        internal int DeliveryLimit => _deliveryLimit;
+
+        /// <summary>
+        /// Whether missing broker delivery-count on redelivery is treated as exhausted.
+        /// </summary>
+        internal bool TreatMissingRedeliveryCountAsExhausted => _treatMissingRedeliveryCountAsExhausted;
 
         /// <summary>
         /// Initializes a new pipeline.
@@ -26,19 +43,33 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="handler">Admitted-work handler.</param>
         /// <param name="publisher">Response-publish seam.</param>
         /// <param name="maxPayloadBytes">Maximum accepted JSON body size. Must be at least 1.</param>
+        /// <param name="deliveryLimit">
+        /// Finite delivery limit mirrored from queue declaration. Must be at least 1.
+        /// Defaults to <c>10</c> so existing tests retain the production default.
+        /// </param>
+        /// <param name="treatMissingRedeliveryCountAsExhausted">
+        /// Quorum topology passes <see langword="true"/> (default). Classic topology passes <see langword="false"/>.
+        /// </param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="handler"/> or <paramref name="publisher"/> is null.</exception>
-        /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="maxPayloadBytes"/> is less than 1.</exception>
+        /// <exception cref="ArgumentOutOfRangeException">
+        /// Thrown when <paramref name="maxPayloadBytes"/> or <paramref name="deliveryLimit"/> is less than 1.
+        /// </exception>
         internal ArticleWorkDeliveryPipeline(
             IArticleWorkHandler handler,
             IArticleWorkResponsePublisher publisher,
-            int maxPayloadBytes)
+            int maxPayloadBytes,
+            int deliveryLimit = 10,
+            bool treatMissingRedeliveryCountAsExhausted = true)
         {
             ArgumentNullException.ThrowIfNull(handler);
             ArgumentNullException.ThrowIfNull(publisher);
             ArgumentOutOfRangeException.ThrowIfLessThan(maxPayloadBytes, 1);
+            ArgumentOutOfRangeException.ThrowIfLessThan(deliveryLimit, 1);
             _handler = handler;
             _publisher = publisher;
             _maxPayloadBytes = maxPayloadBytes;
+            _deliveryLimit = deliveryLimit;
+            _treatMissingRedeliveryCountAsExhausted = treatMissingRedeliveryCountAsExhausted;
         }
 
         /// <summary>
@@ -104,7 +135,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 var invalid = ArticleWorkDispositionPlanner.Create(
                     ArticleWorkOutcome.InvalidRequest,
                     replyable,
-                    cancellationRequested: false);
+                    cancellationRequested: false,
+                    delivery.DeliveryCount,
+                    delivery.Redelivered,
+                    _deliveryLimit,
+                    _treatMissingRedeliveryCountAsExhausted);
                 if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
                 {
                     return ArticleWorkOutcome.InvalidRequest;
@@ -130,7 +165,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         ArticleWorkOutcome.InvalidRequest,
                         lease,
                         channel,
-                        channelStillCurrent)
+                        channelStillCurrent,
+                        delivery.DeliveryCount,
+                        delivery.Redelivered)
                     .ConfigureAwait(false);
                 return publishOutcome;
             }
@@ -181,7 +218,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var disposition = ArticleWorkDispositionPlanner.Create(
                 outcome,
                 replyable: true,
-                cancellationToken.IsCancellationRequested || outcome == ArticleWorkOutcome.Cancelled);
+                cancellationToken.IsCancellationRequested || outcome == ArticleWorkOutcome.Cancelled,
+                delivery.DeliveryCount,
+                delivery.Redelivered,
+                _deliveryLimit,
+                _treatMissingRedeliveryCountAsExhausted);
 
             if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
             {
@@ -190,7 +231,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             if (outcome == ArticleWorkOutcome.Success && !_publisher.CompletesSuccessPublication)
             {
-                var pending = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
+                var pending = CreateRetryDisposition(delivery.DeliveryCount, delivery.Redelivered);
                 await lease.TrySettleAsync(
                         pending,
                         channelStillCurrent() && lease.IsOriginalChannel(channel),
@@ -224,24 +265,30 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     outcome,
                     lease,
                     channel,
-                    channelStillCurrent)
+                    channelStillCurrent,
+                    delivery.DeliveryCount,
+                    delivery.Redelivered)
                 .ConfigureAwait(false);
             return finalOutcome;
         }
 
-        /// <summary>NACK-requeues the lease when the original channel is still current.</summary>
+        /// <summary>NACK with requeue while retries remain; NACK without requeue when the delivery limit is exhausted.</summary>
         /// <param name="lease">Settlement lease for this delivery.</param>
         /// <param name="channel">Channel originally bound to <paramref name="lease"/>.</param>
         /// <param name="channelStillCurrent">Rechecked immediately before the NACK.</param>
+        /// <param name="deliveryCount">Broker <c>x-delivery-count</c> for this delivery.</param>
+        /// <param name="redelivered">AMQP redelivered flag for missing-count handling.</param>
         /// <returns>
         /// A task that completes when the NACK attempt finishes. The lease swallows broker failures and does not retry them.
         /// </returns>
-        private static async Task SettleRetryableAsync(
+        private async Task SettleRetryableAsync(
             ArticleWorkSettlementLease lease,
             IRabbitMqManualAckChannel channel,
-            Func<bool> channelStillCurrent)
+            Func<bool> channelStillCurrent,
+            int? deliveryCount,
+            bool redelivered)
         {
-            var retry = new ArticleWorkDisposition(Acknowledge: false, Requeue: true, PublishResponse: false);
+            var retry = CreateRetryDisposition(deliveryCount, redelivered);
             await lease.TrySettleAsync(
                     retry,
                     channelStillCurrent() && lease.IsOriginalChannel(channel),
@@ -249,8 +296,20 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 .ConfigureAwait(false);
         }
 
+        /// <summary>Builds the retry-or-discard disposition for the current delivery count.</summary>
+        private ArticleWorkDisposition CreateRetryDisposition(int? deliveryCount, bool redelivered) =>
+            ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.UnexpectedFailure,
+                replyable: false,
+                cancellationRequested: false,
+                deliveryCount,
+                redelivered,
+                _deliveryLimit,
+                _treatMissingRedeliveryCountAsExhausted);
+
         /// <summary>
-        /// Settles after a publication attempt. A required publication that is cancelled or fails NACK-requeues.
+        /// Settles after a publication attempt. A required publication that is cancelled or fails NACK-requeues
+        /// while retries remain.
         /// </summary>
         /// <param name="published">Result of the publication attempt. <see cref="ArticleWorkPublishAttempt.Confirmed"/> includes attempts that were not required.</param>
         /// <param name="disposition">Plan produced before publication. Submitted only when <paramref name="published"/> is confirmed.</param>
@@ -258,6 +317,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="lease">Settlement lease for this delivery. One attempt; a failed NACK does not settle again.</param>
         /// <param name="channel">Channel originally bound to <paramref name="lease"/>.</param>
         /// <param name="channelStillCurrent">Rechecked immediately before settlement. A stale or replacement channel is not settled.</param>
+        /// <param name="deliveryCount">Broker <c>x-delivery-count</c> for this delivery.</param>
+        /// <param name="redelivered">AMQP redelivered flag for missing-count handling.</param>
         /// <returns>
         /// <paramref name="outcome"/> when the original disposition is submitted.
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication was cancelled or failed.
@@ -266,17 +327,20 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Broker RPCs use <see cref="CancellationToken.None"/>. A lost publisher confirm is reported as failure, so the
         /// requeue can publish another reply with the same correlation id. That is not exactly-once delivery.
         /// </remarks>
-        private static async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
+        private async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
             ArticleWorkPublishAttempt published,
             ArticleWorkDisposition disposition,
             ArticleWorkOutcome outcome,
             ArticleWorkSettlementLease lease,
             IRabbitMqManualAckChannel channel,
-            Func<bool> channelStillCurrent)
+            Func<bool> channelStillCurrent,
+            int? deliveryCount,
+            bool redelivered)
         {
             if (published != ArticleWorkPublishAttempt.Confirmed)
             {
-                await SettleRetryableAsync(lease, channel, channelStillCurrent).ConfigureAwait(false);
+                await SettleRetryableAsync(lease, channel, channelStillCurrent, deliveryCount, redelivered)
+                    .ConfigureAwait(false);
                 return ArticleWorkOutcome.UnexpectedFailure;
             }
 

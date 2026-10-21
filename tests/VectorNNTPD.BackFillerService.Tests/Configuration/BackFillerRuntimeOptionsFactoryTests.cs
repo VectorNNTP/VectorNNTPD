@@ -37,6 +37,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(2048, runtime.RabbitMq.WorkRequestMaxPayloadBytes);
             Assert.Equal(7, runtime.RabbitMq.PublishConfirmTimeoutSeconds);
             Assert.Equal((ushort)3, runtime.RabbitMq.ConsumerPrefetchCount);
+            // Unique hosts after trim/case-fold: 127.0.0.1 and localhost → quorum size 2.
+            Assert.Equal(VectorNNTPD.Common.Messaging.RabbitMq.ArticleWorkQueueKind.Quorum, runtime.RabbitMq.QueueTopology.Kind);
+            Assert.Equal(2, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
+            Assert.Equal(2, runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
+            Assert.Equal(10, runtime.RabbitMq.DeliveryLimit);
             Assert.True(Path.IsPathRooted(runtime.LogDirectory));
             Assert.True(Path.IsPathRooted(runtime.CertificateDirectory));
             Assert.Equal("127.0.0.1", runtime.NntpDb.Server);
@@ -52,6 +57,25 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(TimeSpan.FromSeconds(60), runtime.AccountRefreshInterval);
             options.BackFillerAccountRefreshIntervalSeconds = 90;
             Assert.Equal(TimeSpan.FromSeconds(60), runtime.AccountRefreshInterval);
+        }
+
+        /// <summary>
+        /// A single configured host projects classic Article Work topology without quorum group size.
+        /// </summary>
+        [Fact]
+        public void Create_projects_classic_topology_for_single_host()
+        {
+            var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(1);
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                BackFillerTestOptions.CreateValid(),
+                BackFillerTestOptions.CreateValidNntpDb(),
+                BackFillerTestOptions.CreateValidAcme(),
+                rabbit);
+
+            Assert.Equal(VectorNNTPD.Common.Messaging.RabbitMq.ArticleWorkQueueKind.Classic, runtime.RabbitMq.QueueTopology.Kind);
+            Assert.Equal(1, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
+            Assert.Null(runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
+            Assert.False(runtime.RabbitMq.QueueTopology.RequiresQuorumHealth);
         }
 
         /// <summary>

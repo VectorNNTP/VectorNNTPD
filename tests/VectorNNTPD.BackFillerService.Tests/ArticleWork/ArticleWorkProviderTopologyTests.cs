@@ -16,10 +16,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
     public sealed class ArticleWorkProviderTopologyTests
     {
         /// <summary>
-        /// Usable capacity starts consumers only after a dedicated topology channel declares exchange, durable quorum queue, and bind, then disposes.
+        /// Usable capacity starts consumers only after a dedicated topology channel declares exchange, durable classic queue, and bind, then disposes.
         /// </summary>
         [Fact]
-        public async Task Active_backbone_declares_quorum_fanout_topology_before_consumers()
+        public async Task Active_backbone_declares_classic_fanout_topology_before_consumers_for_single_host()
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
             var connections = RabbitMqServiceTests.CreateService(factory);
@@ -43,7 +43,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.False(queue.AutoDelete);
             Assert.NotNull(queue.Arguments);
             Assert.True(queue.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var queueType));
-            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+            Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queueType);
+            Assert.False(queue.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
+            Assert.False(queue.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
             Assert.False(queue.Arguments.ContainsKey("x-message-ttl"));
             Assert.Single(queue.Arguments);
             Assert.Equal(
@@ -52,6 +54,35 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal(1, topology.DisposeCount);
             Assert.Equal("backfiller.giganews", factory.LastConnection.Channels[1].LastQueue);
             Assert.Equal(1, factory.LastConnection.Channels[1].ConsumeCount);
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Multi-host configuration declares quorum queue arguments with initial group size equal to host count.
+        /// </summary>
+        [Fact]
+        public async Task Active_backbone_declares_quorum_fanout_topology_for_multi_host()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumer(
+                connections,
+                CreateCatalog([("Giganews", 1)]),
+                CreateCapacity([("Giganews", 1)]),
+                hostCount: 3);
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            Assert.Single(consumer.Sessions);
+            var topology = factory.LastConnection!.Channels[0];
+            var queue = Assert.Single(topology.QueueDeclarations);
+            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queue.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+            Assert.Equal(3L, queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(10L, queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.Equal(3, queue.Arguments.Count);
 
             await consumer.DisposeAsync();
             await connections.DisposeAsync();
@@ -193,7 +224,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                     Assert.True(queue.Arguments.TryGetValue(
                         BackFillerArticleWorkTopology.QueueTypeArgumentName,
                         out var queueType));
-                    Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+                    Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queueType);
                 });
 
             await consumer.DisposeAsync();
@@ -231,24 +262,31 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Repeated <see cref="BackFillerArticleWorkTopology.DeclareProviderEndpointAsync"/> on one channel records a single declare triple with quorum queue arguments.
+        /// Repeated <see cref="BackFillerArticleWorkTopology.DeclareProviderEndpointAsync"/> on one channel records a single declare triple with classic queue arguments.
         /// </summary>
         [Fact]
         public async Task DeclareProviderEndpoint_is_idempotent_on_same_channel()
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
 
-            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(channel, "Giganews", CancellationToken.None);
+            var runtime = RabbitMqServiceTests.CreateFastRuntime();
+            await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
+                channel,
+                "Giganews",
+                runtime,
+                CancellationToken.None);
 
             Assert.Single(channel.ExchangeDeclarations);
             Assert.Single(channel.QueueDeclarations);
             Assert.Single(channel.BindingDeclarations);
             Assert.All(channel.QueueDeclarations, static q => Assert.True(q.Durable));
-            Assert.All(channel.QueueDeclarations, static q =>
+            Assert.All(channel.QueueDeclarations, q =>
             {
                 Assert.NotNull(q.Arguments);
                 Assert.True(q.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var type));
-                Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, type);
+                Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, type);
+                Assert.False(q.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
+                Assert.False(q.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
             });
         }
 
@@ -258,14 +296,16 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         /// <param name="connections">Started RabbitMQ service.</param>
         /// <param name="catalog">Provider definitions driving queue names.</param>
         /// <param name="capacity">Usable capacity state consumed at start.</param>
+        /// <param name="hostCount">Unique configured host count selecting classic (1) or quorum (≥ 2).</param>
         /// <returns>New <see cref="ArticleWorkConsumerService"/>.</returns>
         private static ArticleWorkConsumerService CreateConsumer(
             IRabbitMqService connections,
             IBackFillerProviderCatalog catalog,
-            BackboneUsableCapacityState capacity) =>
+            BackboneUsableCapacityState capacity,
+            int hostCount = 1) =>
             new(
                 connections,
-                RabbitMqServiceTests.CreateFastRuntime(),
+                RabbitMqServiceTests.CreateFastRuntime(hostCount),
                 new DeferredArticleWorkHandler(),
                 new RecordingArticleWorkResponsePublisher(),
                 NullLogger<ArticleWorkConsumerService>.Instance,

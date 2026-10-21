@@ -131,6 +131,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 
             /// <inheritdoc />
             public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken) => Task.CompletedTask;
+
+            /// <inheritdoc />
+            public Task BasicRejectAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken) => Task.CompletedTask;
         }
     }
 }

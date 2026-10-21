@@ -179,7 +179,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.True(Assert.Single(topologyChannel.QueueDeclarations).Arguments!.TryGetValue(
                 BackFillerArticleWorkTopology.QueueTypeArgumentName,
                 out var queueType));
-            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queueType);
+            Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queueType);
             Assert.Equal(1, topologyChannel.DisposeCount);
             Assert.Equal(0, topologyChannel.ConsumeCount);
             Assert.Equal(1, factory.ConnectCount);

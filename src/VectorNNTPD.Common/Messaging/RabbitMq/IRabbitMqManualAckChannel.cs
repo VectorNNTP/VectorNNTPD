@@ -84,10 +84,29 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <param name="cancellationToken">Token used to cancel the ACK.</param>
         Task BasicAckAsync(ulong deliveryTag, CancellationToken cancellationToken);
 
-        /// <summary>Negatively acknowledges <paramref name="deliveryTag"/> on this channel only.</summary>
+        /// <summary>
+        /// Negatively acknowledges <paramref name="deliveryTag"/> on this channel only via AMQP <c>basic.nack</c>
+        /// with <c>multiple=false</c>.
+        /// </summary>
         /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
         /// <param name="requeue">Whether the broker should requeue the message.</param>
         /// <param name="cancellationToken">Token used to cancel the NACK.</param>
+        /// <remarks>
+        /// On RabbitMQ quorum queues from 4.3, <c>basic.nack</c> does not increment <c>x-delivery-count</c>.
+        /// Article Work poison-message settlement uses <see cref="BasicRejectAsync"/> instead.
+        /// </remarks>
         Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Rejects <paramref name="deliveryTag"/> on this channel only via AMQP <c>basic.reject</c>.
+        /// </summary>
+        /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
+        /// <param name="requeue">Whether the broker should requeue the message.</param>
+        /// <param name="cancellationToken">Token used to cancel the reject.</param>
+        /// <remarks>
+        /// Marks the delivery attempt as failed for quorum-queue poison-message handling so
+        /// <c>x-delivery-count</c> increments under RabbitMQ 4.3+ rules.
+        /// </remarks>
+        Task BasicRejectAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken);
     }
 }

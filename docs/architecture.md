@@ -22,11 +22,13 @@ Article Work shutdown uses `BackFillerShutdownOptions`:
 
 ## Article Work reconcile
 
-The consumer membership loop waits 15 seconds after a pass that started every desired consumer, including a pass with nothing to start. A pass that cannot declare topology because RabbitMQ is not ready, or because channel creation or declaration failed for a desired backbone, does not reset that delay. The next wait doubles, up to 2 minutes. An unexpected exception uses the same delay and does not end the loop. Shutdown cancellation ends the loop and is not a failure. The host stays healthy while RabbitMQ is temporarily unavailable. Capacity snapshots and connection replacement reconcile once on the shared gate and do not change the delay. If replacement cannot restore a session, the same periodic loop retries it. A later successful pass resets the delay to 15 seconds.
+The consumer membership loop waits 15 seconds after a pass that started every desired consumer, including a pass with nothing to start. A pass that cannot declare topology because RabbitMQ is not ready, because channel creation or declaration failed for a desired backbone, or because Management-plane quorum membership is deficient or unverifiable, does not reset that delay. The next wait doubles, up to 2 minutes. An unexpected exception uses the same delay and does not end the loop. Shutdown cancellation ends the loop and is not a failure. The host stays healthy while RabbitMQ is temporarily unavailable. Capacity snapshots and connection replacement reconcile once on the shared gate and do not change the delay. If replacement cannot restore a session, the same periodic loop retries it. A later successful pass resets the delay to 15 seconds.
+
+Provider queue type is derived from the configured unique `RabbitMQ:Hosts` count (never from reachable hosts or live cluster members). Exactly one host declares a durable classic queue (`x-queue-type=classic`) without quorum arguments or Management quorum health. Two or more hosts declare a durable quorum queue with `x-quorum-initial-group-size` and readiness membership floor equal to that host count, plus configured `x-delivery-limit`. All configured hosts must belong to the same RabbitMQ cluster; the client host list does not establish membership. Successful AMQP quorum declaration alone does not mark a backbone ready: readiness also requires Management HTTP verification of members, online members, and leader. Pre-existing queues with inequivalent type or immutable arguments are not deleted or recreated; operators must migrate or grow membership explicitly. Changing `Hosts` from one entry to multiple (or the reverse) changes the desired queue type and is not a safe in-place conversion. Management outages and timeouts leave multi-host backbones unready and follow the same reconcile backoff.
 
 ## Article Work settlement
 
-`ArticleWorkDispositionPlanner` maps one outcome to ACK or NACK, the NACK requeue flag, and whether a terminal response is published. `ArticleWorkSettlementTests` locks this map for replyable deliveries when cancellation is not already requested.
+`ArticleWorkDispositionPlanner` maps one outcome to ACK or NACK, the NACK requeue flag, and whether a terminal response is published. `ArticleWorkSettlementTests` locks this map for replyable deliveries when cancellation is not already requested. Broker `x-delivery-count` is compared to `ArticleWorkDeliveryLimit`: when the effective count is greater than or equal to the limit, otherwise-requeue outcomes (including cancellation override) settle without requeue so poison work cannot retry indefinitely. On quorum topology, a redelivery missing `x-delivery-count` is treated as exhausted; classic topology does not apply that conservative missing-count rule because classic queues do not provide the header. Negative settlement uses AMQP `basic.reject` via `IRabbitMqManualAckChannel.BasicRejectAsync` so quorum-queue delivery counts increment under RabbitMQ 4.3+ rules; `BasicNackAsync` remains true `basic.nack` for other callers and would not increment the count on 4.3+. The broker itself discards when the post-increment count exceeds `x-delivery-limit` on quorum queues. No dead-letter exchange is declared; exhausted messages are dropped. On multi-host (quorum) topology, a Management outage leaves new or recovering backbones unready even when AMQP is healthy (fail closed). Single-host classic readiness does not call the quorum Management probe.
 
 | Outcome | Broker action | Publish terminal response |
 |---|---|---|
@@ -34,12 +36,12 @@ The consumer membership loop waits 15 seconds after a pass that started every de
 | ArticleNotFound | Basic.Ack | Yes |
 | InvalidArticle | Basic.Ack | Yes. Includes an article `ArticleWorkDeliveryFraming` cannot send. That rejection happens before retention, so the article is not stored. |
 | InvalidRequest | Basic.Ack | Yes when both `CorrelationId` and `ReplyTo` are present. Otherwise ACK without publication |
-| ProviderFailure | Basic.Nack, requeue true | No |
-| Cancelled | Basic.Nack, requeue true | No |
-| UnexpectedFailure | Basic.Nack, requeue true | No |
-| RetentionRejected | Basic.Nack, requeue true | No |
+| ProviderFailure | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
+| Cancelled | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
+| UnexpectedFailure | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
+| RetentionRejected | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
 
-If cancellation is already requested, the planner returns NACK requeue and does not publish, including when the handler outcome was terminal.
+If cancellation is already requested, the planner returns NACK (requeue while retries remain) and does not publish, including when the handler outcome was terminal.
 
 `ArticleWorkSettlementLease` is one settlement attempt for one delivery tag on the original consumer channel and connection generation. It sets the settled flag before the broker RPC. If that RPC throws, the flag stays set and the lease does not retry. If the channel is stale, closed, or not the original channel, `TrySettleAsync` returns false without ACK or NACK, and the broker may redeliver. Pipeline settlement calls use `CancellationToken.None`.
 

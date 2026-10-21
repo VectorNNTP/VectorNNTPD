@@ -46,6 +46,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Consumer logger. This type does not write payloads or credentials.</summary>
         private readonly ILogger<ArticleWorkConsumerService> _logger;
 
+        /// <summary>Management-plane quorum membership probe. Separate from AMQP declaration.</summary>
+        private readonly IArticleWorkQuorumHealthProbe _quorumHealth;
+
         /// <summary>Provider catalogue read when building desired consume slots. An omitted catalogue is empty.</summary>
         private readonly IBackFillerProviderCatalog _catalog;
 
@@ -77,6 +80,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>Tracked sessions keyed by <see cref="ArticleWorkConsumerSession.SessionKey"/> using ordinal comparison.</summary>
         private readonly Dictionary<string, ArticleWorkConsumerSession> _sessions = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Last logged quorum-health kind per backbone. Suppresses repeated Warning/Information on unchanged membership.
+        /// </summary>
+        private readonly Dictionary<string, ArticleWorkQuorumHealthKind> _lastQuorumHealthKind =
+            new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Serializes start, reconcile, connection replacement, and shutdown session replacement.</summary>
         private readonly SemaphoreSlim _replaceGate = new(1, 1);
@@ -119,6 +128,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="reconcileLoopBody">
         /// Optional loop body. Null reconciles membership. A thrown exception is supervised inside the same loop task.
         /// </param>
+        /// <param name="quorumHealth">
+        /// Quorum membership probe. When omitted, tests use <see cref="AlwaysHealthyArticleWorkQuorumHealthProbe"/>.
+        /// Production DI registers <see cref="ArticleWorkQuorumManagementHealthProbe"/>.
+        /// </param>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="connections"/>, <paramref name="runtime"/>, <paramref name="handler"/>,
         /// <paramref name="publisher"/>, or <paramref name="logger"/> is null.
@@ -133,7 +146,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             IBackFillerProviderCatalog? catalog = null,
             IBackboneUsableCapacityProvider? capacity = null,
             TimeProvider? time = null,
-            Func<CancellationToken, Task>? reconcileLoopBody = null)
+            Func<CancellationToken, Task>? reconcileLoopBody = null,
+            IArticleWorkQuorumHealthProbe? quorumHealth = null)
         {
             ArgumentNullException.ThrowIfNull(connections);
             ArgumentNullException.ThrowIfNull(runtime);
@@ -149,6 +163,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             _capacity = capacity ?? new BackboneUsableCapacityState();
             _time = time ?? TimeProvider.System;
             _reconcileLoopBody = reconcileLoopBody;
+            _quorumHealth = quorumHealth ?? AlwaysHealthyArticleWorkQuorumHealthProbe.Instance;
         }
 
         /// <summary>
@@ -597,7 +612,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var pipeline = new ArticleWorkDeliveryPipeline(
                 _handler,
                 _publisher,
-                _runtime.RabbitMq.WorkRequestMaxPayloadBytes);
+                _runtime.RabbitMq.WorkRequestMaxPayloadBytes,
+                _runtime.RabbitMq.DeliveryLimit,
+                treatMissingRedeliveryCountAsExhausted: _runtime.RabbitMq.QueueTopology.RequiresQuorumHealth);
             var prefetch = _runtime.RabbitMq.ConsumerPrefetchCount is { } configured and > 0
                 ? configured
                 : (ushort)1;
@@ -722,18 +739,23 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>
-        /// Declares durable quorum fanout topology for each backbone that is about to receive
+        /// Declares durable Hosts-derived classic or quorum fanout topology for each backbone that is about to receive
         /// consumers. Topology is never deleted when capacity later drops to zero.
         /// </summary>
         /// <param name="backbones">Backbones that still need consumers. Blank names are ignored. Comparison is ordinal ignore-case.</param>
         /// <param name="cancellationToken">Cancels channel creation and each declaration. Cancellation propagates.</param>
         /// <returns>
-        /// Backbones whose declaration succeeded. Empty when there is nothing to declare, the connection is not ready, or every declaration failed.
+        /// Backbones whose declaration succeeded and, when quorum topology is selected, whose Management-plane
+        /// membership verification also succeeded. Classic single-host topology becomes ready after successful declaration.
+        /// Empty when there is nothing to declare, the connection is not ready, every declaration failed,
+        /// or (for quorum) membership could not be verified as healthy.
         /// </returns>
         /// <remarks>
         /// Declarations reuse one manual-ack channel while it remains open. A failed declaration disposes that channel
         /// before the next backbone is attempted, because RabbitMQ closes the channel on broker-side declare failures
         /// such as <c>PRECONDITION_FAILED</c>. A later backbone therefore never reuses an unusable channel.
+        /// For quorum topology, successful declaration alone does not mark a backbone ready; Management-plane membership
+        /// must also be healthy. Classic topology does not call the quorum Management probe.
         /// The connection generation is rechecked before each channel open. <see cref="OperationCanceledException"/> is not logged.
         /// </remarks>
         private async Task<HashSet<string>> EnsureProviderTopologyAsync(
@@ -754,12 +776,15 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             if (!_connections.TryGetCurrent(out _))
             {
+                var topology = _runtime.RabbitMq.QueueTopology;
                 foreach (var backbone in unique)
                 {
                     ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                         _logger,
                         backbone,
                         BackFillerRabbitMqTopology.ComposeProviderEntity(backbone),
+                        topology.Kind.ToString(),
+                        topology.ConfiguredHostCount,
                         "RabbitMQ connection is not ready for topology declaration.");
                 }
 
@@ -779,26 +804,52 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             .ConfigureAwait(false);
                         if (channel is null)
                         {
+                            var notReadyTopology = _runtime.RabbitMq.QueueTopology;
                             ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                                 _logger,
                                 backbone,
                                 queue,
+                                notReadyTopology.Kind.ToString(),
+                                notReadyTopology.ConfiguredHostCount,
                                 "RabbitMQ connection is not ready for topology declaration.");
                             continue;
                         }
 
                         await BackFillerArticleWorkTopology
-                            .DeclareProviderEndpointAsync(channel, backbone, cancellationToken)
+                            .DeclareProviderEndpointAsync(channel, backbone, _runtime, cancellationToken)
                             .ConfigureAwait(false);
-                        ready.Add(backbone);
-                        ArticleWorkLogMessages.ProviderTopologyDeclared(_logger, backbone, queue);
+                        var topology = _runtime.RabbitMq.QueueTopology;
+                        ArticleWorkLogMessages.ProviderTopologyDeclared(
+                            _logger,
+                            backbone,
+                            queue,
+                            topology.Kind.ToString(),
+                            topology.ConfiguredHostCount);
+
+                        if (!topology.RequiresQuorumHealth)
+                        {
+                            ready.Add(backbone);
+                            continue;
+                        }
+
+                        var health = await _quorumHealth
+                            .InspectAsync(queue, topology.QuorumInitialGroupSize!.Value, cancellationToken)
+                            .ConfigureAwait(false);
+                        LogQuorumHealthTransition(backbone, queue, health);
+                        if (health.Kind == ArticleWorkQuorumHealthKind.Healthy)
+                        {
+                            ready.Add(backbone);
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
+                        var topology = _runtime.RabbitMq.QueueTopology;
                         ArticleWorkLogMessages.ProviderTopologyDeclareFailed(
                             _logger,
                             backbone,
                             queue,
+                            topology.Kind.ToString(),
+                            topology.ConfiguredHostCount,
                             FormatTopologyDeclareFailure(ex));
                         channel = await DisposeTopologyChannelAsync(channel).ConfigureAwait(false);
                     }
@@ -852,6 +903,50 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Logs quorum membership only when the classification changes for <paramref name="backbone"/>.
+        /// </summary>
+        /// <param name="backbone">Provider backbone label.</param>
+        /// <param name="queue">Provider queue name.</param>
+        /// <param name="health">Latest membership observation.</param>
+        private void LogQuorumHealthTransition(
+            string backbone,
+            string queue,
+            ArticleWorkQuorumHealthResult health)
+        {
+            lock (_gate)
+            {
+                if (_lastQuorumHealthKind.TryGetValue(backbone, out var previous) && previous == health.Kind)
+                {
+                    return;
+                }
+
+                _lastQuorumHealthKind[backbone] = health.Kind;
+            }
+
+            if (health.Kind == ArticleWorkQuorumHealthKind.Healthy)
+            {
+                ArticleWorkLogMessages.QuorumMembershipHealthy(
+                    _logger,
+                    backbone,
+                    queue,
+                    health.RequiredMembers,
+                    health.ObservedMembers ?? -1,
+                    health.OnlineMembers ?? -1);
+                return;
+            }
+
+            ArticleWorkLogMessages.QuorumMembershipNotReady(
+                _logger,
+                backbone,
+                queue,
+                health.Kind,
+                health.RequiredMembers,
+                health.ObservedMembers ?? -1,
+                health.OnlineMembers ?? -1,
+                health.Reason);
         }
 
         /// <summary>

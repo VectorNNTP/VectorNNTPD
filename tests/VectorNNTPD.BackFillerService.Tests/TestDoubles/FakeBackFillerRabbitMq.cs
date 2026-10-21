@@ -658,13 +658,27 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <param name="deliveryTag">Delivery tag recorded when the nack completes.</param>
         /// <param name="requeue">Requeue flag stored on the settlement.</param>
         /// <param name="cancellationToken">Honored before entering settlement logic.</param>
-        public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+        public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken) =>
+            RecordNegativeSettlementAsync(deliveryTag, requeue, cancellationToken, "NACK");
+
+        /// <inheritdoc />
+        public Task BasicRejectAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken) =>
+            RecordNegativeSettlementAsync(deliveryTag, requeue, cancellationToken, "REJECT");
+
+        /// <summary>
+        /// Records a negative settlement (NACK or REJECT) with the same gate/exception hooks used by settlement overlap tests.
+        /// </summary>
+        private Task RecordNegativeSettlementAsync(
+            ulong deliveryTag,
+            bool requeue,
+            CancellationToken cancellationToken,
+            string operation)
         {
             cancellationToken.ThrowIfCancellationRequested();
             ObjectDisposedException.ThrowIf(DisposeCount > 0, this);
             if (!IsOpen)
             {
-                throw new InvalidOperationException("RabbitMQ channel is not open for NACK.");
+                throw new InvalidOperationException($"RabbitMQ channel is not open for {operation}.");
             }
 
             if (NackException is not null)

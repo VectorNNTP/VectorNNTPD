@@ -21,6 +21,7 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             var options = new RabbitMqOptions();
 
             Assert.Equal(1024, options.WorkRequestMaxPayloadBytes);
+            Assert.Equal(10, options.ArticleWorkDeliveryLimit);
             Assert.Equal(60, options.ChannelLeaseTimeoutSeconds);
             Assert.Equal(30, options.RpcTimeoutSeconds);
             Assert.Equal(30, options.ConnectionBlockedTimeoutSeconds);
@@ -76,6 +77,78 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         {
             var result = new RabbitMqOptionsValidator().Validate(null, CreateValidConnectivityOnly());
             Assert.True(result.Succeeded);
+        }
+
+        /// <summary>
+        /// More than seven unique hosts fails validation rather than clamping quorum initial group size.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenHostsExceedQuorumInitialGroupSizeLimit()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.Hosts =
+            [
+                "127.0.0.1",
+                "127.0.0.2",
+                "127.0.0.3",
+                "127.0.0.4",
+                "127.0.0.5",
+                "127.0.0.6",
+                "127.0.0.7",
+                "127.0.0.8",
+            ];
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("at most 7 unique entries", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Topology derivation maps unique host counts to classic or quorum without using live connectivity.
+        /// </summary>
+        [Theory]
+        [InlineData(1, "Classic", null)]
+        [InlineData(2, "Quorum", 2)]
+        [InlineData(3, "Quorum", 3)]
+        [InlineData(7, "Quorum", 7)]
+        public void FromConfiguredHosts_derives_topology_from_unique_host_count(
+            int hostCount,
+            string expectedKindName,
+            int? expectedGroupSize)
+        {
+            var hosts = Enumerable.Range(0, hostCount).Select(static i => $"127.0.0.{i + 1}").ToArray();
+            var topology = ArticleWorkQueueTopology.FromConfiguredHosts(hosts);
+            Assert.Equal(expectedKindName, topology.Kind.ToString());
+            Assert.Equal(hostCount, topology.ConfiguredHostCount);
+            Assert.Equal(expectedGroupSize, topology.QuorumInitialGroupSize);
+            Assert.Equal(expectedKindName == "Quorum", topology.RequiresQuorumHealth);
+        }
+
+        /// <summary>
+        /// Empty host lists cannot derive Article Work topology.
+        /// </summary>
+        [Fact]
+        public void FromConfiguredHosts_throws_when_hosts_empty()
+        {
+            Assert.Throws<InvalidOperationException>(static () => ArticleWorkQueueTopology.FromConfiguredHosts([]));
+            Assert.Throws<InvalidOperationException>(static () => ArticleWorkQueueTopology.FromConfiguredHosts(null));
+        }
+
+        /// <summary>
+        /// Article Work delivery limit outside <c>1–1000</c> fails validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenArticleWorkDeliveryLimitOutOfRange()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ArticleWorkDeliveryLimit = 1001;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ArticleWorkDeliveryLimit", StringComparison.Ordinal)
+                    && failure.Contains("between 1 and 1000", StringComparison.Ordinal));
         }
 
         /// <summary>

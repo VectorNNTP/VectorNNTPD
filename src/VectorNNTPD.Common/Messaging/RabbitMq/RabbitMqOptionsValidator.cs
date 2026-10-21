@@ -167,6 +167,14 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 }
             }
 
+            // Unique host count selects Article Work classic vs quorum topology and, for quorum,
+            // is also x-quorum-initial-group-size. Reject oversized lists rather than clamping.
+            if (normalizedHosts.Count > ArticleWorkQueueTopology.MaxConfiguredHosts)
+            {
+                failures.Add(
+                    $"RabbitMQ:Hosts must contain at most {ArticleWorkQueueTopology.MaxConfiguredHosts} unique entries (Article Work quorum initial group size limit).");
+            }
+
             var hasUsername = !string.IsNullOrWhiteSpace(rabbitMq.Username);
             if (rabbitMq.Username is not null && string.IsNullOrWhiteSpace(rabbitMq.Username))
             {
@@ -492,6 +500,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             if (rabbitMq.ConsumerPrefetchCount is 0)
             {
                 failures.Add("RabbitMQ:ConsumerPrefetchCount must be between 1 and 65535.");
+            }
+
+            if (rabbitMq.ArticleWorkDeliveryLimit is null)
+            {
+                failures.Add("RabbitMQ:ArticleWorkDeliveryLimit is required.");
+            }
+            else if (rabbitMq.ArticleWorkDeliveryLimit is < 1 or > 1000)
+            {
+                failures.Add("RabbitMQ:ArticleWorkDeliveryLimit must be between 1 and 1000.");
             }
 
             if (rabbitMq.RequestedChannelMax is null)

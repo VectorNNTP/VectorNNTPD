@@ -290,16 +290,23 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         internal static partial void ConsumerReconcileCompleted(ILogger logger, int sessionCount);
 
         /// <summary>
-        /// Writes an Information event after one backbone's provider exchange, quorum queue, and binding are declared.
+        /// Writes an Information event after one backbone's provider exchange, queue, and binding are declared.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="backbone">Backbone whose topology declaration succeeded.</param>
         /// <param name="queue">Provider entity name that was declared.</param>
+        /// <param name="desiredQueueType">Hosts-derived queue type (<c>Classic</c> or <c>Quorum</c>).</param>
+        /// <param name="configuredHostCount">Unique configured <c>RabbitMQ:Hosts</c> count used to derive topology.</param>
         [LoggerMessage(
             EventId = 5319,
             Level = LogLevel.Information,
-            Message = "Article Work provider topology declared backbone={Backbone} queue={Queue}")]
-        internal static partial void ProviderTopologyDeclared(ILogger logger, string backbone, string queue);
+            Message = "Article Work provider topology declared backbone={Backbone} queue={Queue} desiredQueueType={DesiredQueueType} configuredHostCount={ConfiguredHostCount}")]
+        internal static partial void ProviderTopologyDeclared(
+            ILogger logger,
+            string backbone,
+            string queue,
+            string desiredQueueType,
+            int configuredHostCount);
 
         /// <summary>
         /// Writes an Error event when provider topology cannot be declared because the connection is not ready, channel creation fails, or that backbone's declaration fails.
@@ -307,6 +314,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="backbone">Backbone whose declaration did not succeed.</param>
         /// <param name="queue">Provider entity name that was not left ready.</param>
+        /// <param name="desiredQueueType">Hosts-derived queue type that was attempted.</param>
+        /// <param name="configuredHostCount">Unique configured host count that selected that queue type.</param>
         /// <param name="reason">
         /// Caller-supplied failure text. The service passes <see cref="Exception.Message"/> or a fixed not-ready message.
         /// <see cref="OperationCanceledException"/> is not logged here. This method does not throw.
@@ -314,11 +323,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         [LoggerMessage(
             EventId = 5320,
             Level = LogLevel.Error,
-            Message = "Article Work provider topology declaration failed backbone={Backbone} queue={Queue}: {Reason}")]
+            Message = "Article Work provider topology declaration failed backbone={Backbone} queue={Queue} desiredQueueType={DesiredQueueType} configuredHostCount={ConfiguredHostCount}: {Reason}")]
         internal static partial void ProviderTopologyDeclareFailed(
             ILogger logger,
             string backbone,
             string queue,
+            string desiredQueueType,
+            int configuredHostCount,
             string reason);
 
         /// <summary>
@@ -391,5 +402,74 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             long generation,
             RabbitMqChannelFaultKind kind,
             string reason);
+
+        /// <summary>
+        /// Writes a Warning event when topology declaration succeeded but quorum membership is not ready.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="backbone">Backbone whose membership is insufficient or unverifiable.</param>
+        /// <param name="queue">Provider queue name.</param>
+        /// <param name="kind">Membership health classification.</param>
+        /// <param name="requiredMembers">Configured membership floor.</param>
+        /// <param name="observedMembers">Observed configured members, or <c>-1</c> when unknown.</param>
+        /// <param name="onlineMembers">Observed online members, or <c>-1</c> when unknown.</param>
+        /// <param name="reason">Stable diagnostic text. Never credentials.</param>
+        [LoggerMessage(
+            EventId = 5325,
+            Level = LogLevel.Warning,
+            Message = "Article Work quorum membership not ready backbone={Backbone} queue={Queue} kind={Kind} requiredMembers={RequiredMembers} observedMembers={ObservedMembers} onlineMembers={OnlineMembers}: {Reason}")]
+        internal static partial void QuorumMembershipNotReady(
+            ILogger logger,
+            string backbone,
+            string queue,
+            ArticleWorkQuorumHealthKind kind,
+            int requiredMembers,
+            int observedMembers,
+            int onlineMembers,
+            string reason);
+
+        /// <summary>
+        /// Writes an Information event when a previously unready queue now meets the membership policy.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="backbone">Backbone whose membership became healthy.</param>
+        /// <param name="queue">Provider queue name.</param>
+        /// <param name="requiredMembers">Configured membership floor.</param>
+        /// <param name="observedMembers">Verified configured members.</param>
+        /// <param name="onlineMembers">Verified online members.</param>
+        [LoggerMessage(
+            EventId = 5326,
+            Level = LogLevel.Information,
+            Message = "Article Work quorum membership healthy backbone={Backbone} queue={Queue} requiredMembers={RequiredMembers} observedMembers={ObservedMembers} onlineMembers={OnlineMembers}")]
+        internal static partial void QuorumMembershipHealthy(
+            ILogger logger,
+            string backbone,
+            string queue,
+            int requiredMembers,
+            int observedMembers,
+            int onlineMembers);
+
+        /// <summary>
+        /// Writes a Warning event when a delivery is NACKed without requeue because the delivery limit is exhausted.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="backbone">Provider backbone of the session.</param>
+        /// <param name="generation">Delivery connection generation.</param>
+        /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
+        /// <param name="deliveryCount">Broker <c>x-delivery-count</c> for this delivery.</param>
+        /// <param name="deliveryLimit">Configured finite delivery limit.</param>
+        /// <param name="outcome">Outcome that would have requeued if retries remained.</param>
+        [LoggerMessage(
+            EventId = 5327,
+            Level = LogLevel.Warning,
+            Message = "Article Work delivery limit exhausted backbone={Backbone} generation={Generation} deliveryTag={DeliveryTag} deliveryCount={DeliveryCount} deliveryLimit={DeliveryLimit} outcome={Outcome}")]
+        internal static partial void DeliveryLimitExhausted(
+            ILogger logger,
+            string backbone,
+            long generation,
+            ulong deliveryTag,
+            int deliveryCount,
+            int deliveryLimit,
+            string outcome);
     }
 }

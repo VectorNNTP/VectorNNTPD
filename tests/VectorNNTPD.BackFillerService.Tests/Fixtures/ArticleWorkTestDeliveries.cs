@@ -53,6 +53,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
         /// <param name="requestIdHeader">Optional request-id header mirroring the JSON requestId.</param>
         /// <param name="deliveryTag">AMQP delivery tag for ack/nack tests.</param>
         /// <param name="generation">Channel generation stamped on the delivery.</param>
+        /// <param name="deliveryCount">Optional quorum-queue <c>x-delivery-count</c>.</param>
 
         internal static RabbitMqManualAckDelivery Create(
             string json,
@@ -61,7 +62,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
             string? contentType = ArticleWorkRequestParser.JsonContentType,
             string? requestIdHeader = CanonicalRequestId,
             ulong deliveryTag = 7,
-            long generation = 1)
+            long generation = 1,
+            int? deliveryCount = null)
         {
             return new RabbitMqManualAckDelivery(
                 deliveryTag,
@@ -70,11 +72,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
                 replyTo,
                 contentType,
                 requestIdHeader,
-                Redelivered: false,
+                Redelivered: deliveryCount is > 0,
                 RoutingKey: "backfiller.giganews",
                 Exchange: "backfiller.giganews",
                 ConsumerTag: "ctag-test",
-                generation);
+                generation,
+                deliveryCount);
         }
 
         /// <summary>

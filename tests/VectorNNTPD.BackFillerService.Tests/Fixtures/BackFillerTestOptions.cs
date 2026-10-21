@@ -50,6 +50,21 @@ namespace VectorNNTPD.BackFillerService.Tests.Fixtures
                 EnableSsl = false,
             };
 
+        /// <summary>
+        /// Valid RabbitMQ options with <paramref name="hostCount"/> unique hosts (quorum when ≥ 2).
+        /// </summary>
+        /// <param name="hostCount">Unique host count in <c>1–7</c>.</param>
+        internal static RabbitMqOptions CreateValidRabbitMqWithHostCount(int hostCount)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(hostCount, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(hostCount, 7);
+            var rabbit = CreateValidRabbitMq();
+            rabbit.Hosts = Enumerable.Range(0, hostCount)
+                .Select(static i => $"127.0.0.{i + 1}")
+                .ToArray();
+            return rabbit;
+        }
+
         /// <summary>In-memory configuration key/value pairs that pass production validators.</summary>
         internal static Dictionary<string, string?> CreateValidConfigurationPairs()
         {

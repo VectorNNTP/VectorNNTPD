@@ -68,6 +68,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <summary>
         /// RabbitMQ broker host endpoints used for connection establishment.
         /// </summary>
+        /// <remarks>
+        /// Entries must be unique (case-insensitive). Validated unique count is <c>1–7</c>.
+        /// Article Work queue type is derived from that count: one host declares classic queues;
+        /// two or more declare quorum queues with <c>x-quorum-initial-group-size</c> equal to the
+        /// configured unique host count. All entries must belong to the same RabbitMQ cluster;
+        /// this list is a client connection target list and does not establish cluster membership.
+        /// Changing from one host to multiple (or the reverse) changes the desired queue type and may
+        /// require an explicit operator migration; queues are never deleted or recreated automatically.
+        /// </remarks>
         public string[]? Hosts { get; set; } = [];
 
         /// <summary>
@@ -212,6 +221,16 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// Optional RabbitMQ consumer prefetch count used for future Basic.Qos control.
         /// </summary>
         public ushort? ConsumerPrefetchCount { get; set; }
+
+        /// <summary>
+        /// Finite delivery limit declared on Article Work quorum queues (<c>x-delivery-limit</c>) and used as the
+        /// application requeue cap when broker delivery-count metadata is available.
+        /// </summary>
+        /// <remarks>
+        /// Validated range is <c>1–1000</c>. Default <c>10</c>. Declared only when Article Work uses quorum queues
+        /// (<see cref="Hosts"/> count ≥ 2). Classic single-host queues do not support this broker argument.
+        /// </remarks>
+        public int? ArticleWorkDeliveryLimit { get; set; } = 10;
 
         /// <summary>
         /// Optional AMQP CorrelationId used to gate temporary payload diagnostics.
