@@ -26,7 +26,8 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
         public bool Exists(string majorMinor) => Directory.Exists(Node(majorMinor));
 
         /// <inheritdoc />
-        public bool HasPartition(string majorMinor) => File.Exists(Path.Combine(Node(majorMinor), "partition"));
+        public bool HasPartition(string majorMinor) =>
+            File.Exists(StorageRelativePath.CombineUnder(Node(majorMinor), "partition"));
 
         /// <inheritdoc />
         public string? ParentMajorMinor(string majorMinor)
@@ -44,7 +45,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                 return null;
             }
 
-            var dev = Path.Combine(parent.FullName, "dev");
+            var dev = StorageRelativePath.CombineUnder(parent.FullName, "dev");
             if (!File.Exists(dev))
             {
                 return null;
@@ -57,7 +58,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
         /// <inheritdoc />
         public IReadOnlyList<string> SlaveMajorMinors(string majorMinor)
         {
-            var slaves = Path.Combine(Node(majorMinor), "slaves");
+            var slaves = StorageRelativePath.CombineUnder(Node(majorMinor), "slaves");
             if (!Directory.Exists(slaves))
             {
                 return [];
@@ -66,7 +67,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             var results = new List<string>();
             foreach (var slave in Directory.GetDirectories(slaves))
             {
-                var dev = Path.Combine(slave, "dev");
+                var dev = StorageRelativePath.CombineUnder(slave, "dev");
                 if (!File.Exists(dev))
                 {
                     continue;
@@ -95,6 +96,50 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             return final.Name;
         }
 
-        private string Node(string majorMinor) => Path.Combine(_root, "dev", "block", majorMinor);
+        /// <summary>
+        /// Resolves <c>{sysfs}/dev/block/{major}:{minor}</c> after validating the device id.
+        /// </summary>
+        /// <param name="majorMinor">Kernel device id such as <c>8:0</c>.</param>
+        /// <returns>Absolute node path under the configured sysfs root.</returns>
+        private string Node(string majorMinor)
+        {
+            RequireMajorMinor(majorMinor);
+            // major:minor is a single relative segment; ':' is illegal as a Win32 file name, so use the
+            // checked-segment join after RequireMajorMinor has constrained the alphabet.
+            var blockRoot = StorageRelativePath.CombineUnder(_root, "dev", "block");
+            return StorageRelativePath.CombineUnderCheckedSegment(blockRoot, majorMinor.Trim());
+        }
+
+        /// <summary>
+        /// Accepts only <c>major:minor</c> where both sides are non-empty decimal digit runs.
+        /// Rejects separators and traversal so the id cannot escape <c>/sys/dev/block</c>.
+        /// </summary>
+        private static void RequireMajorMinor(string majorMinor)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(majorMinor);
+            var trimmed = majorMinor.Trim();
+            var colon = trimmed.IndexOf(':');
+            if (colon <= 0 || colon != trimmed.LastIndexOf(':') || colon == trimmed.Length - 1)
+            {
+                throw new ArgumentException(
+                    "Linux block device id must be 'major:minor' with decimal digits.",
+                    nameof(majorMinor));
+            }
+
+            for (var index = 0; index < trimmed.Length; index++)
+            {
+                if (index == colon)
+                {
+                    continue;
+                }
+
+                if (!char.IsAsciiDigit(trimmed[index]))
+                {
+                    throw new ArgumentException(
+                        "Linux block device id must be 'major:minor' with decimal digits.",
+                        nameof(majorMinor));
+                }
+            }
+        }
     }
 }

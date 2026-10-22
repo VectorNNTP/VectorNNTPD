@@ -27,7 +27,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(databaseDirectory);
             ArgumentNullException.ThrowIfNull(spoolDirectories);
-            var registryPath = Path.Combine(databaseDirectory, ArticleIndexSettings.SpoolRegistryFileName);
+            var registryPath = StorageRelativePath.CombineUnder(
+                databaseDirectory,
+                ArticleIndexSettings.SpoolRegistryFileName);
             var registry = ReadRegistry(registryPath);
             var bindings = new List<ArticleSpoolBinding>(spoolDirectories.Count);
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -55,11 +57,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     registry[id] = spool;
                 }
 
-                var databasePath = Path.Combine(databaseDirectory, "article-index-" + id + ".sqlite");
-                if (!IsUnder(databaseDirectory, databasePath))
-                {
-                    throw new InvalidOperationException($"Article index database '{databasePath}' is outside '{databaseDirectory}'.");
-                }
+                // id is 32 lowercase hex characters; the leaf cannot be rooted or contain separators.
+                var databasePath = StorageRelativePath.CombineUnder(
+                    databaseDirectory,
+                    "article-index-" + id + ".sqlite");
 
                 bindings.Add(new ArticleSpoolBinding(id, spool, databasePath));
             }
@@ -78,7 +79,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 throw new InvalidOperationException($"Spool directory '{spoolDirectory}' does not exist. The article index does not create spool roots.");
             }
 
-            var path = Path.Combine(spoolDirectory, ArticleIndexSettings.SpoolIdentityFileName);
+            var path = StorageRelativePath.CombineUnder(spoolDirectory, ArticleIndexSettings.SpoolIdentityFileName);
             if (File.Exists(path))
             {
                 return ReadIdentity(path);
@@ -120,7 +121,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <returns><see langword="false"/> when the old root is gone or now has a different identity.</returns>
         private static bool SameIdentity(string spoolDirectory, string id)
         {
-            var path = Path.Combine(spoolDirectory, ArticleIndexSettings.SpoolIdentityFileName);
+            var path = StorageRelativePath.CombineUnder(spoolDirectory, ArticleIndexSettings.SpoolIdentityFileName);
             return File.Exists(path) && string.Equals(ReadIdentity(path), id, StringComparison.Ordinal);
         }
 
@@ -208,17 +209,6 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <returns><see langword="true"/> when the paths name the same directory.</returns>
         private static bool PathsEqual(string left, string right) =>
             string.Equals(left, right, PathComparison);
-
-        /// <summary>Returns whether <paramref name="path"/> is <paramref name="root"/> or a file inside it.</summary>
-        /// <param name="root">Directory that must contain the path.</param>
-        /// <param name="path">Candidate file path.</param>
-        /// <returns><see langword="false"/> when the path escapes the root.</returns>
-        private static bool IsUnder(string root, string path)
-        {
-            var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-            var full = Path.GetFullPath(path);
-            return full.StartsWith(prefix, PathComparison);
-        }
 
         /// <summary>Returns whether <paramref name="text"/> is 32 lowercase hex characters. The caller checks the length.</summary>
         /// <param name="text">Candidate identity.</param>

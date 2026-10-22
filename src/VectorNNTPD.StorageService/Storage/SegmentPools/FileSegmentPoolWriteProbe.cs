@@ -29,12 +29,16 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(canonicalDirectory);
             var name = ".vectornntp-pool-probe-" + Guid.NewGuid().ToString("N");
-            if (name.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+            string full;
+            try
+            {
+                full = Path.GetFullPath(StorageRelativePath.CombineUnder(canonicalDirectory, name));
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
                 return "probe file name escaped the pool directory.";
             }
 
-            var full = Path.GetFullPath(Path.Combine(canonicalDirectory, name));
             var root = SegmentPoolPaths.WithTrailingSeparator(SegmentPoolPaths.Normalize(canonicalDirectory));
             if (!full.StartsWith(root, SegmentPoolPaths.Comparison))
             {

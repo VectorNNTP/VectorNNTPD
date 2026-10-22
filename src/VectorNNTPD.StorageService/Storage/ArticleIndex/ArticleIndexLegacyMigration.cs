@@ -30,7 +30,8 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             ArgumentException.ThrowIfNullOrWhiteSpace(databaseDirectory);
             ArgumentNullException.ThrowIfNull(bindings);
             ArgumentNullException.ThrowIfNull(databases);
-            var legacyPath = Path.Combine(databaseDirectory, ArticleIndexSettings.DatabaseFileName);
+            // DatabaseFileName is a fixed leaf ("article-index.sqlite"); CombineUnder rejects a rooted override.
+            var legacyPath = StorageRelativePath.CombineUnder(databaseDirectory, ArticleIndexSettings.DatabaseFileName);
             if (!File.Exists(legacyPath))
             {
                 return 0;

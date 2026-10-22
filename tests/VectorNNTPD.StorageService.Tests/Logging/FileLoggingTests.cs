@@ -118,6 +118,14 @@ namespace VectorNNTPD.StorageService.Tests.Logging
         }
 
         [Fact]
+        public void RollingFilePath_Rejects_Path_Segments_That_Could_Escape_LogDir()
+        {
+            Assert.Throws<ArgumentException>(
+                () => StorageServerFileLogging.RollingFilePath("/logs", ".." + Path.DirectorySeparatorChar + "x"));
+            Assert.Throws<ArgumentException>(() => StorageServerFileLogging.RollingFilePath("/logs", ".."));
+        }
+
+        [Fact]
         public void ProductionJson_BindsUnlimitedDailyAsyncGzipFileSink()
         {
             var logDir = CreateTempLogDir();

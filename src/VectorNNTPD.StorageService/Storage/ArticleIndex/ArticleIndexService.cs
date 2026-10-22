@@ -566,7 +566,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             try
             {
                 Directory.CreateDirectory(directory);
-                var probe = Path.Combine(directory, ".write-probe");
+                var probe = StorageRelativePath.CombineUnder(directory, ".write-probe");
                 using (var stream = new FileStream(probe, FileMode.Create, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
                 {
                     stream.WriteByte(0);

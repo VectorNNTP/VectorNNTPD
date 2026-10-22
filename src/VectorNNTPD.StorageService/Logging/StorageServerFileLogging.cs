@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
-using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.StorageService.Configuration;
+using VectorNNTPD.StorageService.Storage;
 
 namespace VectorNNTPD.StorageService.Logging
 {
@@ -46,11 +47,16 @@ namespace VectorNNTPD.StorageService.Logging
         /// <summary>
         /// Builds the Serilog rolling path <c>{logDir}/{applicationName}-.log</c>.
         /// </summary>
+        /// <remarks>
+        /// <paramref name="applicationName"/> must be a single relative segment so it cannot escape
+        /// <paramref name="logDir"/> through a rooted or multi-segment value.
+        /// </remarks>
         public static string RollingFilePath(string logDir, string applicationName)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(logDir);
-            ArgumentException.ThrowIfNullOrWhiteSpace(applicationName);
-            return Path.Combine(logDir, applicationName.Trim() + RollingPathSuffix);
+            // Validate the configured name before appending the rolling suffix so ".." cannot become "..-.log".
+            var name = StorageRelativePath.RequireSingleRelativeSegment(applicationName);
+            return StorageRelativePath.CombineUnder(logDir, name + RollingPathSuffix);
         }
 
         /// <summary>
