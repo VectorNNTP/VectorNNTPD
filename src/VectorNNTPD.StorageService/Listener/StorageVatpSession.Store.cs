@@ -40,8 +40,9 @@ namespace VectorNNTPD.StorageService.Listener
                 return true;
             }
 
+            // Capture the gate that TryEnter acquired. Do not re-read _storeAdmission on release.
+            StoreAssemblyAdmission? acquiredAdmission = null;
             var admission = _storeAdmission;
-            var held = false;
             if (admission is not null)
             {
                 if (!admission.TryEnter())
@@ -51,7 +52,7 @@ namespace VectorNNTPD.StorageService.Listener
                     return true;
                 }
 
-                held = true;
+                acquiredAdmission = admission;
             }
 
             var receive = new ArticleTransferReceiveStream(
@@ -59,13 +60,9 @@ namespace VectorNNTPD.StorageService.Listener
                 StoreReceiveCorrelation,
                 articleId,
                 _limits);
-            if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, held)))
+            if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, slotHeld: acquiredAdmission is not null)))
             {
-                if (admission is not null && held)
-                {
-                    // Release the same gate that TryEnter acquired above.
-                    admission.Exit();
-                }
+                acquiredAdmission?.Exit();
 
                 await WriteFailAsync(streamId, VatpErrorCode.StreamTableError, cancellationToken)
                     .ConfigureAwait(false);

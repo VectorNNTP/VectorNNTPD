@@ -220,6 +220,46 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             }
         }
 
+        [Fact]
+        public void File_spool_directory_system_reports_created_and_already_present()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-dir-" + Guid.NewGuid().ToString("n"));
+            var leaf = Path.Combine(root, "shard");
+            var directories = new FileSpoolShardDirectorySystem();
+            try
+            {
+                Assert.Equal(SpoolDirectoryCreateResult.Created, directories.CreateDirectory(leaf));
+                Assert.True(Directory.Exists(leaf));
+                Assert.Equal(SpoolDirectoryCreateResult.AlreadyPresent, directories.CreateDirectory(leaf));
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        }
+
+        [Fact]
+        public void File_spool_directory_system_rejects_an_existing_file_path()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-notdir-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(root);
+            var filePath = Path.Combine(root, "not-a-dir");
+            File.WriteAllBytes(filePath, [1]);
+            var directories = new FileSpoolShardDirectorySystem();
+            try
+            {
+                var error = Assert.Throws<IOException>(() => directories.CreateDirectory(filePath));
+                Assert.Contains("not a directory", error.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
         private static SpoolShardInitializationService CreateService(
             ISpoolShardDirectorySystem directories,
             string spool,

@@ -195,13 +195,18 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
             if (left.DeviceSampleFresh
                 && right.DeviceSampleFresh
                 && left.WriteLatencyMilliseconds is { } leftLatency
-                && right.WriteLatencyMilliseconds is { } rightLatency
-                && leftLatency != rightLatency)
+                && right.WriteLatencyMilliseconds is { } rightLatency)
             {
-                return leftLatency < rightLatency ? -1 : 1;
+                // Exact ordering via CompareTo (same bit pattern ⇒ 0). No epsilon: approximate
+                // equality is not transitive and would break this comparator. Equal samples fall
+                // through to the deterministic path ordinal below.
+                var latencyOrder = leftLatency.CompareTo(rightLatency);
+                if (latencyOrder != 0)
+                {
+                    return latencyOrder;
+                }
             }
 
-            // Exact latency equality (or a missing sample) falls through to a deterministic path order.
             return string.CompareOrdinal(left.SpoolRoot, right.SpoolRoot);
         }
 

@@ -9,7 +9,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
     /// Drive letters are not treated as physical disks. Virtual, Storage Spaces, iSCSI, and RAID
     /// bus types fail closed because their member disks are not identified by these calls.
     /// </summary>
-    internal static class WindowsStorageNative
+    internal static partial class WindowsStorageNative
     {
         private const uint GenericRead = 0x80000000;
 
@@ -457,34 +457,39 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             public long StorageManagerName1;
         }
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "CreateFileW")]
-        private static extern SafeFileHandle CreateFile(
+        // Platform guards live on the public helpers (OperatingSystem.IsWindows). LibraryImport
+        // methods omit [SupportedOSPlatform] so call sites inside those guards do not trip CA1416.
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16, EntryPoint = "CreateFileW")]
+        private static partial SafeFileHandle CreateFile(
             string fileName,
             uint access,
             uint share,
-            IntPtr security,
+            nint security,
             uint disposition,
             uint flags,
-            IntPtr template);
+            nint template);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool DeviceIoControl(
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool DeviceIoControl(
             SafeFileHandle handle,
             uint code,
-            IntPtr inBuffer,
+            nint inBuffer,
             uint inSize,
-            IntPtr outBuffer,
+            nint outBuffer,
             uint outSize,
             out uint returned,
-            IntPtr overlapped);
+            nint overlapped);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "GetVolumePathNameW")]
-        private static extern bool GetVolumePathName(string fileName, char[] buffer, uint length);
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16, EntryPoint = "GetVolumePathNameW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool GetVolumePathName(string fileName, [Out] char[] buffer, uint length);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "GetVolumeNameForVolumeMountPointW")]
-        private static extern bool GetVolumeNameForVolumeMountPoint(string mountPoint, char[] buffer, uint length);
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16, EntryPoint = "GetVolumeNameForVolumeMountPointW")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool GetVolumeNameForVolumeMountPoint(string mountPoint, [Out] char[] buffer, uint length);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "GetFinalPathNameByHandleW")]
-        private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, char[] buffer, uint length, uint flags);
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16, EntryPoint = "GetFinalPathNameByHandleW")]
+        private static partial uint GetFinalPathNameByHandle(SafeFileHandle handle, [Out] char[] buffer, uint length, uint flags);
     }
 }

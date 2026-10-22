@@ -57,7 +57,8 @@ namespace VectorNNTPD.StorageService.Logging
                 return;
             }
 
-            var writer = new StreamWriter(
+            // Assign to the process-lifetime field immediately so ownership is not a local IDisposable.
+            _autoFlushConsoleOut = new StreamWriter(
                 Console.OpenStandardOutput(),
                 Console.OutputEncoding,
                 bufferSize: 1024,
@@ -65,8 +66,7 @@ namespace VectorNNTPD.StorageService.Logging
             {
                 AutoFlush = true,
             };
-            _autoFlushConsoleOut = writer;
-            Console.SetOut(writer);
+            Console.SetOut(_autoFlushConsoleOut);
         }
 
         /// <summary>

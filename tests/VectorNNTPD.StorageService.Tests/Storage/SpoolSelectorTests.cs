@@ -180,6 +180,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var left = Candidate("a-spool", available: 10 * Tebibyte, writeLatency: 12.5);
             var right = Candidate("b-spool", available: 10 * Tebibyte, writeLatency: 12.5);
+            Assert.True(SpoolSelector.Compare(left, right) < 0);
+            Assert.True(SpoolSelector.Compare(right, left) > 0);
             Assert.Equal(0, SpoolSelector.Compare(left, right) + SpoolSelector.Compare(right, left));
             Assert.Equal("a-spool", Select(left, right)?.SpoolRoot);
             Assert.Equal("a-spool", Select(right, left)?.SpoolRoot);
@@ -190,6 +192,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var slow = Candidate("z-slow", available: 10 * Tebibyte, active: 1, writeLatency: 40);
             var fast = Candidate("a-fast", available: 10 * Tebibyte, active: 1, writeLatency: 1);
+            Assert.True(SpoolSelector.Compare(fast, slow) < 0);
+            Assert.True(SpoolSelector.Compare(slow, fast) > 0);
             Assert.Equal("a-fast", Select(slow, fast)?.SpoolRoot);
             Assert.Equal("a-fast", Select(fast, slow)?.SpoolRoot);
         }
