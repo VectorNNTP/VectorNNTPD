@@ -56,13 +56,21 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
             var empty = StorageServerTestOptions.CreateValid();
             empty.DbDir = " ";
             var emptyResult = new StorageServerOptionsValidator().Validate(null, empty);
-            Assert.Contains(emptyResult.Failures!, static failure => failure.Contains("StorageServer:DbDir", StringComparison.Ordinal));
-
-            var invalid = StorageServerTestOptions.CreateValid();
-            invalid.DbDir = "db|not-a-path";
-            var invalidResult = new StorageServerOptionsValidator().Validate(null, invalid);
+            Assert.True(emptyResult.Failed);
+            Assert.NotNull(emptyResult.Failures);
             Assert.Contains(
-                invalidResult.Failures!,
+                emptyResult.Failures,
+                static failure => failure.Contains("StorageServer:DbDir", StringComparison.Ordinal));
+
+            // '|' is invalid on Windows but legal on Unix. Use a character that
+            // Path.GetInvalidPathChars reports on every platform (NUL).
+            var invalid = StorageServerTestOptions.CreateValid();
+            invalid.DbDir = "db" + Path.GetInvalidPathChars()[0] + "not-a-path";
+            var invalidResult = new StorageServerOptionsValidator().Validate(null, invalid);
+            Assert.True(invalidResult.Failed);
+            Assert.NotNull(invalidResult.Failures);
+            Assert.Contains(
+                invalidResult.Failures,
                 static failure => failure.Contains("invalid path characters", StringComparison.Ordinal));
         }
 

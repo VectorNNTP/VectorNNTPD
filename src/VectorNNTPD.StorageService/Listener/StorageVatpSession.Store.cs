@@ -63,7 +63,8 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 if (held)
                 {
-                    _storeAdmission?.Exit();
+                    // Release the same gate that TryEnter acquired above.
+                    admission!.Exit();
                 }
 
                 await WriteFailAsync(streamId, VatpErrorCode.StreamTableError, cancellationToken)
@@ -176,9 +177,15 @@ namespace VectorNNTPD.StorageService.Listener
             CancellationToken cancellationToken)
         {
             QueueReservation? reservation = null;
+            var queue = _acceptedArticles;
             try
             {
-                reservation = await _acceptedArticles!.ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
+                if (queue is null)
+                {
+                    return;
+                }
+
+                reservation = await queue.ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
                 byte[]? metaCopy;
                 lock (_storeGate)
                 {
@@ -204,7 +211,7 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     if (reservation is { } abandoned)
                     {
-                        _acceptedArticles.Release(abandoned);
+                        queue.Release(abandoned);
                     }
 
                     if (store.AdmissionFailed && !store.Closed)
@@ -236,14 +243,14 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 if (reservation is { } abandoned)
                 {
-                    _acceptedArticles?.Release(abandoned);
+                    queue?.Release(abandoned);
                 }
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {
                 if (reservation is { } abandoned)
                 {
-                    _acceptedArticles?.Release(abandoned);
+                    queue?.Release(abandoned);
                 }
             }
             finally

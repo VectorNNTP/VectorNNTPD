@@ -63,7 +63,8 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                     return false;
                 }
 
-                if (!_handles.TryGetValue(disk, out var held) || held.Handle.IsInvalid || held.Handle.IsClosed)
+                if (!_handles.TryGetValue(disk, out var held)
+                    || held.Handle is not { IsInvalid: false, IsClosed: false } reusable)
                 {
                     held.Handle?.Dispose();
                     var opened = _open(disk);
@@ -78,9 +79,10 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 
                     held = new HeldDisk(opened.Handle, opened.DevicePath);
                     _handles[disk] = held;
+                    reusable = held.Handle;
                 }
 
-                var queried = _query(held.Handle, held.DevicePath);
+                var queried = _query(reusable, held.DevicePath);
                 if (!queried.Ok)
                 {
                     held.Handle.Dispose();

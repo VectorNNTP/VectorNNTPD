@@ -258,6 +258,10 @@ function Test-PublishedRelease {
         foreach ($extra in $LinuxExtraFiles) {
             $path = Join-Path $ReleaseDir $extra.SourceName
             if (-not (Test-Path -LiteralPath $path)) {
+                if ($extra.SourceName -like '*.env.example') {
+                    Fail "Missing environment-file example in the linux-x64 release: $path"
+                }
+
                 Fail "Missing Linux release file: $path"
             }
         }
@@ -266,6 +270,10 @@ function Test-PublishedRelease {
         foreach ($extra in $LinuxExtraFiles) {
             $path = Join-Path $ReleaseDir $extra.SourceName
             if (Test-Path -LiteralPath $path) {
+                if ($extra.SourceName -like '*.env.example') {
+                    Fail "Environment-file example must not be packaged for ${Rid}: $path"
+                }
+
                 Fail "Linux-only file must not be packaged for ${Rid}: $path"
             }
         }

@@ -226,18 +226,48 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 common.GetManifestResourceNames(),
                 static name => name.Contains("backfiller.storage", StringComparison.OrdinalIgnoreCase));
 
+            var cacheFleet = common.GetType("VectorNNTPD.Common.Messaging.Cache.CacheFleetTopology");
+            Assert.NotNull(cacheFleet);
+            Assert.Equal(
+                "cache.requests",
+                cacheFleet.GetField(
+                    "RequestsExchangeName",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                    ?.GetRawConstantValue());
+            Assert.Equal(
+                "cache.broadcast",
+                cacheFleet.GetField(
+                    "BroadcastExchangeName",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                    ?.GetRawConstantValue());
+
+            // Scan remaining const strings for the excluded topology name. Some literal
+            // metadata entries throw NotSupportedException from GetRawConstantValue on
+            // certain runtimes; skip those rather than assuming every IsLiteral field
+            // has a retrievable constant blob.
             var topologyNames = common.GetTypes()
+                .Where(static type => type.Namespace?.StartsWith(
+                    "Coverlet.Core.Instrumentation",
+                    StringComparison.Ordinal) != true)
                 .SelectMany(static type => type.GetFields(
                     System.Reflection.BindingFlags.Public
                     | System.Reflection.BindingFlags.NonPublic
                     | System.Reflection.BindingFlags.Static
                     | System.Reflection.BindingFlags.Instance))
                 .Where(static field => field.FieldType == typeof(string) && field.IsLiteral)
-                .Select(static field => field.GetRawConstantValue() as string)
+                .Select(static field =>
+                {
+                    try
+                    {
+                        return field.GetRawConstantValue() as string;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        return null;
+                    }
+                })
                 .Where(static value => !string.IsNullOrEmpty(value))
                 .ToArray();
-            Assert.Contains(topologyNames, static value => value == "cache.requests");
-            Assert.Contains(topologyNames, static value => value == "cache.broadcast");
             Assert.DoesNotContain(topologyNames, static value => value == "backfiller.storage");
         }
 

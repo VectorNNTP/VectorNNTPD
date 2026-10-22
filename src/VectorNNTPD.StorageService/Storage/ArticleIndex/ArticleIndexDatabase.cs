@@ -620,21 +620,57 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             };
             for (var i = 0; i < count; i++)
             {
-                var connection = new SqliteConnection(builder.ConnectionString);
-                connection.Open();
-                Execute(connection, $"PRAGMA busy_timeout={_settings.BusyTimeoutMilliseconds};");
-                Execute(connection, $"PRAGMA cache_size=-{_budget.ReaderCacheKibibytes};");
-                Execute(connection, "PRAGMA query_only=ON;");
-                var lookup = Prepare(connection, ArticleIndexSql.Lookup);
-                AddBlob(lookup, "$hash");
-                var oldest = Prepare(connection, ArticleIndexSql.Oldest);
-                oldest.Parameters.Add("$limit", SqliteType.Integer);
-                var before = Prepare(connection, ArticleIndexSql.AccessedBefore);
-                before.Parameters.Add("$threshold", SqliteType.Integer);
-                before.Parameters.Add("$limit", SqliteType.Integer);
-                var scan = Prepare(connection, ArticleIndexSql.ScanLocations);
-                _readers[i] = new ReadSlot(i, connection, lookup, oldest, before, scan, new byte[ArticleIndexSettings.HashLength]);
-                _freeReaders.Push(i);
+                SqliteConnection? connection = null;
+                SqliteCommand? lookup = null;
+                SqliteCommand? oldest = null;
+                SqliteCommand? before = null;
+                SqliteCommand? scan = null;
+                try
+                {
+                    connection = new SqliteConnection(builder.ConnectionString);
+                    connection.Open();
+                    Execute(connection, $"PRAGMA busy_timeout={_settings.BusyTimeoutMilliseconds};");
+                    Execute(connection, $"PRAGMA cache_size=-{_budget.ReaderCacheKibibytes};");
+                    Execute(connection, "PRAGMA query_only=ON;");
+                    lookup = Prepare(connection, ArticleIndexSql.Lookup);
+                    AddBlob(lookup, "$hash");
+                    oldest = Prepare(connection, ArticleIndexSql.Oldest);
+                    oldest.Parameters.Add("$limit", SqliteType.Integer);
+                    before = Prepare(connection, ArticleIndexSql.AccessedBefore);
+                    before.Parameters.Add("$threshold", SqliteType.Integer);
+                    before.Parameters.Add("$limit", SqliteType.Integer);
+                    scan = Prepare(connection, ArticleIndexSql.ScanLocations);
+                    _readers[i] = new ReadSlot(i, connection, lookup, oldest, before, scan, new byte[ArticleIndexSettings.HashLength]);
+                    _freeReaders.Push(i);
+                    connection = null;
+                    lookup = null;
+                    oldest = null;
+                    before = null;
+                    scan = null;
+                }
+                catch
+                {
+                    scan?.Dispose();
+                    before?.Dispose();
+                    oldest?.Dispose();
+                    lookup?.Dispose();
+                    connection?.Dispose();
+                    for (var published = 0; published < i; published++)
+                    {
+                        var slot = _readers[published];
+                        slot.Lookup.Dispose();
+                        slot.Oldest.Dispose();
+                        slot.Before.Dispose();
+                        slot.Scan.Dispose();
+                        slot.Connection.Dispose();
+                    }
+
+                    _readers = null;
+                    _freeReaders = null;
+                    _readerGate?.Dispose();
+                    _readerGate = null;
+                    throw;
+                }
             }
         }
 
@@ -712,6 +748,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
+                // Drain and discard any pragma / statement rows so the connection is idle.
             }
         }
 

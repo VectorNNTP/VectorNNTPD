@@ -41,10 +41,16 @@ namespace VectorNNTPD.StorageService.Logging
         /// becomes visible, then later Information events sit unseen until the buffer fills
         /// again or the process exits. Serilog's Console sink writes to <see cref="Console.Out"/>
         /// and does not Flush. This must run before the first Serilog Console sink is created.
+        /// The writer leaves the standard output stream open (<c>leaveOpen: true</c>) so process
+        /// teardown or a later <see cref="Console.SetOut"/> replacement does not close stdout.
         /// </remarks>
         public static void UseAutoFlushConsoleOutput()
         {
-            var writer = new StreamWriter(Console.OpenStandardOutput(), Console.OutputEncoding)
+            var writer = new StreamWriter(
+                Console.OpenStandardOutput(),
+                Console.OutputEncoding,
+                bufferSize: 1024,
+                leaveOpen: true)
             {
                 AutoFlush = true,
             };

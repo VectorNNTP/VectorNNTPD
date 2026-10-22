@@ -7,7 +7,12 @@ namespace VectorNNTPD.StorageService.Listener
     /// <summary>
     /// Current-thread CPU time. Elapsed waits do not increase this. Windows only; other platforms return zeros.
     /// </summary>
-    internal static class ThreadCpuTimes
+    /// <remarks>
+    /// Uses Win32 OS thread identity and the current-thread pseudo-handle. Managed thread ids are not
+    /// interchangeable with <c>GetCurrentThreadId</c>, and a <see cref="System.Diagnostics.ProcessThread"/>
+    /// handle is not equivalent to <c>GetCurrentThread</c>.
+    /// </remarks>
+    internal static partial class ThreadCpuTimes
     {
         /// <summary>Gets kernel and user time for the calling thread, in 100 ns units.</summary>
         internal static (long Kernel, long User) Capture()
@@ -39,20 +44,20 @@ namespace VectorNNTPD.StorageService.Listener
         [SupportedOSPlatform("windows")]
         private static int CurrentThreadIdWindows() => GetCurrentThreadId();
 
-        /// <summary>Returns the calling thread's id. The value matches <see cref="CurrentThreadId"/>.</summary>
-        [DllImport("kernel32.dll")]
+        /// <summary>Returns the calling thread's OS thread id.</summary>
+        [LibraryImport("kernel32.dll")]
         [SupportedOSPlatform("windows")]
-        private static extern int GetCurrentThreadId();
+        private static partial int GetCurrentThreadId();
 
         /// <summary>Returns a pseudo-handle for the calling thread. The caller does not close it.</summary>
-        [DllImport("kernel32.dll")]
+        [LibraryImport("kernel32.dll")]
         [SupportedOSPlatform("windows")]
-        private static extern nint GetCurrentThread();
+        private static partial nint GetCurrentThread();
 
         /// <summary>Reads creation, exit, kernel, and user times. Kernel and user are 100 ns units.</summary>
-        [DllImport("kernel32.dll", SetLastError = true)]
+        [LibraryImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         [SupportedOSPlatform("windows")]
-        private static extern bool GetThreadTimes(nint thread, out long creation, out long exit, out long kernel, out long user);
+        private static partial bool GetThreadTimes(nint thread, out long creation, out long exit, out long kernel, out long user);
     }
 }

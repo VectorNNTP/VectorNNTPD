@@ -9,6 +9,7 @@
     <AssemblyName>VectorNNTPD.StorageService</AssemblyName>
     <Description>VATP article ingress and cache advertisement host (VectorNNTPD.StorageService).</Description>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
     <UserSecretsId>dotnet-VectorNNTPD.StorageService-01550cb7-f86e-48f0-add1-591ca009f74f</UserSecretsId>
   </PropertyGroup>
