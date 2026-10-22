@@ -615,24 +615,16 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var channel = await handle.Connection
                 .CreatePublishChannelAsync(handle.Generation, cancellationToken)
                 .ConfigureAwait(false);
-            IAsyncDisposable? pendingDispose = channel;
-            try
+            await using var ownership = new AsyncDisposableOwnership<IRabbitMqPublishChannel>(channel);
+            if (!handle.IsCurrent || ownership.Resource.Generation != handle.Generation)
             {
-                if (!handle.IsCurrent || channel.Generation != handle.Generation)
-                {
-                    throw new InvalidOperationException("RabbitMQ publish channel generation is no longer current.");
-                }
+                throw new InvalidOperationException("RabbitMQ publish channel generation is no longer current.");
+            }
 
-                await InstallPublishChannelAsync(channel).ConfigureAwait(false);
-                pendingDispose = null;
-            }
-            finally
-            {
-                if (pendingDispose is not null)
-                {
-                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
-                }
-            }
+            // Install either stores the channel or disposes it as stale; Transfer after success
+            // so this ownership does not dispose again.
+            await InstallPublishChannelAsync(ownership.Resource).ConfigureAwait(false);
+            ownership.Transfer();
         }
 
         /// <summary>Clears and disposes the installed publication channel.</summary>

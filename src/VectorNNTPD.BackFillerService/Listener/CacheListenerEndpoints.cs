@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Networking.Listeners;
 
 namespace VectorNNTPD.BackFillerService.Listener
@@ -35,25 +36,18 @@ namespace VectorNNTPD.BackFillerService.Listener
         private static Socket CreateBoundListenSocket(IPEndPoint endpoint, bool dualMode = false)
         {
             ArgumentNullException.ThrowIfNull(endpoint);
-            var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            using var ownership = new DisposableOwnership<Socket>(
+                new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp));
+            var socket = ownership.Resource;
 
             if (endpoint.AddressFamily == AddressFamily.InterNetworkV6)
             {
                 socket.DualMode = dualMode;
             }
 
-            Socket? pendingDispose = socket;
-            try
-            {
-                socket.Bind(endpoint);
-                socket.Listen(512);
-                pendingDispose = null;
-                return socket;
-            }
-            finally
-            {
-                pendingDispose?.Dispose();
-            }
+            socket.Bind(endpoint);
+            socket.Listen(512);
+            return ownership.Transfer();
         }
     }
 }

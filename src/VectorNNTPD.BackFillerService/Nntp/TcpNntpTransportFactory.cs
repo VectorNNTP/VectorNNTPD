@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using VectorNNTPD.BackFillerService.Networking;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -43,48 +44,38 @@ namespace VectorNNTPD.BackFillerService.Nntp
             ArgumentNullException.ThrowIfNull(provider);
             ArgumentNullException.ThrowIfNull(options);
 
-            var client = new TcpClient();
-            TcpClient? pendingClient = client;
-
-            try
+            using var ownership = new DisposableOwnership<TcpClient>(new TcpClient());
+            var client = ownership.Resource;
+            var keepAlive = options.EffectiveTcpKeepAlive;
+            TcpSocketOptions.Apply(
+                client.Client,
+                options.TcpSendBufferBytes,
+                options.TcpReceiveBufferBytes,
+                keepAlive);
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(options.ConnectTimeout);
+            await client.ConnectAsync(provider.Host, provider.Port, connectCts.Token).ConfigureAwait(false);
+            // ConnectAsync(string) can replace the socket when the resolved address family differs.
+            // Re-apply on the connected socket before the first TLS or NNTP byte.
+            TcpSocketOptions.Apply(
+                client.Client,
+                options.TcpSendBufferBytes,
+                options.TcpReceiveBufferBytes,
+                keepAlive);
+            Stream stream = client.GetStream();
+            if (!provider.UseTls)
             {
-                var keepAlive = options.EffectiveTcpKeepAlive;
-                TcpSocketOptions.Apply(
-                    client.Client,
-                    options.TcpSendBufferBytes,
-                    options.TcpReceiveBufferBytes,
-                    keepAlive);
-                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                connectCts.CancelAfter(options.ConnectTimeout);
-                await client.ConnectAsync(provider.Host, provider.Port, connectCts.Token).ConfigureAwait(false);
-                // ConnectAsync(string) can replace the socket when the resolved address family differs.
-                // Re-apply on the connected socket before the first TLS or NNTP byte.
-                TcpSocketOptions.Apply(
-                    client.Client,
-                    options.TcpSendBufferBytes,
-                    options.TcpReceiveBufferBytes,
-                    keepAlive);
-                Stream stream = client.GetStream();
-                if (!provider.UseTls)
-                {
-                    pendingClient = null;
-                    return new TcpOwnedStream(client, stream);
-                }
+                return new TcpOwnedStream(ownership.Transfer(), stream);
+            }
 
-                var ssl = await NntpTlsClient.AuthenticateAsClientAsync(
-                        stream,
-                        provider.Host,
-                        options.ConnectTimeout,
-                        options.ServerCertificateValidationCallback,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                pendingClient = null;
-                return new TcpOwnedStream(client, ssl);
-            }
-            finally
-            {
-                pendingClient?.Dispose();
-            }
+            var ssl = await NntpTlsClient.AuthenticateAsClientAsync(
+                    stream,
+                    provider.Host,
+                    options.ConnectTimeout,
+                    options.ServerCertificateValidationCallback,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new TcpOwnedStream(ownership.Transfer(), ssl);
         }
 
         /// <summary>

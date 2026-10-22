@@ -28,6 +28,34 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.Contains("\"kty\":\"RSA\"", key.Jwk, StringComparison.Ordinal);
         }
 
+        /// <summary>Empty PKCS#8 input fails closed without returning a key.</summary>
+        [Fact]
+        public void AccountKey_EmptyDer_Throws()
+        {
+            Assert.Throws<CryptographicException>(() => AcmeAccountKey.ImportPkcs8Der(ReadOnlySpan<byte>.Empty));
+        }
+
+        /// <summary>Malformed PKCS#8 input fails closed without returning a key.</summary>
+        [Fact]
+        public void AccountKey_MalformedDer_Throws()
+        {
+            Assert.ThrowsAny<CryptographicException>(() => AcmeAccountKey.ImportPkcs8Der([0x30, 0x03, 0x01, 0x02, 0x03]));
+        }
+
+        /// <summary>PKCS#8 that does not consume the full buffer fails closed.</summary>
+        [Fact]
+        public void AccountKey_TrailingBytes_Throws()
+        {
+            using var rsa = RSA.Create(2048);
+            byte[] der = rsa.ExportPkcs8PrivateKey();
+            var withTrailer = new byte[der.Length + 1];
+            der.CopyTo(withTrailer, 0);
+            withTrailer[^1] = 0x00;
+
+            var ex = Assert.Throws<CryptographicException>(() => AcmeAccountKey.ImportPkcs8Der(withTrailer));
+            Assert.Contains("consumed", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// <see cref="AcmeAccountKey.GetDnsRecordValue"/> is unpadded base64url, and
         /// <see cref="AcmeAccountKey.GetKeyAuthorization"/> is the token, a dot, and the key thumbprint.

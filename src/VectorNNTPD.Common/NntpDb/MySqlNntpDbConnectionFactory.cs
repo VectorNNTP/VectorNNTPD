@@ -1,4 +1,5 @@
 using MySqlConnector;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.NntpDb
 {
@@ -14,13 +15,11 @@ namespace VectorNNTPD.Common.NntpDb
         /// <inheritdoc />
         public async Task<INntpDbSession> OpenAsync(string connectionString, CancellationToken cancellationToken)
         {
-            var connection = CreateConnection(connectionString);
-            MySqlConnection? pendingDispose = connection;
+            await using var ownership = new AsyncDisposableOwnership<MySqlConnection>(CreateConnection(connectionString));
             try
             {
-                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-                pendingDispose = null;
-                return new MySqlNntpDbSession(connection);
+                await ownership.Resource.OpenAsync(cancellationToken).ConfigureAwait(false);
+                return new MySqlNntpDbSession(ownership.Transfer());
             }
             catch (MySqlException ex) when (IsAuthenticationFailure(ex))
             {
@@ -35,13 +34,6 @@ namespace VectorNNTPD.Common.NntpDb
                 and not NntpDbConfigurationException)
             {
                 throw new NntpDbUnavailableException("MySQL connection failed.", ex);
-            }
-            finally
-            {
-                if (pendingDispose is not null)
-                {
-                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
-                }
             }
         }
 

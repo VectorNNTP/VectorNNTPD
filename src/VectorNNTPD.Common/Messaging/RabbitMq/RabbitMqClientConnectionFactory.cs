@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using RabbitMQ.Client;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
 {
@@ -50,20 +51,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             // across endpoints, so failover would reuse Hosts[0] as SNI for every dial.
             var endpoints = CreateAmqpTcpEndpoints(runtime);
             var connection = await factory.CreateConnectionAsync(endpoints, cancellationToken).ConfigureAwait(false);
-            IAsyncDisposable? pendingDispose = connection;
-            try
-            {
-                var wrapped = new RabbitMqClientConnection(connection, runtime.VirtualHost, _logger);
-                pendingDispose = null;
-                return wrapped;
-            }
-            finally
-            {
-                if (pendingDispose is not null)
-                {
-                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
-                }
-            }
+            await using var ownership = new AsyncDisposableOwnership<IConnection>(connection);
+            var wrapped = new RabbitMqClientConnection(ownership.Resource, runtime.VirtualHost, _logger);
+            ownership.Transfer();
+            return wrapped;
         }
 
         /// <summary>
