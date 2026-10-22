@@ -1,15 +1,16 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Publishes VectorNNTPD.BackFillerService as a self-contained x64 Native AOT binary.
+    Publishes VectorNNTPD production services as self-contained x64 Native AOT binaries.
 
 .DESCRIPTION
     Resolves this standalone repository from the script file, not the caller's
-    working directory. Publishes src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj for win-x64,
-    linux-x64, or both. Output is a flat directory: release/win-64 or
-    release/linux-64. The linux-64 directory also contains
-    deploy/systemd/vectornntp-backfiller.service, deploy/systemd/backfiller.env.example,
-    and README.md.
+    working directory. Publishes VectorNNTPD.BackFillerService and
+    VectorNNTPD.StorageService for win-x64, linux-x64, or both into one flat
+    directory: release/win-64 or release/linux-64. Identical shared files such as
+    VectorNNTPD.RabbitMQ.json are copied once; a conflicting file fails the script.
+    The linux-64 directory also contains the BackFiller and StorageService systemd
+    units, environment-file examples, and README.md.
     A failed publish leaves that platform directory unchanged and exits 1.
 
 .PARAMETER Platform
@@ -26,18 +27,48 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $Solution = Join-Path $RepoRoot 'VectorNNTPD.slnx'
-$Project = Join-Path $RepoRoot 'src\VectorNNTPD.BackFillerService\VectorNNTPD.BackFillerService.csproj'
-$ExeName = 'VectorNNTPD.BackFillerService'
+
+$Applications = @(
+    @{
+        Name    = 'VectorNNTPD.BackFillerService'
+        Project = Join-Path $RepoRoot 'src\VectorNNTPD.BackFillerService\VectorNNTPD.BackFillerService.csproj'
+        Exe     = 'VectorNNTPD.BackFillerService'
+    },
+    @{
+        Name    = 'VectorNNTPD.StorageService'
+        Project = Join-Path $RepoRoot 'src\VectorNNTPD.StorageService\VectorNNTPD.StorageService.csproj'
+        Exe     = 'VectorNNTPD.StorageService'
+    }
+)
+
 $RequiredPublishFiles = @(
     'VectorNNTPD.BackFillerService.json',
+    'VectorNNTPD.StorageService.json',
     'VectorNNTPD.RabbitMQ.json'
 )
-$SystemdServiceFileName = 'vectornntp-backfiller.service'
-$SystemdServiceSource = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') $SystemdServiceFileName
-$EnvironmentExampleFileName = 'backfiller.env.example'
-$EnvironmentExampleSource = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') $EnvironmentExampleFileName
-$LinuxDocumentationFileName = 'README.md'
-$LinuxDocumentationSource = Join-Path $RepoRoot $LinuxDocumentationFileName
+
+$LinuxExtraFiles = @(
+    @{
+        SourceName = 'vectornntp-backfiller.service'
+        Source     = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') 'vectornntp-backfiller.service'
+    },
+    @{
+        SourceName = 'backfiller.env.example'
+        Source     = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') 'backfiller.env.example'
+    },
+    @{
+        SourceName = 'vectornntp-storageservice.service'
+        Source     = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') 'vectornntp-storageservice.service'
+    },
+    @{
+        SourceName = 'storageservice.env.example'
+        Source     = Join-Path (Join-Path (Join-Path $RepoRoot 'deploy') 'systemd') 'storageservice.env.example'
+    },
+    @{
+        SourceName = 'README.md'
+        Source     = Join-Path $RepoRoot 'README.md'
+    }
+)
 
 function Fail {
     param([string] $Message)
@@ -121,20 +152,35 @@ function Test-NativeAotBinary {
     }
 }
 
-function Copy-FlatPublishOutput {
+function Merge-PublishOutput {
     param(
         [string] $Source,
         [string] $Destination
     )
 
-    New-Item -ItemType Directory -Path $Destination | Out-Null
     $entries = @(Get-ChildItem -LiteralPath $Source -Force)
     foreach ($entry in $entries) {
         if ($entry.PSIsContainer) {
             Fail "Publish output '$($entry.FullName)' contains a directory. Release output must stay flat."
         }
 
-        Copy-Item -LiteralPath $entry.FullName -Destination (Join-Path $Destination $entry.Name)
+        $target = Join-Path $Destination $entry.Name
+        if (Test-Path -LiteralPath $target) {
+            $sourceHash = (Get-FileHash -LiteralPath $entry.FullName -Algorithm SHA256).Hash
+            $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+            if ($sourceHash -eq $targetHash) {
+                continue
+            }
+
+            $extension = [System.IO.Path]::GetExtension($entry.Name)
+            if ($extension -eq '.pdb' -or $extension -eq '.dbg' -or $extension -eq '.xml') {
+                continue
+            }
+
+            Fail "Publish file '$($entry.Name)' differs between applications and cannot share one release directory."
+        }
+
+        Copy-Item -LiteralPath $entry.FullName -Destination $target
     }
 }
 
@@ -154,19 +200,23 @@ function Test-PublishedRelease {
         Fail "Release directory contains nested directories: $($nested.Name -join ', ')."
     }
 
-    $exePath = Join-Path $ReleaseDir ($ExeName + $ExeSuffix)
-    if (-not (Test-Path -LiteralPath $exePath)) {
-        Fail "Missing release executable: $exePath"
-    }
+    foreach ($app in $Applications) {
+        $exePath = Join-Path $ReleaseDir ($app.Exe + $ExeSuffix)
+        if (-not (Test-Path -LiteralPath $exePath)) {
+            Fail "Missing release executable: $exePath"
+        }
 
-    $exe = Get-Item -LiteralPath $exePath
-    if ($exe.Length -le 0) {
-        Fail "Native executable is empty: $exePath"
-    }
+        $exe = Get-Item -LiteralPath $exePath
+        if ($exe.Length -le 0) {
+            Fail "Native executable is empty: $exePath"
+        }
 
-    $managedPath = Join-Path $ReleaseDir ($ExeName + '.dll')
-    if (Test-Path -LiteralPath $managedPath) {
-        Fail "Managed assembly '$($ExeName).dll' is present. Native AOT output must not include it."
+        $managedPath = Join-Path $ReleaseDir ($app.Exe + '.dll')
+        if (Test-Path -LiteralPath $managedPath) {
+            Fail "Managed assembly '$($app.Exe).dll' is present. Native AOT output must not include it."
+        }
+
+        Test-NativeAotBinary -Path $exePath -Rid $Rid
     }
 
     foreach ($runtimeFile in @('hostfxr.dll', 'coreclr.dll', 'libhostfxr.so', 'libcoreclr.so', 'hostfxr.dylib', 'libcoreclr.dylib')) {
@@ -179,45 +229,47 @@ function Test-PublishedRelease {
     foreach ($fileName in $RequiredPublishFiles) {
         $filePath = Join-Path $ReleaseDir $fileName
         if (-not (Test-Path -LiteralPath $filePath)) {
-            Fail "Missing runtime file published with BackFiller: $filePath"
+            Fail "Missing runtime configuration file: $filePath"
         }
     }
 
-    foreach ($obsoleteName in @('appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json')) {
+    foreach ($obsoleteName in @(
+        'appsettings.json',
+        'RabbitMq.json',
+        'VectorNNTP.RabbitMQ.json',
+        'VectorNNTP.StorageServer.json',
+        'VectorNNTP.StorageServer.Development.json',
+        'VectorNNTP.BackFiller.json',
+        'VectorNNTPD.StorageService.Development.json',
+        'VectorNNTPD.BackFillerService.Development.json'
+    )) {
         $obsoletePath = Join-Path $ReleaseDir $obsoleteName
         if (Test-Path -LiteralPath $obsoletePath) {
-            Fail "Obsolete configuration file must not be packaged: $obsoletePath"
+            Fail "Obsolete or non-production configuration file must not be packaged: $obsoletePath"
         }
     }
 
-    $servicePath = Join-Path $ReleaseDir $SystemdServiceFileName
-    $documentationPath = Join-Path $ReleaseDir $LinuxDocumentationFileName
+    $rabbitFiles = @(Get-ChildItem -LiteralPath $ReleaseDir -File -Filter 'VectorNNTPD.RabbitMQ.json' -Force)
+    if ($rabbitFiles.Count -ne 1) {
+        Fail "Expected exactly one VectorNNTPD.RabbitMQ.json in $ReleaseDir and found $($rabbitFiles.Count)."
+    }
+
     if ($Rid -eq 'linux-x64') {
-        if (-not (Test-Path -LiteralPath $servicePath)) {
-            Fail "Missing systemd unit in the linux-x64 release: $servicePath"
-        }
-
-        if (-not (Test-Path -LiteralPath $documentationPath)) {
-            Fail "Missing documentation in the linux-x64 release: $documentationPath"
-        }
-
-        $environmentExamplePath = Join-Path $ReleaseDir $EnvironmentExampleFileName
-        if (-not (Test-Path -LiteralPath $environmentExamplePath)) {
-            Fail "Missing environment-file example in the linux-x64 release: $environmentExamplePath"
+        foreach ($extra in $LinuxExtraFiles) {
+            $path = Join-Path $ReleaseDir $extra.SourceName
+            if (-not (Test-Path -LiteralPath $path)) {
+                Fail "Missing Linux release file: $path"
+            }
         }
     }
     else {
-        if (Test-Path -LiteralPath $servicePath) {
-            Fail "systemd unit must not be packaged for ${Rid}: $servicePath"
-        }
-
-        $environmentExamplePath = Join-Path $ReleaseDir $EnvironmentExampleFileName
-        if (Test-Path -LiteralPath $environmentExamplePath) {
-            Fail "Environment-file example must not be packaged for ${Rid}: $environmentExamplePath"
+        foreach ($extra in $LinuxExtraFiles) {
+            $path = Join-Path $ReleaseDir $extra.SourceName
+            if (Test-Path -LiteralPath $path) {
+                Fail "Linux-only file must not be packaged for ${Rid}: $path"
+            }
         }
     }
-
-    Test-NativeAotBinary -Path $exePath -Rid $Rid
 }
 
 function Publish-Platform {
@@ -228,48 +280,51 @@ function Publish-Platform {
     )
 
     $releaseDir = Join-Path (Join-Path $RepoRoot 'release') $Folder
-    $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("backfiller-release-" + [System.Guid]::NewGuid().ToString('N'))
+    $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("vectornntpd-release-" + [System.Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
-    $stage = Join-Path $stagingRoot 'publish'
+    $stageMerged = Join-Path $stagingRoot 'merged'
+    New-Item -ItemType Directory -Path $stageMerged | Out-Null
     $replacedRelease = $false
     try {
-        Write-Host "dotnet publish VectorNNTPD.BackFillerService -c Release -p:Platform=x64 -r $Rid --self-contained true -p:PublishAot=true -o <staging>"
-        & dotnet publish $Project -c Release -p:Platform=x64 -r $Rid --self-contained true -p:PublishAot=true -p:SelfContained=true -o $stage --nologo
-        if ($LASTEXITCODE -ne 0) {
-            Fail "dotnet publish failed for VectorNNTPD.BackFillerService ($Rid) with exit code $LASTEXITCODE."
-        }
+        foreach ($app in $Applications) {
+            if (-not (Test-Path -LiteralPath $app.Project)) {
+                Fail "Project file was not found: $($app.Project)"
+            }
 
-        $publishedExe = Join-Path $stage ($ExeName + $ExeSuffix)
-        if (-not (Test-Path -LiteralPath $publishedExe)) {
-            Fail "Publish did not produce $($ExeName)$ExeSuffix."
+            $stage = Join-Path $stagingRoot $app.Name
+            Write-Host "dotnet publish $($app.Name) -c Release -p:Platform=x64 -r $Rid --self-contained true -p:PublishAot=true -o <staging>"
+            & dotnet publish $app.Project -c Release -p:Platform=x64 -r $Rid --self-contained true -p:PublishAot=true -p:SelfContained=true -o $stage --nologo
+            if ($LASTEXITCODE -ne 0) {
+                Fail "dotnet publish failed for $($app.Name) ($Rid) with exit code $LASTEXITCODE."
+            }
+
+            $publishedExe = Join-Path $stage ($app.Exe + $ExeSuffix)
+            if (-not (Test-Path -LiteralPath $publishedExe)) {
+                Fail "Publish did not produce $($app.Exe)$ExeSuffix for $($app.Name)."
+            }
+
+            Merge-PublishOutput -Source $stage -Destination $stageMerged
         }
 
         if ($Rid -eq 'linux-x64') {
-            if (-not (Test-Path -LiteralPath $SystemdServiceSource)) {
-                Fail "systemd unit was not found: $SystemdServiceSource"
-            }
+            foreach ($extra in $LinuxExtraFiles) {
+                if (-not (Test-Path -LiteralPath $extra.Source)) {
+                    Fail "Linux release source was not found: $($extra.Source)"
+                }
 
-            if (-not (Test-Path -LiteralPath $LinuxDocumentationSource)) {
-                Fail "Linux documentation was not found: $LinuxDocumentationSource"
+                Copy-Item -LiteralPath $extra.Source -Destination (Join-Path $stageMerged $extra.SourceName)
             }
-
-            if (-not (Test-Path -LiteralPath $EnvironmentExampleSource)) {
-                Fail "Environment-file example was not found: $EnvironmentExampleSource"
-            }
-
-            Copy-Item -LiteralPath $SystemdServiceSource -Destination (Join-Path $stage $SystemdServiceFileName)
-            Copy-Item -LiteralPath $LinuxDocumentationSource -Destination (Join-Path $stage $LinuxDocumentationFileName)
-            Copy-Item -LiteralPath $EnvironmentExampleSource -Destination (Join-Path $stage $EnvironmentExampleFileName)
         }
 
-        Test-PublishedRelease -ReleaseDir $stage -Rid $Rid -ExeSuffix $ExeSuffix
+        Test-PublishedRelease -ReleaseDir $stageMerged -Rid $Rid -ExeSuffix $ExeSuffix
 
         $replacedRelease = $true
         if (Test-Path -LiteralPath $releaseDir) {
             Remove-Item -LiteralPath $releaseDir -Recurse -Force
         }
 
-        Copy-FlatPublishOutput -Source $stage -Destination $releaseDir
+        New-Item -ItemType Directory -Path $releaseDir | Out-Null
+        Merge-PublishOutput -Source $stageMerged -Destination $releaseDir
         Test-PublishedRelease -ReleaseDir $releaseDir -Rid $Rid -ExeSuffix $ExeSuffix
     }
     catch {
@@ -295,10 +350,6 @@ function Publish-Platform {
 try {
     if (-not (Test-Path -LiteralPath $Solution)) {
         Fail "Solution was not found at $Solution."
-    }
-
-    if (-not (Test-Path -LiteralPath $Project)) {
-        Fail "Project file was not found: $Project"
     }
 
     $selected = @()

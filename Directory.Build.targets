@@ -11,7 +11,7 @@
   <!--
     Production executable copyright. GenerateAssemblyInfo emits AssemblyCopyrightAttribute from $(Copyright).
   -->
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService'">
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService' OR '$(MSBuildProjectName)' == 'VectorNNTPD.StorageService'">
     <Copyright>©2026 Chris Knipe &lt;cknipe@opticnetworks.net&gt;</Copyright>
   </PropertyGroup>
 
@@ -22,7 +22,7 @@
   -->
   <Target Name="ApplyDateTimeApplicationVersion"
           BeforeTargets="GetAssemblyVersion"
-          Condition="'$(DesignTimeBuild)' != 'true' AND '$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService'">
+          Condition="'$(DesignTimeBuild)' != 'true' AND ('$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService' OR '$(MSBuildProjectName)' == 'VectorNNTPD.StorageService')">
     <PropertyGroup>
       <_ApplicationVersionNow>$([System.DateTime]::Now.Ticks)</_ApplicationVersionNow>
       <_ApplicationVersionBuild>$([System.DateTime]::new($([System.Int64]::Parse($(_ApplicationVersionNow)))).Subtract($([System.DateTime]::new(2000,1,1))).Days)</_ApplicationVersionBuild>
@@ -38,21 +38,36 @@
     Production publish is self-contained Native AOT for win-x64 and linux-x64 only.
     A normal build does not set RuntimeIdentifier, so libraries, tests, and tools stay portable.
   -->
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService'">
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService' OR '$(MSBuildProjectName)' == 'VectorNNTPD.StorageService'">
     <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
     <SelfContained Condition="'$(RuntimeIdentifier)' == 'win-x64' OR '$(RuntimeIdentifier)' == 'linux-x64'">true</SelfContained>
     <PublishAot Condition="'$(RuntimeIdentifier)' == 'win-x64' OR '$(RuntimeIdentifier)' == 'linux-x64'">true</PublishAot>
   </PropertyGroup>
 
+  <!--
+    StorageService still uses Serilog.Settings.Configuration for MinimumLevel/enrichment while
+    sinks are registered explicitly via StorageServerConfiguredSinks. Native AOT/single-file
+    analysis then fails publish on Serilog.Settings.Configuration:
+    IL3000/IL3002 (Assembly.Location / DependencyContext in single-file) and IL2104/IL3050
+    (assembly trim/AOT analysis). Scope is StorageService + PublishAot only. BackFiller does
+    not need this because it never calls ReadFrom.Configuration.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.StorageService' AND '$(PublishAot)' == 'true'">
+    <NoWarn>$(NoWarn);IL2104;IL3050;IL3000;IL3002</NoWarn>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);IL2104;IL3050</WarningsNotAsErrors>
+    <ILLinkTreatWarningsAsErrors>false</ILLinkTreatWarningsAsErrors>
+    <IlcTreatWarningsAsErrors>false</IlcTreatWarningsAsErrors>
+  </PropertyGroup>
+
   <Target Name="RejectNonX64Platform"
           BeforeTargets="Restore;Build;Publish">
     <Error Condition="'$(Platform)' != 'x64'"
-           Text="BackFiller builds only for Platform x64. Platform '$(Platform)' is not supported." />
+           Text="VectorNNTPD builds only for Platform x64. Platform '$(Platform)' is not supported." />
   </Target>
 
   <Target Name="RejectUnsupportedProductionRuntimeIdentifier"
           BeforeTargets="Restore;Build;Publish"
-          Condition="'$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService' AND '$(RuntimeIdentifier)' != '' AND '$(RuntimeIdentifier)' != 'win-x64' AND '$(RuntimeIdentifier)' != 'linux-x64'">
+          Condition="('$(MSBuildProjectName)' == 'VectorNNTPD.BackFillerService' OR '$(MSBuildProjectName)' == 'VectorNNTPD.StorageService') AND '$(RuntimeIdentifier)' != '' AND '$(RuntimeIdentifier)' != 'win-x64' AND '$(RuntimeIdentifier)' != 'linux-x64'">
     <Error Text="Production applications publish only win-x64 and linux-x64. RuntimeIdentifier '$(RuntimeIdentifier)' is not supported." />
   </Target>
 

@@ -1,13 +1,15 @@
-# BackFiller (Standalone)
+# VectorNNTPD
 
-Standalone migration of `VectorNNTPD.BackFillerService` into an independent repository.
+Standalone VectorNNTPD hosts extracted from VectorNNTP.NNTPD. This repository currently ships BackFiller and StorageService, plus shared `VectorNNTPD.Common`.
 
 ## Structure
 
-- `src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj` - standalone BackFiller worker app (net10.0)
-- `src/VectorNNTPD.BackFillerService/` - production code organized by responsibility (for example `Acme`, `Articles`, `Configuration`, `Core`, `Hosting`, `Nntp`, `Transport`)
-- `tests/VectorNNTPD.BackFillerService.Tests/VectorNNTPD.BackFillerService.Tests.csproj` - xUnit test suite, namespace `VectorNNTPD.BackFillerService.Tests`
-- `VectorNNTPD.slnx` - solution including app + tests
+- `src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj` - BackFiller worker app (net10.0)
+- `src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj` - StorageService / VATP cache host (net10.0)
+- `src/VectorNNTPD.Common/VectorNNTPD.Common.csproj` - shared library
+- `tests/VectorNNTPD.BackFillerService.Tests/` / `tests/VectorNNTPD.StorageService.Tests/` / `tests/VectorNNTPD.Common.Tests/` - xUnit suites
+- `VectorNNTPD.slnx` - solution including apps + tests
+- `tools/Publish-Release.ps1` - Native AOT release publish for both production hosts
 - `tools/Invoke-CodeQlAnalysis.ps1` - local traced C# CodeQL analysis
 
 ## Build
@@ -24,21 +26,27 @@ dotnet test .\tests\VectorNNTPD.BackFillerService.Tests\VectorNNTPD.BackFillerSe
 
 ## Publish
 
-Windows x64:
+Preferred release path (both hosts into one flat directory):
 
 ```powershell
-dotnet publish .\src\VectorNNTPD.BackFillerService\VectorNNTPD.BackFillerService.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained true -p:PublishAot=true -p:SelfContained=true
+.\tools\Publish-Release.ps1 -Platform win-64
+.\tools\Publish-Release.ps1 -Platform linux-64
 ```
 
-Linux x64:
+Per-project Native AOT publish still works. Example for StorageService:
 
 ```powershell
-dotnet publish .\src\VectorNNTPD.BackFillerService\VectorNNTPD.BackFillerService.csproj -c Release -p:Platform=x64 -r linux-x64 --self-contained true -p:PublishAot=true -p:SelfContained=true
+dotnet publish .\src\VectorNNTPD.StorageService\VectorNNTPD.StorageService.csproj -c Release -p:Platform=x64 -r win-x64 --self-contained true -p:PublishAot=true -p:SelfContained=true
 ```
 
-The production project references the `StuDev.AotAnywhere` 1.0.4 MSBuild SDK. On Windows that SDK links `linux-x64` with the Zig toolchain restored by NuGet. A globalization-enabled Linux host still needs `libicu`.
+Production hosts reference the `StuDev.AotAnywhere` 1.0.4 MSBuild SDK. On Windows that SDK links `linux-x64` with the Zig toolchain restored by NuGet. A globalization-enabled Linux host still needs `libicu`.
 
-Native AOT publish keeps trim and AOT analysis enabled. CI then runs the published executable with `VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1` and `VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG` pointing at an isolated JSON file. The process must print `BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja` and exit 0. That checkpoint is configuration binding and host construction. It does not open a listener or contact a database, broker, DNS provider, or certificate authority.
+Native AOT publish keeps trim and AOT analysis enabled. CI runs each published executable against an isolated JSON fixture:
+
+- BackFiller: `VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1` / `VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG` → checkpoint `BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja`
+- StorageService: `VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE=1` / `VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE_CONFIG` → checkpoint `StorageService startup smoke: configuration serverId=1 fqdn=cache01.usenet.ninja`
+
+Those checkpoints prove configuration binding and host construction (and StorageService logging initialization). They do not open a listener or contact a database, broker, DNS provider, or certificate authority. StorageService AOT publish still scopes Serilog.Settings.Configuration IL suppressions (`IL2104`/`IL3050`/`IL3000`/`IL3002`) because MinimumLevel is applied via `ReadFrom.Configuration` while sinks are registered explicitly.
 
 BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, ACME certificate management, the Cloudflare DNS API client, authoritative DNS queries used for DNS-01, RabbitMQ connectivity, and article parsing and validation. It keeps its own `ApplicationServiceManager` and does not use Common's `ApplicationLifecycle`. BackFiller still owns certificate watchdog health, the decision to publish listener-bound A/AAAA records only after the cache listener binds, Article Work topology, the RabbitMQ hosted adapter, and the retained article image that dot-stuffs body lines after Common's parser accepts the article.
 
@@ -48,9 +56,11 @@ BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, AC
 
 ## Linux service
 
-`tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain `VectorNNTPD.BackFillerService`, `VectorNNTPD.BackFillerService.json`, `VectorNNTPD.RabbitMQ.json`, `README.md`, `vectornntp-backfiller.service`, and `backfiller.env.example`.
+`tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain the flat Native AOT outputs for `VectorNNTPD.BackFillerService` and `VectorNNTPD.StorageService`, their primary JSON files, shared `VectorNNTPD.RabbitMQ.json`, `README.md`, and the BackFiller and StorageService systemd units plus environment-file examples.
 
-Install that directory at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
+Install BackFiller at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
+
+Install StorageService at `/opt/vectornntp/storageservice` using `VectorNNTPD.StorageService`, `VectorNNTPD.StorageService.json`, `VectorNNTPD.RabbitMQ.json`, `vectornntp-storageservice.service`, and `storageservice.env.example` from the same release directory. That unit’s `ReadWritePaths` also include `db/` and `spool/` for the article index and segment-pool roots.
 
 Create the account and install the release as root-owned files. This step copies the placeholder environment file and reloads systemd. It does not start the service.
 

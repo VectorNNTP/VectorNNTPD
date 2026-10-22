@@ -1,0 +1,73 @@
+{
+  "ConnectionStrings": {
+    "NntpDB": "Server=127.0.0.1;Database=nntp;User ID=nntparticles;Password=startup-smoke-db"
+  },
+  "StorageServer": {
+    "AcmeDirectoryUrl": "https://acme-staging-v02.api.letsencrypt.org/directory",
+    "AcmeRenewalThresholdDays": 30,
+    "AcmeStateDir": "certs/",
+    "BindAddress": [
+      "127.0.0.1"
+    ],
+    "BindPort": 0,
+    "BindPortTls": 1191,
+    "CloudFlareZoneId": "0123456789abcdef0123456789abcdef",
+    "DbDir": "db",
+    "DnsSuffix": "usenet.ninja",
+    "GracefulShutdownTimeout": "00:00:30",
+    "Listener": {
+      "IoProgressTimeoutSeconds": 60,
+      "MaxActiveConnections": 8,
+      "ParserAccumulationMaxBytes": 262144,
+      "TlsHandshakeTimeoutSeconds": 30
+    },
+    "LogDir": "logs",
+    "SegmentPools": {
+      "CriticalPercent": 85,
+      "HighPercent": 79,
+      "LowPercent": 75,
+      "Directories": [
+        "spool/cache"
+      ]
+    },
+    "ServerId": 1,
+    "StopHostOnUnexpectedServiceTermination": true,
+    "Systemd": {
+      "EnableWatchdog": true,
+      "NotifyReadyOnApplicationRunning": true,
+      "NotifyStoppingOnApplicationShutdown": true,
+      "ReportLifecycleStatus": true,
+      "WatchdogIntervalFraction": 0.5
+    }
+  },
+  "Serilog": {
+    "Enrich": [ "FromLogContext" ],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "System": "Warning",
+        "VectorNNTPD.StorageService": "Information"
+      }
+    },
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
+    "WriteTo": [
+      {
+        "Args": {
+          "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+          "restrictedToMinimumLevel": "Information"
+        },
+        "Name": "Console"
+      }
+    ]
+  },
+  "RabbitMQ": {
+    "EnableSsl": false,
+    "Hosts": [
+      "127.0.0.1"
+    ],
+    "Port": 5672,
+    "VirtualHost": "/"
+  }
+}

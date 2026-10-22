@@ -16,8 +16,8 @@
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
     <InternalsVisibleTo Include="VectorNNTPD.BackFillerService" />
     <InternalsVisibleTo Include="VectorNNTPD.BackFillerService.Tests" />
-    <InternalsVisibleTo Include="VectorNNTP.StorageServer" />
-    <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
+    <InternalsVisibleTo Include="VectorNNTPD.StorageService" />
+    <InternalsVisibleTo Include="VectorNNTPD.StorageService.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.PersistenceBench" />
     <InternalsVisibleTo Include="VectorNNTP.StorageQualification" />
     <!-- Storage smoke builds a pre-ingestion record with internal TryCreate(..., ArticlePathMode.Normalize).
