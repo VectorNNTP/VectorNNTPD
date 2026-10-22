@@ -27,8 +27,8 @@ namespace VectorNNTPD.Common.Tests.Logging
                 logger.Information("day-two");
             }
 
-            var dayOne = Path.Combine(dir.Path, "app-20261001.log");
-            var dayTwo = Path.Combine(dir.Path, "app-20261002.log");
+            var dayOne = Path.Join(dir.Path, "app-20261001.log");
+            var dayTwo = Path.Join(dir.Path, "app-20261002.log");
             Assert.False(File.Exists(dayOne));
             Assert.True(File.Exists(dayOne + ".gz"));
             Assert.True(File.Exists(dayTwo));
@@ -73,19 +73,19 @@ namespace VectorNNTPD.Common.Tests.Logging
         public void Restart_RecognizesExistingLogAndGzip_AndAppliesRetention()
         {
             using var dir = new TempDir();
-            File.WriteAllBytes(Path.Combine(dir.Path, "app-20261001.log.gz"), Gzip("already"));
-            File.WriteAllText(Path.Combine(dir.Path, "app-20261002.log"), "plain-yesterday");
+            File.WriteAllBytes(Path.Join(dir.Path, "app-20261001.log.gz"), Gzip("already"));
+            File.WriteAllText(Path.Join(dir.Path, "app-20261002.log"), "plain-yesterday");
             var time = new ManualTime(new DateTime(2026, 10, 4, 8, 0, 0));
             using (var logger = Create(dir.Path, time, retention: 3))
             {
                 logger.Information("today");
             }
 
-            Assert.False(File.Exists(Path.Combine(dir.Path, "app-20261002.log")));
-            Assert.Equal("plain-yesterday", Encoding.UTF8.GetString(Inflate(Path.Combine(dir.Path, "app-20261002.log.gz"))));
-            Assert.True(File.Exists(Path.Combine(dir.Path, "app-20261001.log.gz")));
-            Assert.True(File.Exists(Path.Combine(dir.Path, "app-20261004.log")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "app-20261004.log.gz")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "app-20261002.log")));
+            Assert.Equal("plain-yesterday", Encoding.UTF8.GetString(Inflate(Path.Join(dir.Path, "app-20261002.log.gz"))));
+            Assert.True(File.Exists(Path.Join(dir.Path, "app-20261001.log.gz")));
+            Assert.True(File.Exists(Path.Join(dir.Path, "app-20261004.log")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "app-20261004.log.gz")));
 
             time.AdvanceDays(2);
             using (var logger = Create(dir.Path, time, retention: 3))
@@ -114,12 +114,12 @@ namespace VectorNNTPD.Common.Tests.Logging
                 logger.Information("next");
             }
 
-            var failed = Path.Combine(dir.Path, "app-20261001.log");
+            var failed = Path.Join(dir.Path, "app-20261001.log");
             Assert.True(File.Exists(failed));
             Assert.False(File.Exists(failed + ".gz"));
             Assert.False(File.Exists(failed + GzipLogFileCompressor.PartialSuffix));
             Assert.Contains("keep-me", File.ReadAllText(failed), StringComparison.Ordinal);
-            Assert.True(File.Exists(Path.Combine(dir.Path, "app-20261002.log")));
+            Assert.True(File.Exists(Path.Join(dir.Path, "app-20261002.log")));
         }
 
         /// <summary>
@@ -136,7 +136,7 @@ namespace VectorNNTPD.Common.Tests.Logging
                 logger.Information("only-today");
             }
 
-            var active = Path.Combine(dir.Path, "app-20261005.log");
+            var active = Path.Join(dir.Path, "app-20261005.log");
             Assert.True(File.Exists(active));
             Assert.False(File.Exists(active + ".gz"));
             Assert.Null(handed);
@@ -157,7 +157,7 @@ namespace VectorNNTPD.Common.Tests.Logging
                 logger.Information("buffered-day");
             }
 
-            var dayOne = Path.Combine(dir.Path, "app-20261001.log");
+            var dayOne = Path.Join(dir.Path, "app-20261001.log");
             Assert.True(File.Exists(dayOne));
             Assert.Contains("buffered-day", File.ReadAllText(dayOne), StringComparison.Ordinal);
             Assert.Null(completed);
@@ -172,8 +172,8 @@ namespace VectorNNTPD.Common.Tests.Logging
             Assert.NotNull(completed);
             Assert.Equal(completed, Inflate(dayOne + ".gz"));
             Assert.Contains("buffered-day", Encoding.UTF8.GetString(completed), StringComparison.Ordinal);
-            Assert.Contains("next-buffered-day", File.ReadAllText(Path.Combine(dir.Path, "app-20261002.log")), StringComparison.Ordinal);
-            Assert.False(File.Exists(Path.Combine(dir.Path, "app-20261002.log.gz")));
+            Assert.Contains("next-buffered-day", File.ReadAllText(Path.Join(dir.Path, "app-20261002.log")), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Join(dir.Path, "app-20261002.log.gz")));
         }
 
         /// <summary>
@@ -183,7 +183,7 @@ namespace VectorNNTPD.Common.Tests.Logging
         public void InterruptedGzip_IsDiscarded_AndTheSourceIsCompressedOnRestart()
         {
             using var dir = new TempDir();
-            var source = Path.Combine(dir.Path, "app-20261001.log");
+            var source = Path.Join(dir.Path, "app-20261001.log");
             File.WriteAllText(source, "survived-the-crash");
             File.WriteAllBytes(source + GzipLogFileCompressor.PartialSuffix, [1, 2, 3, 4]);
             var time = new ManualTime(new DateTime(2026, 10, 2, 8, 0, 0));
@@ -195,8 +195,8 @@ namespace VectorNNTPD.Common.Tests.Logging
             Assert.False(File.Exists(source));
             Assert.False(File.Exists(source + GzipLogFileCompressor.PartialSuffix));
             Assert.Equal("survived-the-crash", Encoding.UTF8.GetString(Inflate(source + ".gz")));
-            Assert.True(File.Exists(Path.Combine(dir.Path, "app-20261002.log")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "app-20261002.log.gz")));
+            Assert.True(File.Exists(Path.Join(dir.Path, "app-20261002.log")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "app-20261002.log.gz")));
         }
 
         /// <summary>
@@ -207,7 +207,7 @@ namespace VectorNNTPD.Common.Tests.Logging
         {
             using var dir = new TempDir();
             var gzip = Gzip("stable");
-            var path = Path.Combine(dir.Path, "app-20261001.log");
+            var path = Path.Join(dir.Path, "app-20261001.log");
             File.WriteAllBytes(path + ".gz", gzip);
             File.WriteAllText(path, "leftover");
             var time = new ManualTime(new DateTime(2026, 10, 2, 8, 0, 0));
@@ -238,7 +238,7 @@ namespace VectorNNTPD.Common.Tests.Logging
             ILogFileCompressor? compressor = null,
             Action<string>? onCompleted = null)
         {
-            var path = Path.Combine(directory, "app-.log");
+            var path = Path.Join(directory, "app-.log");
             var configuration = new LoggerConfiguration().MinimumLevel.Debug();
             if (async)
             {
@@ -359,7 +359,7 @@ namespace VectorNNTPD.Common.Tests.Logging
             /// </summary>
             public TempDir()
             {
-                Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "vectornntp-gzip-roll-" + Guid.NewGuid().ToString("N"));
+                Path = System.IO.Path.Join(System.IO.Path.GetTempPath(), "vectornntp-gzip-roll-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(Path);
             }
 

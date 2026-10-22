@@ -32,7 +32,7 @@ namespace VectorNNTPD.Common.Tests.Acme
             var second = journal.BeginTransaction([Fqdn, CertificateIdentities.NewsHostname], DirectoryUrl, DateTimeOffset.UtcNow);
             journal.CompleteFailure(second, "second_failure", "second", DateTimeOffset.UtcNow);
 
-            Assert.Equal(Path.Combine(dir.Path, "journal", Fqdn + ".json"), journal.FilePath);
+            Assert.Equal(Path.Join(dir.Path, "journal", Fqdn + ".json"), journal.FilePath);
             Assert.True(File.Exists(journal.FilePath));
             Assert.Single(Directory.GetFiles(AcmePaths.JournalRoot(dir.Path), "*.json"));
 
@@ -45,7 +45,7 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.Equal("second_failure", reloaded[1].FailureCategory);
             Assert.Contains(reloaded[0].Events, static e => e.Type == AcmeTransactionJournal.EventCertificateRequestStarted);
             Assert.Contains(reloaded[0].Events, static e => e.Type == AcmeTransactionJournal.EventCertificateIssuanceFailed);
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "acme")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "acme")));
             Assert.DoesNotContain(
                 Directory.GetFiles(AcmePaths.JournalRoot(dir.Path), "*.json"),
                 static path => !string.Equals(Path.GetFileName(path), Fqdn + ".json", StringComparison.Ordinal));

@@ -21,7 +21,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         public void Shipped_sample_binds_and_present_host_primary_json_omits_the_section()
         {
             var repoRoot = FindRepoRoot();
-            var sharedPath = Path.Combine(repoRoot, "src", "VectorNNTPD.Common", "VectorNNTPD.RabbitMQ.json");
+            var sharedPath = Path.Join(repoRoot, "src", "VectorNNTPD.Common", "VectorNNTPD.RabbitMQ.json");
             Assert.True(File.Exists(sharedPath), sharedPath);
 
             var primaryFiles = FindHostPrimaryJsonFiles(repoRoot);
@@ -38,9 +38,9 @@ namespace VectorNNTPD.Common.Tests.Configuration
             var root = Directory.CreateTempSubdirectory("vnntp-shared-rabbit-");
             try
             {
-                File.Copy(sharedPath, Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"));
+                File.Copy(sharedPath, Path.Join(root.FullName, "VectorNNTPD.RabbitMQ.json"));
                 File.WriteAllText(
-                    Path.Combine(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
+                    Path.Join(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
                     "{}");
 
                 var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -107,10 +107,10 @@ namespace VectorNNTPD.Common.Tests.Configuration
             try
             {
                 File.WriteAllText(
-                    Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"),
+                    Path.Join(root.FullName, "VectorNNTPD.RabbitMQ.json"),
                     """{"RabbitMQ":{"Port":5672,"Hosts":["198.18.0.3"]}}""");
                 File.WriteAllText(
-                    Path.Combine(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
+                    Path.Join(root.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
                     """{"RabbitMQ":{"Port":1}}""");
 
                 Environment.SetEnvironmentVariable("RabbitMQ__Port", overriddenPort);
@@ -237,7 +237,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         {
             for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
             {
-                if (File.Exists(Path.Combine(dir.FullName, "VectorNNTPD.slnx")))
+                if (File.Exists(Path.Join(dir.FullName, "VectorNNTPD.slnx")))
                 {
                     return dir.FullName;
                 }
@@ -254,7 +254,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         private static List<string> FindHostPrimaryJsonFiles(string repoRoot)
         {
             var files = new List<string>();
-            var src = Path.Combine(repoRoot, "src");
+            var src = Path.Join(repoRoot, "src");
             foreach (var project in Directory.EnumerateFiles(src, "*.csproj", SearchOption.AllDirectories))
             {
                 if (IsBuildOutputPath(project))
@@ -269,7 +269,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 }
 
                 var assemblyName = ReadAssemblyName(text) ?? Path.GetFileNameWithoutExtension(project);
-                files.Add(Path.Combine(Path.GetDirectoryName(project)!, assemblyName + ".json"));
+                files.Add(Path.Join(Path.GetDirectoryName(project)!, assemblyName + ".json"));
             }
 
             return files;

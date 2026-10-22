@@ -157,7 +157,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
             {
                 Write(root.FullName, "RabbitMq.json", "legacy");
                 File.WriteAllText(
-                    Path.Combine(root.FullName, "VectorNNTPD.RabbitMQ.json"),
+                    Path.Join(root.FullName, "VectorNNTPD.RabbitMQ.json"),
                     """{"RabbitMQ":{"Port":5672,"Hosts":["198.18.0.4"]}}""");
                 var builder = new ConfigurationBuilder()
                     .SetBasePath(root.FullName)
@@ -209,7 +209,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 Assert.Throws<FileNotFoundException>(() => required.Build());
 
                 File.WriteAllText(
-                    Path.Combine(invalid.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
+                    Path.Join(invalid.FullName, ApplicationJsonConfiguration.PrimaryJsonFileName()),
                     "{");
                 var malformed = new ConfigurationBuilder()
                     .SetBasePath(invalid.FullName)
@@ -242,7 +242,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 : shared is null
                     ? $$"""{ {{markerLine}} }"""
                     : $$"""{ {{markerLine}}, {{sharedLine}} }""";
-            File.WriteAllText(Path.Combine(directory, fileName), body);
+            File.WriteAllText(Path.Join(directory, fileName), body);
         }
 
         /// <summary>
