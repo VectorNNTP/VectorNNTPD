@@ -1,4 +1,5 @@
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Acme
 {
@@ -207,7 +208,7 @@ namespace VectorNNTPD.Common.Acme
             {
                 // Expected on cancel.
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 AcmeLogMessages.RenewalLoopStopError(_logger, ex);
             }
@@ -285,7 +286,7 @@ namespace VectorNNTPD.Common.Acme
                     break;
                 }
                 // codeql[cs/catch-of-all-exceptions] Certificate renewal must record every failure and continue the documented recovery path.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     AcmeLogMessages.RenewalCheckFailed(_logger, AcmeFailureSanitizer.Sanitize(ex));
                     ObserveFailure();
@@ -341,7 +342,7 @@ namespace VectorNNTPD.Common.Acme
                 _observation.OnObserved(_manager.EvaluateExisting(_time.GetUtcNow()), renewalReplacedCertificate: false);
             }
             // codeql[cs/catch-of-all-exceptions] An unreadable certificate must be reported without ending the renewal loop.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 _observation.OnUnreadable(ex);
             }

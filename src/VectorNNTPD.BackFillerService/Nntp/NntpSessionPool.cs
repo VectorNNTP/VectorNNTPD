@@ -830,7 +830,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         continue;
                     }
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     try
                     {
@@ -1068,15 +1068,20 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </summary>
         /// <returns>A task that completes after remaining sessions have been retired or their cleanup fault has been observed.</returns>
         /// <remarks>
-        /// The deadline is captured at this call and released when the method returns. Keepalive drain, lease drain, and QUIT all use its shared token.
+        /// Shutdown cancel and the replenish-supervisor await run first so waiting for that loop to observe cancel does not
+        /// consume the grace budget. The deadline is then captured for keepalive drain, lease drain, and every graceful QUIT.
         /// A grace timeout does not abandon remaining sessions. Sessions that cannot start QUIT before the deadline aborts the transport.
         /// A second call returns immediately. An unexpected retirement fault is thrown after the other sessions have been attempted
         /// and after the pool semaphores are disposed.
         /// </remarks>
         public async ValueTask DisposeAsync()
         {
-            using var deadline = NntpShutdownDeadline.FromBudget(_shutdownGrace);
-            await DisposeCoreAsync(forceAfterGrace: true, CancellationToken.None, deadline).ConfigureAwait(false);
+            await DisposeCoreAsync(
+                    forceAfterGrace: true,
+                    CancellationToken.None,
+                    NntpShutdownDeadline.None,
+                    armGraceAfterReplenish: true)
+                .ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1094,6 +1099,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <param name="deadline">
         /// Absolute shutdown instant. <see cref="NntpShutdownDeadline.None"/> is a replacement drain.
         /// Retirement then captures one <see cref="_shutdownGrace"/> deadline instead of giving each session its own QUIT allowance.
+        /// When <paramref name="armGraceAfterReplenish"/> is <see langword="true"/>, this value is ignored and a grace deadline is
+        /// captured after the replenish supervisor has observed shutdown cancel.
+        /// </param>
+        /// <param name="armGraceAfterReplenish">
+        /// <see langword="true"/> for <see cref="DisposeAsync"/>: capture <see cref="_shutdownGrace"/> after replenish cancel so
+        /// waiting for that supervisor does not burn the keepalive/lease/QUIT budget under scheduling load.
         /// </param>
         /// <remarks>
         /// The disposed flag is published under <see cref="_idleGate"/> before <see cref="_drained"/> is snapshotted under <see cref="_permitGate"/>.
@@ -1122,7 +1133,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         private async Task DisposeCoreAsync(
             bool forceAfterGrace,
             CancellationToken cancellationToken,
-            NntpShutdownDeadline deadline)
+            NntpShutdownDeadline deadline,
+            bool armGraceAfterReplenish = false)
         {
             TaskCompletionSource drained;
             lock (_idleGate)
@@ -1151,10 +1163,19 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     ShutdownObservations.Canceled(_logger, "session replenish");
                 }
                 // codeql[cs/catch-of-all-exceptions] Keepalive and replenishment failures must retire or log the session and must not escape the background task.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     NntpLogMessages.SessionReplenishFailed(_logger, _provider.Backbone, ex.Message);
                 }
+            }
+
+            // DisposeAsync arms grace here so replenish-cancel latency cannot exhaust QUIT budget before retirement.
+            using var armedGrace = armGraceAfterReplenish
+                ? NntpShutdownDeadline.FromBudget(_shutdownGrace)
+                : NntpShutdownDeadline.None;
+            if (armGraceAfterReplenish)
+            {
+                deadline = armedGrace;
             }
 
             await AwaitKeepAlivesAsync(deadline, cancellationToken).ConfigureAwait(false);
@@ -1398,7 +1419,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                     await _leases.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     try
                     {
@@ -1726,7 +1747,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 connectionNumber = AllocateConnectionNumber();
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Interlocked.Decrement(ref _created);
                 throw;
@@ -1737,7 +1758,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 session = new NntpProviderSession(_provider, _options, _logger, connectionNumber);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReleaseUnregisteredReservation(connectionNumber);
                 throw;
@@ -1783,7 +1804,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     failure?.Reason ?? "NNTP connect failed.");
             }
             // codeql[cs/catch-of-all-exceptions] Failed creation must release its own reservation for every exception type and must not leave the session in the live set.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (registered && ex is not NntpProviderConnectException)
                 {
@@ -2284,7 +2305,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     ShutdownObservations.Canceled(_logger, "DATE keepalive");
                 }
                 // codeql[cs/catch-of-all-exceptions] Keepalive and replenishment failures must retire or log the session and must not escape the background task.
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     // The loop still owns the session only while its registration is the published one and the session remains idle.
                     // A dequeue that already took it, or a replacement keepalive, retires or keeps it.

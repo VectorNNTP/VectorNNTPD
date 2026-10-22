@@ -75,21 +75,29 @@ namespace VectorNNTPD.BackFillerService.Nntp
             Func<Stream, SslStream>? streamFactory = null)
         {
             ArgumentNullException.ThrowIfNull(inner);
-            var ssl = streamFactory?.Invoke(inner) ?? new SslStream(inner, leaveInnerStreamOpen: false);
+            // Ownership transfer uses DisposeAsync (not sync Dispose) so STARTTLS teardown matches
+            // SslStream's async dispose path. cs/missed-using-statement targets IDisposable.Dispose
+            // in finally; DisposeAsync here is intentional and preserves handshake-cancel cleanup.
+            SslStream? pendingDispose =
+                streamFactory?.Invoke(inner) ?? new SslStream(inner, leaveInnerStreamOpen: false);
             try
             {
                 using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 tlsCts.CancelAfter(timeout);
-                await ssl.AuthenticateAsClientAsync(
+                await pendingDispose.AuthenticateAsClientAsync(
                         CreateClientOptions(host, serverCertificateValidationCallback),
                         tlsCts.Token)
                     .ConfigureAwait(false);
-                return ssl;
+                var authenticated = pendingDispose;
+                pendingDispose = null;
+                return authenticated;
             }
-            catch
+            finally
             {
-                await ssl.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (pendingDispose is not null)
+                {
+                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 using Serilog.Debugging;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
 {
@@ -186,7 +187,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     _consumer = consumer;
                     return consumerTag;
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     _onDelivery = null;
                     DetachConsumerHandlers(consumer);
@@ -262,7 +263,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                         await exclusiveDispose(MarkDisposedAsync).ConfigureAwait(false);
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     // The hook runs the mark inside the caller's gate. A throw after that mark used to
                     // skip the client close, and a later dispose saw the channel as already marked and

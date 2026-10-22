@@ -247,12 +247,20 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
         }
 
         /// <summary>Concurrent readiness triggers share the send gate and produce one successful READY.</summary>
+        /// <remarks>
+        /// Workers are armed on dedicated threads and must reach the start gate before release so the
+        /// assertion does not race the thread pool under CI load (Linux suite flake: ReadyAttempted timeout).
+        /// After release, readiness is raced against <c>Task.WhenAll(workers)</c> so a worker fault before
+        /// <c>NotifyReady</c> surfaces immediately instead of waiting out the ReadyAttempted safety bound.
+        /// </remarks>
         [Fact]
         public async Task Readiness_ConcurrentTriggers_DoNotDuplicateReady()
         {
+            const int workerCount = 8;
             var notify = new FakeSystemdNotifyBridge();
             using var gate = new ManualResetEventSlim(false);
             using var start = new ManualResetEventSlim(false);
+            using var workersArmed = new CountdownEvent(workerCount);
             notify.BlockReadyUntil = gate;
             var lifetime = new TestHostApplicationLifetime();
             var health = new BackFillerApplicationHealth();
@@ -266,23 +274,46 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
                 lifetime.SignalStarted();
                 Assert.Equal(0, notify.ReadyCount);
 
-                workers = Enumerable.Range(0, 8)
-                    .Select(_ => Task.Run(() =>
-                    {
-                        start.Wait();
-                        health.MarkCertificateAvailable();
-                    }))
+                // LongRunning avoids thread-pool starvation while workers block on start/gate.
+                workers = Enumerable.Range(0, workerCount)
+                    .Select(_ => Task.Factory.StartNew(
+                        () =>
+                        {
+                            workersArmed.Signal();
+                            start.Wait();
+                            health.MarkCertificateAvailable();
+                        },
+                        CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default))
                     .ToArray();
 
+                if (!workersArmed.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Concurrent readiness workers did not reach the start gate.");
+                }
+
                 start.Set();
-                await notify.ReadyAttempted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+                // Race readiness against worker completion so a fault before NotifyReady is not
+                // reported as a ReadyAttempted timeout after the full safety wait.
+                var workersCompleted = Task.WhenAll(workers);
+                var first = await Task.WhenAny(notify.ReadyAttempted.Task, workersCompleted)
+                    .WaitAsync(TimeSpan.FromSeconds(30));
+                if (ReferenceEquals(first, workersCompleted))
+                {
+                    await workersCompleted;
+                    throw new InvalidOperationException(
+                        "Concurrent readiness workers finished before any READY attempt was observed.");
+                }
+
                 Assert.Equal(1, notify.ReadyAttemptCount);
                 Assert.Equal(0, notify.ReadyCount);
 
                 gate.Set();
-                await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(2));
+                await workersCompleted.WaitAsync(TimeSpan.FromSeconds(30));
                 workers = null;
-                await notify.ReadySent.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                await notify.ReadySent.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
                 Assert.Equal(1, notify.ReadyCount);
                 Assert.True(notify.ReadyAttemptCount >= 1);
@@ -295,7 +326,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting.Systemd
                 notify.BlockReadyUntil = null;
                 if (workers is not null)
                 {
-                    await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(2));
+                    await Task.WhenAll(workers).WaitAsync(TimeSpan.FromSeconds(30));
                 }
             }
         }

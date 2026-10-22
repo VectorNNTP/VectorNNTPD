@@ -1,6 +1,7 @@
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
 using Microsoft.Extensions.Options;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Hosting.Systemd
 {
@@ -171,7 +172,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
                         SystemdLogMessages.WatchdogKeepAliveSent(_logger);
                     }
                     // codeql[cs/catch-of-all-exceptions] A watchdog notify failure must be logged and must not stop the process.
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         // Unlike NNTPD, notify failures must not stop BackFiller. Missing
                         // keep-alives still trip systemd when WatchdogSec is configured.
@@ -183,7 +184,7 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
             {
                 SystemdLogMessages.WatchdogDeactivated(_logger);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 SystemdLogMessages.WatchdogLoopFailed(_logger, ex);
                 Interlocked.Exchange(ref _active, 0);

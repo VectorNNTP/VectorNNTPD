@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Acme
 {
@@ -36,16 +37,38 @@ namespace VectorNNTPD.Common.Acme
         private int _disposed;
 
         /// <summary>
+        /// Async-local test seam that replaces <see cref="FileStream"/> construction.
+        /// Scoped per async flow so parallel tests cannot observe another test's hook.
+        /// Production code leaves this <see langword="null"/>.
+        /// </summary>
+        private static readonly AsyncLocal<Func<string, FileStream>?> CreateStreamForTestsLocal = new();
+
+        /// <summary>
+        /// Async-local test seam that replaces lock-file metadata initialization after open.
+        /// Scoped per async flow so parallel tests cannot observe another test's hook.
+        /// Production code leaves this <see langword="null"/>.
+        /// </summary>
+        private static readonly AsyncLocal<Action<FileStream>?> InitializeLockFileForTestsLocal = new();
+
+        /// <summary>
         /// Optional test seam that replaces <see cref="FileStream"/> construction.
         /// Production code leaves this <see langword="null"/>.
         /// </summary>
-        internal static Func<string, FileStream>? CreateStreamForTests { get; set; }
+        internal static Func<string, FileStream>? CreateStreamForTests
+        {
+            get => CreateStreamForTestsLocal.Value;
+            set => CreateStreamForTestsLocal.Value = value;
+        }
 
         /// <summary>
         /// Optional test seam that replaces lock-file metadata initialization after open.
         /// Production code leaves this <see langword="null"/>.
         /// </summary>
-        internal static Action<FileStream>? InitializeLockFileForTests { get; set; }
+        internal static Action<FileStream>? InitializeLockFileForTests
+        {
+            get => InitializeLockFileForTestsLocal.Value;
+            set => InitializeLockFileForTestsLocal.Value = value;
+        }
 
         /// <summary>Takes ownership of an already exclusive <paramref name="stream"/>.</summary>
         /// <param name="stream">Lock stream. Disposed by <see cref="Dispose"/>.</param>
@@ -127,19 +150,15 @@ namespace VectorNNTPD.Common.Acme
                 return false;
             }
 
-            // Open succeeded: dispose on initialization failure, otherwise transfer ownership
-            // to the returned lock. A finally/null pattern is avoided so initialization errors
-            // cannot be mistaken for open-time contention retries.
-            try
+            // Open succeeded: dispose on any initialization failure, otherwise transfer ownership
+            // to the returned lock. using + Transfer keeps cleanup on every failure path without a
+            // catch-all or dispose-in-finally, and never returns false here — so init errors cannot
+            // be mistaken for open-time contention retries.
+            using (var ownership = new DisposableOwnership<FileStream>(stream))
             {
-                InitializeLockFile(stream);
-                acquired = new AcmeExclusiveFileLock(stream);
+                InitializeLockFile(ownership.Resource);
+                acquired = new AcmeExclusiveFileLock(ownership.Transfer());
                 return true;
-            }
-            catch
-            {
-                stream.Dispose();
-                throw;
             }
         }
 

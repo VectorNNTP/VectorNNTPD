@@ -10,6 +10,7 @@ using VectorNNTPD.Common.Articles;
 using System.Text;
 using VectorNNTPD.Common.Configuration;
 using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -323,7 +324,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     LogArticleProcessed(item, OutcomeFailed, string.Empty, CommandTimestamp(ex));
                     if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)

@@ -4,6 +4,7 @@ using Xunit.Abstractions;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {
@@ -11,13 +12,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
     /// Shared shutdown deadline across stalled sessions, providers, and one replacement drain.
     /// </summary>
     /// <remarks>
-    /// Scale pools use <see cref="SharedBudget"/> (500 ms) and <c>keepAliveSeconds: 0</c>, so replacement
+    /// Scale pools use <see cref="SharedBudget"/> and <c>keepAliveSeconds: 0</c>, so replacement
     /// <see cref="NntpSessionPool.DrainAndDisposeAsync(CancellationToken)"/> spends essentially one shared
     /// retirement deadline on stalled QUITs (keepalive drain is empty). A correct run finishes near that budget
     /// plus scheduling. Regressing to per-session <see cref="NntpProviderSession"/> QuitAllowance (2 s) with
     /// <see cref="NntpShutdownWork.Parallelism"/> yields about two serial waves (~4 s) and also starts a QUIT on
     /// every session. <see cref="AssertWithinCeiling"/> rejects the QuitAllowance stack; <c>quitStarted</c> bounds
     /// reject per-session independent budgets that still finish under the ceiling.
+    /// <see cref="NntpSessionPool.DisposeAsync"/> arms grace after replenish cancel so that wait cannot exhaust QUIT budget.
     /// <see cref="MeasureHangTimeout"/> is only hang detection for <see cref="MeasureAsync"/> and does not replace
     /// <see cref="AssertWithinCeiling"/>.
     /// </remarks>
@@ -76,7 +78,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// Later sessions do not each receive a fresh two-second QUIT allowance.
         /// </summary>
         /// <remarks>
-        /// The budget is 500 milliseconds and the accepted ceiling is 1500 milliseconds (below one QuitAllowance).
+        /// The shared budget and the accepted ceiling stay below one QuitAllowance.
         /// Eight independent two-second QUIT attempts would exceed that ceiling.
         /// At most <see cref="NntpShutdownWork.Parallelism"/> writes can be in progress.
         /// The shared deadline token cancels that wave, and a later session observes the same token before it can start QUIT.
@@ -106,6 +108,41 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.Equal(quitStarted, CountQuit(logger));
                 Assert.All(servers, static server => Assert.Equal(1, server.ClientStreamDisposeCount));
                 AssertQuitCancelledByToken(logger.Messages, quitStarted);
+            }
+            finally
+            {
+                Release(servers);
+                await pool.DisposeAsync();
+            }
+        }
+
+        /// <summary>
+        /// When the shared grace is already cancelled before retirement, idle sessions skip QUIT and still dispose the transport.
+        /// </summary>
+        /// <remarks>
+        /// Documents the production contract behind a Linux CI <c>quitStarted=0</c> failure: budget spent before
+        /// <see cref="NntpProviderSession.DisposeForShutdownAsync"/> reaches the write must not be confused with a
+        /// missing shared-deadline gate. <see cref="NntpSessionPool.BeforeLeaseDrainWait"/> burns the budget after
+        /// grace is armed so replenish cancel is not the consumer.
+        /// </remarks>
+        [Fact]
+        public async Task Shared_budget_exhausted_before_retirement_skips_quit()
+        {
+            const int sessions = 4;
+            var factory = new ScriptedNntpTransportFactory();
+            var servers = EnqueueStalledQuitServers(factory, sessions);
+            var pool = NntpSessionPoolTests.CreatePool(factory, max: sessions, shutdownGrace: SharedBudget);
+            pool.BeforeLeaseDrainWait = async _ => await Task.Delay(SharedBudget + TimeSpan.FromMilliseconds(100));
+            try
+            {
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+                Assert.Equal(sessions, pool.ActiveSessionCount);
+
+                await pool.DisposeAsync().AsTask().WaitAsync(MeasureHangTimeout);
+
+                Assert.Equal(0, QuitStarts(servers));
+                Assert.Equal(0, pool.LiveSessionCount);
+                Assert.All(servers, static server => Assert.Equal(1, server.ClientStreamDisposeCount));
             }
             finally
             {
@@ -665,7 +702,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     await dispose.WaitAsync(TimeSpan.FromSeconds(2));
                     elapsed = Stopwatch.GetElapsedTime(started);
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     Release(poolServers);
                     await dispose.WaitAsync(TimeSpan.FromSeconds(5));
@@ -934,7 +971,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await dispose.WaitAsync(MeasureHangTimeout);
                 return Stopwatch.GetElapsedTime(started);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Release(servers);
                 await dispose.WaitAsync(TimeSpan.FromSeconds(5));

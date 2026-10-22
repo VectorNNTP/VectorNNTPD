@@ -7,6 +7,7 @@ using System.Net.Security;
 using VectorNNTPD.Common.Articles;
 using System.Buffers;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -1114,7 +1115,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                 NntpLogMessages.WireTlsHandshakeStarting(_logger, _wireIdentity);
             }
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 try
                 {

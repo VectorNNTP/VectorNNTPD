@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Core;
+
 namespace VectorNNTPD.Common.Acme
 {
     /// <summary>One DNS-01 challenge to publish as a TXT record.</summary>
@@ -129,7 +131,7 @@ namespace VectorNNTPD.Common.Acme
                 {
                     throw;
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     failures++;
                 }
@@ -216,7 +218,7 @@ namespace VectorNNTPD.Common.Acme
                     {
                         throw;
                     }
-                    catch
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         continue;
                     }
@@ -271,7 +273,7 @@ namespace VectorNNTPD.Common.Acme
                 {
                     throw;
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     remaining.Add(item);
                 }
@@ -466,7 +468,7 @@ namespace VectorNNTPD.Common.Acme
             {
                 throw;
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // Logged by callers via category.
             }

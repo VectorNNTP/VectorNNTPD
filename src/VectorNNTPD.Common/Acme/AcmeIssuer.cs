@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using VectorNNTPD.Common.Acme.Protocol;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Acme
 {
@@ -507,7 +508,7 @@ namespace VectorNNTPD.Common.Acme
             {
                 // Ignore clean-up cancel during best-effort.
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // Best-effort.
             }

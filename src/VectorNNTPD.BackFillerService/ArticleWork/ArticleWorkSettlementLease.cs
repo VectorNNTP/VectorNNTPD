@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -110,7 +111,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     return true;
                 }
                 // codeql[cs/catch-of-all-exceptions] Settlement cleanup must finish even when an unexpected exception is thrown.
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     return false;
                 }

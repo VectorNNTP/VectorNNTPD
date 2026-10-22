@@ -23,6 +23,7 @@ namespace VectorNNTPD.Common.Acme
                 directory ?? ".",
                 $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
 
+            var committed = false;
             try
             {
                 using (var stream = new FileStream(
@@ -38,11 +39,14 @@ namespace VectorNNTPD.Common.Acme
                 }
 
                 File.Move(tempPath, path, overwrite: true);
+                committed = true;
             }
-            catch
+            finally
             {
-                TryDelete(tempPath);
-                throw;
+                if (!committed)
+                {
+                    TryDelete(tempPath);
+                }
             }
         }
 

@@ -112,7 +112,7 @@ namespace VectorNNTPD.Common.NntpDb
                 await ConnectWithStartupBudgetAsync(_options.Value, cancellationToken).ConfigureAwait(false);
                 Volatile.Write(ref _accepting, 1);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (ex is NntpDbConfigurationException configuration)
                 {
@@ -216,7 +216,7 @@ namespace VectorNNTPD.Common.NntpDb
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     if (_timeProvider.GetUtcNow() >= deadline)
                     {

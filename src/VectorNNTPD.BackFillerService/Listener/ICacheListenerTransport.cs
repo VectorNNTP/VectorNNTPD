@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Core;
+
 namespace VectorNNTPD.BackFillerService.Listener
 {
     /// <summary>
@@ -149,7 +151,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                 ThrowTranslatedCancellation(cancellationToken, operation: "read");
                 throw;
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Disarm();
                 throw;
@@ -201,7 +203,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                 ThrowTranslatedCancellation(cancellationToken, operation: "write");
                 throw;
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Disarm();
                 throw;
@@ -334,7 +336,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                 retired?.Dispose();
                 return token;
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 retired?.Dispose();
                 Disarm();

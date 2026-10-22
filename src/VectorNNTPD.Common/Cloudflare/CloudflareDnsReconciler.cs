@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using VectorNNTPD.Common.Networking;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Cloudflare
 {
@@ -781,7 +782,7 @@ namespace VectorNNTPD.Common.Cloudflare
                 // Stage 6: re-read and verify the exact final sets.
                 await VerifyAsync(zoneId, fqdn, desiredV4, desiredV6, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (!_deletedPreExistingDuringLastReconcile)
                 {

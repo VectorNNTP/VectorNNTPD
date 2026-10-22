@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
 {
@@ -193,7 +194,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 await _connection.CloseAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 RabbitMqLogMessages.ConnectionCloseFailed(_logger, ex);
             }

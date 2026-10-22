@@ -5,6 +5,7 @@ using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.Common.Articles.Processing;
 using VectorNNTPD.Common.Articles.Validation;
 using VectorNNTPD.Common.Transport.ArticleTransfer;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Articles
 {
@@ -131,7 +132,7 @@ namespace VectorNNTPD.Common.Articles
                 buffer = null;
                 return ArticleRecordCreateResult.Accepted(record, parse.SelectedDateHeaderName);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (buffer is not null)
                 {

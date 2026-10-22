@@ -1,5 +1,6 @@
 
 using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -209,7 +210,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 error = null;
             }
             // codeql[cs/catch-of-all-exceptions] A delivery failure must be settled or logged by this pipeline boundary.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 outcome = ArticleWorkOutcome.UnexpectedFailure;
                 error = ex.GetType().Name;
@@ -414,7 +415,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return ArticleWorkPublishAttempt.Cancelled;
             }
             // codeql[cs/catch-of-all-exceptions] A delivery failure must be settled or logged by this pipeline boundary.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 return ArticleWorkPublishAttempt.Failed;
             }

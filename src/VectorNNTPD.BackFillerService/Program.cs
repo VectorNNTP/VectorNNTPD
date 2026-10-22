@@ -4,6 +4,7 @@ using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 /// <summary>Process entry point. Builds the Generic Host from the entry-assembly directory and runs it.</summary>
 internal class Program
@@ -77,7 +78,7 @@ internal class Program
             }
         }
         // codeql[cs/catch-of-all-exceptions] The process boundary must log every host failure and still return the documented exit code.
-        catch (Exception ex)
+        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
         {
             exitCode = BackFillerProcessBoundary.ObserveHostFailure(ex);
         }
@@ -134,14 +135,14 @@ internal static class BackFillerProcessBoundary
             logFatal(exception);
         }
         // codeql[cs/catch-of-all-exceptions] The process boundary must log every host failure and still return the documented exit code.
-        catch (Exception logFailure)
+        catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
         {
             try
             {
                 SelfLog.WriteLine("BackFiller host failure log failed: {0}", logFailure);
             }
             // codeql[cs/catch-of-all-exceptions] The process boundary must log every host failure and still return the documented exit code.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // The process boundary must still return the failure exit code.
             }
@@ -179,7 +180,7 @@ internal static class BackFillerProcessBoundary
             await closeAndFlush().ConfigureAwait(false);
         }
         // codeql[cs/catch-of-all-exceptions] Logger shutdown must not replace the process result or skip console restoration.
-        catch (Exception ex)
+        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
         {
             ObserveShutdownFailure(exitCode, ex);
         }
@@ -190,14 +191,14 @@ internal static class BackFillerProcessBoundary
                 restoreConsole();
             }
             // codeql[cs/catch-of-all-exceptions] Console restoration must not replace the process result.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 try
                 {
                     SelfLog.WriteLine("BackFiller console restore failed: {0}", ex);
                 }
                 // codeql[cs/catch-of-all-exceptions] Console restoration must not replace the process result.
-                catch (Exception)
+                catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
                 {
                     // The process boundary must still return the chosen exit code.
                 }
@@ -226,7 +227,7 @@ internal static class BackFillerProcessBoundary
             SelfLog.WriteLine(message, exception);
         }
         // codeql[cs/catch-of-all-exceptions] A secondary shutdown diagnostic must not replace the process result.
-        catch (Exception)
+        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
         {
             // The chosen exit code remains the process result.
         }

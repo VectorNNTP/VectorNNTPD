@@ -1,4 +1,5 @@
 using MySqlConnector;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.NntpDb
 {
@@ -14,33 +15,25 @@ namespace VectorNNTPD.Common.NntpDb
         /// <inheritdoc />
         public async Task<INntpDbSession> OpenAsync(string connectionString, CancellationToken cancellationToken)
         {
-            var connection = CreateConnection(connectionString);
+            await using var ownership = new AsyncDisposableOwnership<MySqlConnection>(CreateConnection(connectionString));
             try
             {
-                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-                return new MySqlNntpDbSession(connection);
+                await ownership.Resource.OpenAsync(cancellationToken).ConfigureAwait(false);
+                return new MySqlNntpDbSession(ownership.Transfer());
             }
             catch (MySqlException ex) when (IsAuthenticationFailure(ex))
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbAuthenticationException("MySQL authentication failed.", ex);
             }
             catch (ArgumentException ex)
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbConfigurationException(ex.Message, ex);
             }
             catch (Exception ex) when (ex is not OperationCanceledException
                 and not NntpDbAuthenticationException
                 and not NntpDbConfigurationException)
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbUnavailableException("MySQL connection failed.", ex);
-            }
-            catch
-            {
-                await connection.DisposeAsync().ConfigureAwait(false);
-                throw;
             }
         }
 

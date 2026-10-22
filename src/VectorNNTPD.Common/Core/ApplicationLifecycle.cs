@@ -195,7 +195,7 @@ namespace VectorNNTPD.Common.Core
                     throw new TimeoutException(
                         $"Application startup timed out after {_options.StartupTimeout}.");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     LifecycleLogMessages.StartupFailed(_logger, ex, sw.ElapsedMilliseconds);
                     await FailStartupCleanupAsync().ConfigureAwait(false);
@@ -310,7 +310,7 @@ namespace VectorNNTPD.Common.Core
                 // Complete graceful stop before marking disposed.
                 await StopAsync(CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 shutdownFailure = ex;
                 LifecycleLogMessages.DisposalShutdownFailure(_logger, ex);
@@ -363,7 +363,7 @@ namespace VectorNNTPD.Common.Core
                 {
                     await stop.ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     // The original stop/dispose caller observes the failure; subsequent dispose awaits are idempotent.
                 }
@@ -373,7 +373,7 @@ namespace VectorNNTPD.Common.Core
             {
                 await _disposeCompleted.Task.ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // Idempotent subsequent dispose: do not rethrow the original failure.
             }
@@ -425,7 +425,7 @@ namespace VectorNNTPD.Common.Core
                     _stoppedTcs.TrySetResult();
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     LifecycleLogMessages.ShutdownFailed(_logger, ex, sw.ElapsedMilliseconds);
                     Transition(ApplicationState.Stopped);
@@ -481,7 +481,7 @@ namespace VectorNNTPD.Common.Core
                     await _serviceManager.StopAsync(CancellationToken.None).ConfigureAwait(false);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 LifecycleLogMessages.StartupFailureCleanupError(_logger, ex);
             }
@@ -542,7 +542,7 @@ namespace VectorNNTPD.Common.Core
             {
                 StateChanged?.Invoke(this, new ApplicationStateChangedEventArgs(from, to));
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 LifecycleLogMessages.StateChangedHandlerFailed(_logger, ex, from, to);
             }

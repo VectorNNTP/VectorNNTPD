@@ -143,7 +143,7 @@ namespace VectorNNTPD.Common.Core
                         await RollbackStartedAsync(CancellationToken.None).ConfigureAwait(false);
                         throw;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         ServiceManagerLogMessages.ServiceStartupFailed(
                             _logger,
@@ -353,7 +353,7 @@ namespace VectorNNTPD.Common.Core
                                 _started.Remove(service);
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                         {
                             ServiceManagerLogMessages.ServiceShutdownFailed(
                                 _logger,
@@ -440,7 +440,7 @@ namespace VectorNNTPD.Common.Core
                     await service.StopAsync(timeoutCts.Token).ConfigureAwait(false);
                     ServiceManagerLogMessages.ServiceRolledBack(_logger, service.Name);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ServiceManagerLogMessages.ServiceRollbackFailed(_logger, ex, service.Name);
                 }
@@ -594,7 +594,7 @@ namespace VectorNNTPD.Common.Core
                 {
                     // Expected.
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ServiceManagerLogMessages.ExecutionMonitorExceptionDuringShutdown(_logger, ex);
                 }

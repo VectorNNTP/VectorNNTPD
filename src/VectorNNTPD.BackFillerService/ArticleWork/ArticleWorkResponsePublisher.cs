@@ -163,7 +163,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
                 ArticleWorkLogMessages.PublisherRunning(_logger, Generation);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherStartFailed(_logger, ex.Message);
                 _connections.ConnectionReplaced -= OnConnectionReplaced;
@@ -229,7 +229,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await replace.ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A publish or replacement failure must not escape this publisher boundary.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherReplaceFailed(_logger, ex.Message);
             }
@@ -536,7 +536,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await ReplaceChannelAsync(startup: false, _runCts.Token).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A publish or replacement failure must not escape this publisher boundary.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherReplaceFailed(_logger, ex.Message);
             }
@@ -615,20 +615,16 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var channel = await handle.Connection
                 .CreatePublishChannelAsync(handle.Generation, cancellationToken)
                 .ConfigureAwait(false);
-            try
+            await using var ownership = new AsyncDisposableOwnership<IRabbitMqPublishChannel>(channel);
+            if (!handle.IsCurrent || ownership.Resource.Generation != handle.Generation)
             {
-                if (!handle.IsCurrent || channel.Generation != handle.Generation)
-                {
-                    throw new InvalidOperationException("RabbitMQ publish channel generation is no longer current.");
-                }
+                throw new InvalidOperationException("RabbitMQ publish channel generation is no longer current.");
+            }
 
-                await InstallPublishChannelAsync(channel).ConfigureAwait(false);
-            }
-            catch
-            {
-                await channel.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
+            // Install either stores the channel or disposes it as stale; Transfer after success
+            // so this ownership does not dispose again.
+            await InstallPublishChannelAsync(ownership.Resource).ConfigureAwait(false);
+            ownership.Transfer();
         }
 
         /// <summary>Clears and disposes the installed publication channel.</summary>

@@ -1,5 +1,6 @@
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -129,7 +130,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                     return result;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     RememberCommandTimestamp(ex, lease.Session.ArticleCommandStartedTimestamp);
                     throw;

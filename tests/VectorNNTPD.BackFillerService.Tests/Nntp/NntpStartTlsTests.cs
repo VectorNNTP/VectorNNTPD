@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
 using System.Net;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {
@@ -489,7 +490,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     await client.ConnectAsync(provider.Host, provider.Port, connectCts.Token).ConfigureAwait(false);
                     return new DisposeCountingStream(client, () => Interlocked.Increment(ref _disposeCalls));
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     client.Dispose();
                     throw;
@@ -696,7 +697,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     await _accept.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
                 // codeql[cs/catch-of-all-exceptions] Stopping the listener can fault the accept task with any transport exception.
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     /* Disposal still releases the listener and the cancellation source. */
                 }

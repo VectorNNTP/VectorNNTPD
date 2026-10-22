@@ -2,6 +2,7 @@ using Serilog.Core;
 using Serilog.Debugging;
 using Serilog.Events;
 using Serilog.Sinks.File;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Logging
 {
@@ -99,7 +100,7 @@ namespace VectorNNTPD.Common.Logging
                     FlushRequired();
                 }
                 // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ReportDiagnostic("Periodic file flush failed during disposal.", ex);
                 }
@@ -110,7 +111,7 @@ namespace VectorNNTPD.Common.Logging
                 (_sink as IDisposable)?.Dispose();
             }
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReportDiagnostic("Periodic file sink disposal failed.", ex);
             }
@@ -120,7 +121,7 @@ namespace VectorNNTPD.Common.Logging
                 _timer.Dispose();
             }
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReportDiagnostic("Periodic file flush timer disposal failed.", ex);
             }
@@ -150,7 +151,7 @@ namespace VectorNNTPD.Common.Logging
                 }
             }
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReportDiagnostic("Periodic file flush timer callback failed.", ex);
             }
@@ -167,7 +168,7 @@ namespace VectorNNTPD.Common.Logging
                 SelfLog.WriteLine("{0} {1}", message, exception);
             }
             // codeql[cs/catch-of-all-exceptions] A flush, dispose, or diagnostic failure must not escape this sink or skip the remaining cleanup.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // The diagnostic channel is best-effort. It must not recurse into this sink or fault the timer thread.
             }
@@ -191,7 +192,7 @@ namespace VectorNNTPD.Common.Logging
             {
                 _flushable.FlushToDisk();
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // A failed checkpoint must stay pending for the next tick and for disposal.
                 Interlocked.Exchange(ref _flushRequired, 1);

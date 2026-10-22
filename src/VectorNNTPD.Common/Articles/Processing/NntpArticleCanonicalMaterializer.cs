@@ -1,5 +1,6 @@
 using System.Buffers;
 using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Articles.Processing
 {
@@ -369,7 +370,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                     ? NntpArticleCanonicalMaterializeResult.Accepted(destination)
                     : NntpArticleCanonicalMaterializeResult.Accepted(destination, finalLength);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReturnRented(rentFrom, destination, ref returned);
                 throw;

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Acme.Protocol
 {
@@ -65,9 +66,9 @@ namespace VectorNNTPD.Common.Acme.Protocol
                 throw new CryptographicException("PKCS#8 DER account key is empty.");
             }
 
-            RSA rsa = RSA.Create();
-            try
+            using (var ownership = new DisposableOwnership<RSA>(RSA.Create()))
             {
+                var rsa = ownership.Resource;
                 rsa.ImportPkcs8PrivateKey(pkcs8Der, out int bytesRead);
                 if (bytesRead != pkcs8Der.Length)
                 {
@@ -75,12 +76,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
                         $"PKCS#8 import consumed {bytesRead} of {pkcs8Der.Length} bytes.");
                 }
 
-                return new AcmeAccountKey(rsa);
-            }
-            catch
-            {
-                rsa.Dispose();
-                throw;
+                return new AcmeAccountKey(ownership.Transfer());
             }
         }
 

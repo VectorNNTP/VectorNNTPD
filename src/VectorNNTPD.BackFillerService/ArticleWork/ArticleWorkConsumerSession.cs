@@ -2,6 +2,7 @@ using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.RabbitMq;
 using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
 {
@@ -346,7 +347,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             "Channel closed during consumer start."));
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.ConsumerStartFailed(_logger, _backbone, _queue, ex.Message);
                 if (channel is not null)
@@ -582,7 +583,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return true;
             }
             // codeql[cs/catch-of-all-exceptions] A session failure must be observed here so the consumer loop stays owned.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 return false;
             }
