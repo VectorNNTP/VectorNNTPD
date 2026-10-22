@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Core;
+
 namespace VectorNNTPD.StorageService.Storage.SegmentPools
 {
 
@@ -69,7 +71,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                     failure = "read-back did not match the probe payload.";
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
             {
                 failure = "write/read probe failed: " + ex.GetType().Name + ": " + ex.Message;
             }
@@ -86,7 +88,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                             failure = failure is null ? cleanup : failure + " " + cleanup;
                         }
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                     {
                         var cleanup = "probe cleanup failed: " + ex.GetType().Name + ": " + ex.Message;
                         failure = failure is null ? cleanup : failure + " " + cleanup;

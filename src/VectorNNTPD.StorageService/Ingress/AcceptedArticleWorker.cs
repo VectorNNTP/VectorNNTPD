@@ -255,7 +255,7 @@ namespace VectorNNTPD.StorageService.Ingress
                 {
                     await Task.WhenAll(pending).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                 {
                     AcceptedArticleWorkerLogMessages.ProcessingFailed(_logger, ex, "worker-pool");
                 }
@@ -373,7 +373,7 @@ namespace VectorNNTPD.StorageService.Ingress
                         held = null;
                         break;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         AcceptedArticleWorkerLogMessages.ProcessingFailed(
                             _logger,
@@ -383,7 +383,7 @@ namespace VectorNNTPD.StorageService.Ingress
                     }
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
             {
                 _counters?.NoteWorkerFault();
                 AcceptedArticleWorkerLogMessages.ProcessingFailed(_logger, ex, "worker");

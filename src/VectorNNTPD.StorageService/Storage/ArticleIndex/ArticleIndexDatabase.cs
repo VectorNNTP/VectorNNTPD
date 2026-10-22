@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Data;
 using Microsoft.Data.Sqlite;
 using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 {
@@ -676,7 +677,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         _readerGate?.Dispose();
                         _readerGate = null;
                     }
-                    catch (Exception cleanupEx)
+                    catch (Exception cleanupEx) when (!ExceptionHelpers.IsFatal(cleanupEx))
                     {
                         // Prefer the original initialization failure over cleanup faults.
                         ExpectedException.Ignore(cleanupEx);

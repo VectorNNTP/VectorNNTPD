@@ -480,7 +480,7 @@ namespace VectorNNTPD.StorageService.Listener
                 // Routine peer reset / transport tear-down after accept; not an operational failure.
                 StorageVatpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 StorageVatpListenerLogMessages.ConnectionFailed(_logger, remote, ex.GetType().Name);
             }
@@ -547,7 +547,7 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 ExpectedException.Ignore(ex);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // ProcessAsync logs expected connection faults and completes successfully; a faulted
                 // tracked task here is unexpected and must remain observable without aborting drain.

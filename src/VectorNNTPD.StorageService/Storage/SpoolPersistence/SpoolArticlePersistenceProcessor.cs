@@ -2,6 +2,7 @@ using System.Buffers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Storage.ArticleIndex;
@@ -183,7 +184,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ArticleIndexLogMessages.IndexFailedAfterStore(_logger, ex, outcome.Spool);
                     return AcceptedArticleProcessResult.Failed;

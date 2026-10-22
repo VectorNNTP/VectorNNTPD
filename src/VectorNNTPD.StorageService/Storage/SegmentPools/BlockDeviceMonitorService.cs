@@ -258,7 +258,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                             rate.CounterResets);
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                 {
                     NoteFailure(device.DeviceId, ex.GetType().Name + ": " + ex.Message);
                     unavailable.Add(device.DeviceId);

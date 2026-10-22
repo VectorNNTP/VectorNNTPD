@@ -289,7 +289,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 {
                     spool.Writer.Checkpoint(truncate: true);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ArticleIndexLogMessages.BatchFailed(_logger, ex, 0, 0);
                 }
@@ -460,7 +460,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 await _execution.ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
             {
                 ArticleIndexLogMessages.BatchFailed(_logger, ex, 0, 0);
             }

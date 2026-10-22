@@ -188,7 +188,7 @@ namespace VectorNNTPD.StorageService.NntpDb
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 StorageServerSharedConfigurationLogMessages.RefreshFailed(_logger, ex);
             }

@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.Common.Articles;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 {
@@ -237,7 +238,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 ExpectedException.Ignore(ex);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
             {
                 failure = ex;
             }
@@ -250,7 +251,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 ExpectedException.Ignore(ex);
             }
-            catch (Exception ex) when (failure is null)
+            catch (Exception ex) when (failure is null && !ExceptionHelpers.IsFatal(ex))
             {
                 failure = ex;
             }
@@ -268,7 +269,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     {
                         await FlushAsync(batch).ConfigureAwait(false);
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                     {
                         failure = ex;
                     }
@@ -412,13 +413,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             var read = StartRead(cancellationToken);
             using var interval = new IntervalSignal(this, remaining, cancellationToken);
             await Task.WhenAny(read, interval.Task).ConfigureAwait(false);
-            if (read.IsCompleted)
+            if (read.IsCompleted && !await ConsumeReadAsync(read).ConfigureAwait(false))
             {
-                if (!await ConsumeReadAsync(read).ConfigureAwait(false))
-                {
-                    Pull(batch);
-                    return false;
-                }
+                Pull(batch);
+                return false;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -578,12 +576,11 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 Publish();
                 CompleteWaiters(exception: null);
                 _batchesSinceCheckpoint++;
-                if (_batchesSinceCheckpoint >= ArticleIndexSettings.CheckpointEveryBatches || _database.WalBytes >= ArticleIndexSettings.WalCheckpointThresholdBytes)
+                if ((_batchesSinceCheckpoint >= ArticleIndexSettings.CheckpointEveryBatches
+                        || _database.WalBytes >= ArticleIndexSettings.WalCheckpointThresholdBytes)
+                    && Checkpoint(truncate: false))
                 {
-                    if (Checkpoint(truncate: false))
-                    {
-                        _batchesSinceCheckpoint = 0;
-                    }
+                    _batchesSinceCheckpoint = 0;
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -701,7 +698,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 {
                     _presence.Add(mutation.Id);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     _counters.NoteCachePublishFailure();
                     ArticleIndexLogMessages.CachePublishFailed(_logger, ex);

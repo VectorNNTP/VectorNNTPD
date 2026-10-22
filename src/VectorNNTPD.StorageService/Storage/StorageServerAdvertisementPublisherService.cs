@@ -148,7 +148,7 @@ namespace VectorNNTPD.StorageService.Storage
                     {
                         break;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         StorageServerAdvertisementLogMessages.PublishFailed(_logger, ex);
                     }
@@ -280,7 +280,7 @@ namespace VectorNNTPD.StorageService.Storage
                     Runtime.Fqdn,
                     Runtime.ServerId);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 StorageServerAdvertisementLogMessages.LifecycleAnnouncementFailed(
                     _logger,

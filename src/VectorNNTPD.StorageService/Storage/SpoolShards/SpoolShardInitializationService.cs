@@ -247,7 +247,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
                             present();
                         }
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                     {
                         Interlocked.CompareExchange(ref failure[0], ex.GetType().Name + ": " + ex.Message, null);
                         cancelSpool();
