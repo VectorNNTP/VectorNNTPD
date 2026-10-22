@@ -16,9 +16,13 @@ namespace VectorNNTPD.Common.Tests.Core
                 transferred = ownership.Transfer();
             }
 
-            Assert.Same(resource, transferred);
-            Assert.Equal(0, resource.DisposeCount);
-            transferred.Dispose();
+            // Transferred resource must be disposed even when an assertion fails.
+            using (transferred)
+            {
+                Assert.Same(resource, transferred);
+                Assert.Equal(0, resource.DisposeCount);
+            }
+
             Assert.Equal(1, resource.DisposeCount);
         }
 
@@ -41,10 +45,14 @@ namespace VectorNNTPD.Common.Tests.Core
         {
             var resource = new TrackingDisposable();
             using var ownership = new DisposableOwnership<TrackingDisposable>(resource);
-            Assert.Same(resource, ownership.Transfer());
-            Assert.Throws<ObjectDisposedException>(() => ownership.Transfer());
-            Assert.Equal(0, resource.DisposeCount);
-            resource.Dispose();
+            using (var transferred = ownership.Transfer())
+            {
+                Assert.Same(resource, transferred);
+                Assert.Throws<ObjectDisposedException>(() => ownership.Transfer());
+                Assert.Equal(0, resource.DisposeCount);
+            }
+
+            Assert.Equal(1, resource.DisposeCount);
         }
 
         /// <summary>Resource access after transfer fails closed.</summary>
@@ -53,9 +61,13 @@ namespace VectorNNTPD.Common.Tests.Core
         {
             var resource = new TrackingDisposable();
             using var ownership = new DisposableOwnership<TrackingDisposable>(resource);
-            _ = ownership.Transfer();
-            Assert.Throws<ObjectDisposedException>(() => _ = ownership.Resource);
-            resource.Dispose();
+            using (ownership.Transfer())
+            {
+                Assert.Throws<ObjectDisposedException>(() => _ = ownership.Resource);
+                Assert.Equal(0, resource.DisposeCount);
+            }
+
+            Assert.Equal(1, resource.DisposeCount);
         }
 
         /// <summary>Repeated dispose is a no-op after the first release.</summary>
@@ -63,7 +75,7 @@ namespace VectorNNTPD.Common.Tests.Core
         public void Repeated_dispose_is_safe()
         {
             var resource = new TrackingDisposable();
-            var ownership = new DisposableOwnership<TrackingDisposable>(resource);
+            using var ownership = new DisposableOwnership<TrackingDisposable>(resource);
             ownership.Dispose();
             ownership.Dispose();
             Assert.Equal(1, resource.DisposeCount);
@@ -88,9 +100,12 @@ namespace VectorNNTPD.Common.Tests.Core
                 transferred = ownership.Transfer();
             }
 
-            Assert.Same(resource, transferred);
-            Assert.Equal(0, resource.DisposeCount);
-            await transferred.DisposeAsync();
+            await using (transferred)
+            {
+                Assert.Same(resource, transferred);
+                Assert.Equal(0, resource.DisposeCount);
+            }
+
             Assert.Equal(1, resource.DisposeCount);
         }
 
@@ -100,10 +115,12 @@ namespace VectorNNTPD.Common.Tests.Core
         public async Task Async_dispose_without_transfer_disposes_once()
         {
             var resource = new TrackingAsyncDisposable();
-            var ownership = new AsyncDisposableOwnership<TrackingAsyncDisposable>(resource);
-            await ownership.DisposeAsync();
-            await ownership.DisposeAsync();
-            Assert.Equal(1, resource.DisposeCount);
+            await using (var ownership = new AsyncDisposableOwnership<TrackingAsyncDisposable>(resource))
+            {
+                await ownership.DisposeAsync();
+                await ownership.DisposeAsync();
+                Assert.Equal(1, resource.DisposeCount);
+            }
         }
 
         /// <summary>A second async transfer after the first fails closed.</summary>
@@ -113,26 +130,39 @@ namespace VectorNNTPD.Common.Tests.Core
         {
             var resource = new TrackingAsyncDisposable();
             await using var ownership = new AsyncDisposableOwnership<TrackingAsyncDisposable>(resource);
-            Assert.Same(resource, ownership.Transfer());
-            Assert.Throws<ObjectDisposedException>(() => ownership.Transfer());
-            Assert.Equal(0, resource.DisposeCount);
-            await resource.DisposeAsync();
+            await using (var transferred = ownership.Transfer())
+            {
+                Assert.Same(resource, transferred);
+                Assert.Throws<ObjectDisposedException>(() => ownership.Transfer());
+                Assert.Equal(0, resource.DisposeCount);
+            }
+
+            Assert.Equal(1, resource.DisposeCount);
         }
 
+        /// <summary>
+        /// Test disposable that counts every <see cref="Dispose"/> entry so ownership helpers
+        /// cannot silently double-dispose under overlapping <c>using</c> scopes.
+        /// </summary>
         private sealed class TrackingDisposable : IDisposable
         {
-            public int DisposeCount { get; private set; }
+            private int _disposeCount;
 
-            public void Dispose() => DisposeCount++;
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+            public void Dispose() => Interlocked.Increment(ref _disposeCount);
         }
 
+        /// <summary>Async counterpart of <see cref="TrackingDisposable"/>.</summary>
         private sealed class TrackingAsyncDisposable : IAsyncDisposable
         {
-            public int DisposeCount { get; private set; }
+            private int _disposeCount;
+
+            public int DisposeCount => Volatile.Read(ref _disposeCount);
 
             public ValueTask DisposeAsync()
             {
-                DisposeCount++;
+                Interlocked.Increment(ref _disposeCount);
                 return ValueTask.CompletedTask;
             }
         }
