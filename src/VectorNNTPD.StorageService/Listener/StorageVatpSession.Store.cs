@@ -61,10 +61,10 @@ namespace VectorNNTPD.StorageService.Listener
                 _limits);
             if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, held)))
             {
-                if (held)
+                if (admission is not null && held)
                 {
                     // Release the same gate that TryEnter acquired above.
-                    admission!.Exit();
+                    admission.Exit();
                 }
 
                 await WriteFailAsync(streamId, VatpErrorCode.StreamTableError, cancellationToken)
@@ -155,6 +155,9 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     store.PendingMeta = metaCopy;
                     store.AdmissionCts = CancellationTokenSource.CreateLinkedTokenSource(_runCancellation);
+                    // Log before starting the waiter. AdmissionWaiters can become visible as soon as
+                    // ReserveAsync blocks; observers that wait on waiters must already see this log.
+                    StorageVatpSessionLogMessages.StoreAdmissionWaiting(_logger, streamId, meta.ArtSize);
                     store.AdmissionTask = AdmitWhenCapacityAsync(streamId, store, meta.ArtSize, store.AdmissionCts.Token);
                     SyncAdmissionReadTimeout();
                 }
@@ -166,7 +169,6 @@ namespace VectorNNTPD.StorageService.Listener
                 return true;
             }
 
-            StorageVatpSessionLogMessages.StoreAdmissionWaiting(_logger, streamId, meta.ArtSize);
             return true;
         }
 
@@ -176,15 +178,15 @@ namespace VectorNNTPD.StorageService.Listener
             int bytes,
             CancellationToken cancellationToken)
         {
-            QueueReservation? reservation = null;
             var queue = _acceptedArticles;
+            if (queue is null)
+            {
+                return;
+            }
+
+            QueueReservation? reservation = null;
             try
             {
-                if (queue is null)
-                {
-                    return;
-                }
-
                 reservation = await queue.ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
                 byte[]? metaCopy;
                 lock (_storeGate)
@@ -243,14 +245,14 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 if (reservation is { } abandoned)
                 {
-                    queue?.Release(abandoned);
+                    queue.Release(abandoned);
                 }
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {
                 if (reservation is { } abandoned)
                 {
-                    queue?.Release(abandoned);
+                    queue.Release(abandoned);
                 }
             }
             finally

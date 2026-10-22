@@ -180,27 +180,14 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var left = Candidate("a-spool", available: 10 * Tebibyte, writeLatency: 12.5);
             var right = Candidate("b-spool", available: 10 * Tebibyte, writeLatency: 12.5);
-            Assert.False(SpoolSelector.WriteLatenciesDiffer(12.5, 12.5));
             Assert.Equal(0, SpoolSelector.Compare(left, right) + SpoolSelector.Compare(right, left));
             Assert.Equal("a-spool", Select(left, right)?.SpoolRoot);
+            Assert.Equal("a-spool", Select(right, left)?.SpoolRoot);
         }
 
         [Fact]
-        public void Nearly_equal_write_latencies_rank_as_equal()
+        public void Different_write_latencies_prefer_the_faster_spool()
         {
-            var left = 10.0;
-            var right = 10.0 + (SpoolSelector.WriteLatencyRankEpsilonMilliseconds / 2);
-            Assert.False(SpoolSelector.WriteLatenciesDiffer(left, right));
-
-            var a = Candidate("a-spool", available: 10 * Tebibyte, writeLatency: left);
-            var b = Candidate("b-spool", available: 10 * Tebibyte, writeLatency: right);
-            Assert.Equal("a-spool", Select(a, b)?.SpoolRoot);
-        }
-
-        [Fact]
-        public void Materially_different_write_latencies_prefer_the_faster_spool()
-        {
-            Assert.True(SpoolSelector.WriteLatenciesDiffer(1.0, 5.0));
             var slow = Candidate("z-slow", available: 10 * Tebibyte, active: 1, writeLatency: 40);
             var fast = Candidate("a-fast", available: 10 * Tebibyte, active: 1, writeLatency: 1);
             Assert.Equal("a-fast", Select(slow, fast)?.SpoolRoot);

@@ -92,7 +92,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
 
             await using var blocked = await TracingClient.ConnectAsync(host.Port);
             await blocked.SendStoreAndMetaAsync(waiter);
-            await WaitUntilAsync(() => host.Queue.AdmissionWaiters == 1);
+            await WaitUntilAsync(
+                () => host.Queue.AdmissionWaiters == 1
+                    && host.Logger.Text.Contains("waiting for queue capacity", StringComparison.Ordinal));
             Assert.Equal(0, host.Queue.ReservedBytes);
             Assert.Equal(budget, host.Queue.AccountedBytes);
             Assert.Equal(0, blocked.DataFrames);

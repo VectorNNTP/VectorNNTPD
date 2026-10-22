@@ -650,25 +650,33 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 }
                 catch
                 {
-                    scan?.Dispose();
-                    before?.Dispose();
-                    oldest?.Dispose();
-                    lookup?.Dispose();
-                    connection?.Dispose();
-                    for (var published = 0; published < i; published++)
+                    try
                     {
-                        var slot = _readers[published];
-                        slot.Lookup.Dispose();
-                        slot.Oldest.Dispose();
-                        slot.Before.Dispose();
-                        slot.Scan.Dispose();
-                        slot.Connection.Dispose();
+                        scan?.Dispose();
+                        before?.Dispose();
+                        oldest?.Dispose();
+                        lookup?.Dispose();
+                        connection?.Dispose();
+                        for (var published = 0; published < i; published++)
+                        {
+                            var slot = _readers[published];
+                            slot.Lookup.Dispose();
+                            slot.Oldest.Dispose();
+                            slot.Before.Dispose();
+                            slot.Scan.Dispose();
+                            slot.Connection.Dispose();
+                        }
+
+                        _readers = null;
+                        _freeReaders = null;
+                        _readerGate?.Dispose();
+                        _readerGate = null;
+                    }
+                    catch
+                    {
+                        // Prefer the original initialization failure over cleanup faults.
                     }
 
-                    _readers = null;
-                    _freeReaders = null;
-                    _readerGate?.Dispose();
-                    _readerGate = null;
                     throw;
                 }
             }

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
 {
@@ -18,7 +19,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
     /// <c>GetDiskFreeSpaceExW</c> on Windows and <c>statvfs</c> on Linux.
     /// This is filesystem capacity, not the block-device counter source.
     /// </summary>
-    internal sealed class FilesystemSpoolFreeSpaceProbe : ISpoolFreeSpaceProbe
+    internal sealed partial class FilesystemSpoolFreeSpaceProbe : ISpoolFreeSpaceProbe
     {
         /// <inheritdoc />
         public bool TryRead(string spoolRoot, out long totalBytes, out long availableBytes)
@@ -59,15 +60,18 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
             return false;
         }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool GetDiskFreeSpaceExW(
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        [SupportedOSPlatform("windows")]
+        private static partial bool GetDiskFreeSpaceExW(
             string directory,
             out ulong freeBytesAvailable,
             out ulong totalNumberOfBytes,
             out ulong totalNumberOfFreeBytes);
 
-        [DllImport("libc", SetLastError = true)]
-        private static extern int statvfs(string path, out LinuxStatVfs buffer);
+        [LibraryImport("libc", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+        [SupportedOSPlatform("linux")]
+        private static partial int statvfs(string path, out LinuxStatVfs buffer);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct LinuxStatVfs

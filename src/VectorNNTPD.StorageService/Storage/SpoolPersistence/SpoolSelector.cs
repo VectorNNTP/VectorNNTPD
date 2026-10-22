@@ -196,30 +196,14 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                 && right.DeviceSampleFresh
                 && left.WriteLatencyMilliseconds is { } leftLatency
                 && right.WriteLatencyMilliseconds is { } rightLatency
-                && WriteLatenciesDiffer(leftLatency, rightLatency))
+                && leftLatency != rightLatency)
             {
                 return leftLatency < rightLatency ? -1 : 1;
             }
 
+            // Exact latency equality (or a missing sample) falls through to a deterministic path order.
             return string.CompareOrdinal(left.SpoolRoot, right.SpoolRoot);
         }
-
-        /// <summary>
-        /// Absolute epsilon (milliseconds) below which two write-latency samples rank as equal.
-        /// </summary>
-        /// <remarks>
-        /// Disk latency is reported in whole or fractional milliseconds. Values closer than
-        /// one nanosecond of equivalent time are treated as identical so ranking falls through
-        /// to the deterministic path compare instead of depending on floating-point noise.
-        /// </remarks>
-        internal const double WriteLatencyRankEpsilonMilliseconds = 1e-9;
-
-        /// <summary>
-        /// Returns whether two write-latency samples differ by more than
-        /// <see cref="WriteLatencyRankEpsilonMilliseconds"/>.
-        /// </summary>
-        internal static bool WriteLatenciesDiffer(double left, double right) =>
-            Math.Abs(left - right) > WriteLatencyRankEpsilonMilliseconds;
 
         /// <summary>Bytes that must separate two free-space figures before free space decides the rank.</summary>
         /// <param name="leftAvailable">Available bytes on the first spool.</param>
