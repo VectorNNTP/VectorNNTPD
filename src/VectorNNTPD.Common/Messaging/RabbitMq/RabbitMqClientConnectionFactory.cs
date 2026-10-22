@@ -50,14 +50,19 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             // across endpoints, so failover would reuse Hosts[0] as SNI for every dial.
             var endpoints = CreateAmqpTcpEndpoints(runtime);
             var connection = await factory.CreateConnectionAsync(endpoints, cancellationToken).ConfigureAwait(false);
+            IAsyncDisposable? pendingDispose = connection;
             try
             {
-                return new RabbitMqClientConnection(connection, runtime.VirtualHost, _logger);
+                var wrapped = new RabbitMqClientConnection(connection, runtime.VirtualHost, _logger);
+                pendingDispose = null;
+                return wrapped;
             }
-            catch
+            finally
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (pendingDispose is not null)
+                {
+                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
 

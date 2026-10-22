@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using VectorNNTPD.Common.Articles.Validation;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Tests.Articles.Validation
 {
@@ -149,7 +150,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Validation
                         Assert.Equal(expected[i], NntpMessageIdValidation.IsValidMessageId(tokens[i]));
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     error = ex;
                 }

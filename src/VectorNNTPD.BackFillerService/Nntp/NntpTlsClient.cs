@@ -76,6 +76,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             ArgumentNullException.ThrowIfNull(inner);
             var ssl = streamFactory?.Invoke(inner) ?? new SslStream(inner, leaveInnerStreamOpen: false);
+            SslStream? pendingDispose = ssl;
             try
             {
                 using var tlsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -84,12 +85,15 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         CreateClientOptions(host, serverCertificateValidationCallback),
                         tlsCts.Token)
                     .ConfigureAwait(false);
+                pendingDispose = null;
                 return ssl;
             }
-            catch
+            finally
             {
-                await ssl.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (pendingDispose is not null)
+                {
+                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
     }

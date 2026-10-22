@@ -4,6 +4,7 @@ using Xunit.Abstractions;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {
@@ -665,7 +666,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     await dispose.WaitAsync(TimeSpan.FromSeconds(2));
                     elapsed = Stopwatch.GetElapsedTime(started);
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     Release(poolServers);
                     await dispose.WaitAsync(TimeSpan.FromSeconds(5));
@@ -934,7 +935,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await dispose.WaitAsync(MeasureHangTimeout);
                 return Stopwatch.GetElapsedTime(started);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Release(servers);
                 await dispose.WaitAsync(TimeSpan.FromSeconds(5));

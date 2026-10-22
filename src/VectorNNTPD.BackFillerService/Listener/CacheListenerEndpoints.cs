@@ -1,4 +1,3 @@
-
 using System.Net;
 using System.Net.Sockets;
 using VectorNNTPD.Common.Networking.Listeners;
@@ -43,16 +42,17 @@ namespace VectorNNTPD.BackFillerService.Listener
                 socket.DualMode = dualMode;
             }
 
+            Socket? pendingDispose = socket;
             try
             {
                 socket.Bind(endpoint);
                 socket.Listen(512);
+                pendingDispose = null;
                 return socket;
             }
-            catch
+            finally
             {
-                socket.Dispose();
-                throw;
+                pendingDispose?.Dispose();
             }
         }
     }

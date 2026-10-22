@@ -4,6 +4,7 @@ using System.IO.Pipelines;
 using VectorNNTPD.BackFillerService.Nntp;
 using System.Net.Sockets;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 {
@@ -579,7 +580,7 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 }
             }
             // codeql[cs/catch-of-all-exceptions] The scripted peer must finish the pipe after any read or command failure.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 /* The caller observes the closed pipe rather than this task. */
             }

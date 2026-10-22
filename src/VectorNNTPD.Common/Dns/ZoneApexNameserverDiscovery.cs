@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Dns
 {
@@ -163,7 +164,7 @@ namespace VectorNNTPD.Common.Dns
                     return [.. servers];
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 s_recursiveResolverDiscoveryException = ex;
             }
@@ -359,7 +360,7 @@ namespace VectorNNTPD.Common.Dns
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (logger is not null && logger.IsEnabled(LogLevel.Debug))
                 {

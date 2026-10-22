@@ -1,5 +1,6 @@
 using VectorNNTPD.Common.Networking;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Cloudflare
 {
@@ -357,7 +358,7 @@ namespace VectorNNTPD.Common.Cloudflare
                     fqdn,
                     FailedStartCleanupTimeout);
             }
-            catch (Exception cleanupEx)
+            catch (Exception cleanupEx) when (!ExceptionHelpers.IsFatal(cleanupEx))
             {
                 CloudflareLogMessages.PostFailureCleanupFailed(_logger, cleanupEx, fqdn);
             }

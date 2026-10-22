@@ -5,6 +5,7 @@ using VectorNNTPD.Common.Articles;
 using CanonicalBufferLease = VectorNNTPD.Common.Articles.CanonicalArticleBuffer.CanonicalBufferLease;
 using VectorNNTPD.Common.Articles.Parsing;
 using NntpArticleIdentity = VectorNNTPD.Common.Articles.Processing.NntpArticleIdentity;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Retention
 {
@@ -496,7 +497,7 @@ namespace VectorNNTPD.BackFillerService.Retention
                     ArticleRetentionLogMessages.Retained(_logger, identity.ArticleIdHex, record.ArtSize, _retainedBytes);
                     return result;
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     if (entry is not null)
                     {

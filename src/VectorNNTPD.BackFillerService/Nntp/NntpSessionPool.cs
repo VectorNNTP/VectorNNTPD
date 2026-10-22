@@ -830,7 +830,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         continue;
                     }
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     try
                     {
@@ -1151,7 +1151,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     ShutdownObservations.Canceled(_logger, "session replenish");
                 }
                 // codeql[cs/catch-of-all-exceptions] Keepalive and replenishment failures must retire or log the session and must not escape the background task.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     NntpLogMessages.SessionReplenishFailed(_logger, _provider.Backbone, ex.Message);
                 }
@@ -1398,7 +1398,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                     await _leases.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     try
                     {
@@ -1726,7 +1726,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 connectionNumber = AllocateConnectionNumber();
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 Interlocked.Decrement(ref _created);
                 throw;
@@ -1737,7 +1737,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 session = new NntpProviderSession(_provider, _options, _logger, connectionNumber);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ReleaseUnregisteredReservation(connectionNumber);
                 throw;
@@ -1783,7 +1783,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     failure?.Reason ?? "NNTP connect failed.");
             }
             // codeql[cs/catch-of-all-exceptions] Failed creation must release its own reservation for every exception type and must not leave the session in the live set.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (registered && ex is not NntpProviderConnectException)
                 {
@@ -2284,7 +2284,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     ShutdownObservations.Canceled(_logger, "DATE keepalive");
                 }
                 // codeql[cs/catch-of-all-exceptions] Keepalive and replenishment failures must retire or log the session and must not escape the background task.
-                catch (Exception)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     // The loop still owns the session only while its registration is the published one and the session remains idle.
                     // A dequeue that already took it, or a replacement keepalive, retires or keeps it.

@@ -86,8 +86,10 @@ namespace VectorNNTPD.Common.Tests.Acme
         /// An initialization failure after a successful open propagates immediately, does not enter the
         /// contention retry loop, and disposes the opened stream.
         /// </summary>
-        [Fact]
-        public void Initialization_failure_propagates_and_disposes_stream()
+        /// <param name="failure">Operational or programming failure thrown during lock-file initialization.</param>
+        [Theory]
+        [MemberData(nameof(InitializationFailures))]
+        public void Initialization_failure_propagates_and_disposes_stream(Exception failure)
         {
             using var dir = new TempStateDir();
             var path = Path.Join(dir.Path, "init-fail.lock");
@@ -99,13 +101,12 @@ namespace VectorNNTPD.Common.Tests.Acme
                 Interlocked.Increment(ref openCount);
                 return new TrackingFileStream(p, () => Interlocked.Increment(ref disposed));
             };
-            AcmeExclusiveFileLock.InitializeLockFileForTests = _ =>
-                throw new IOException("simulated metadata write failure", unchecked((int)0x80070070));
+            AcmeExclusiveFileLock.InitializeLockFileForTests = _ => throw failure;
 
             try
             {
-                var ex = Assert.Throws<IOException>(() => AcmeExclusiveFileLock.Acquire(path, CancellationToken.None));
-                Assert.Equal("simulated metadata write failure", ex.Message);
+                var ex = Assert.Throws(failure.GetType(), () => AcmeExclusiveFileLock.Acquire(path, CancellationToken.None));
+                Assert.Same(failure, ex);
                 Assert.Equal(1, Volatile.Read(ref openCount));
                 Assert.Equal(1, Volatile.Read(ref disposed));
             }
@@ -115,6 +116,17 @@ namespace VectorNNTPD.Common.Tests.Acme
                 AcmeExclusiveFileLock.InitializeLockFileForTests = null;
             }
         }
+
+        /// <summary>
+        /// Representative initialization failures that must dispose the open stream and must not become
+        /// contention retries (ownership-transfer <c>finally</c>, not a filtered catch-all).
+        /// </summary>
+        public static TheoryData<Exception> InitializationFailures() =>
+        [
+            new IOException("simulated metadata write failure", unchecked((int)0x80070070)),
+            new InvalidOperationException("simulated programming failure during lock init"),
+            new UnauthorizedAccessException("simulated access denied during lock init"),
+        ];
 
         /// <summary>
         /// Synchronous and asynchronous issuance-lock acquisition classify a directory path the same way.

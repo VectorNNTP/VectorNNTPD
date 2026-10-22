@@ -127,19 +127,21 @@ namespace VectorNNTPD.Common.Acme
                 return false;
             }
 
-            // Open succeeded: dispose on initialization failure, otherwise transfer ownership
-            // to the returned lock. A finally/null pattern is avoided so initialization errors
-            // cannot be mistaken for open-time contention retries.
+            // Open succeeded: dispose on any initialization failure, otherwise transfer ownership
+            // to the returned lock. Ownership-transfer finally keeps cleanup on every failure path
+            // (including process-integrity failures) without a catch-all, and never returns false
+            // here — so init errors cannot be mistaken for open-time contention retries.
+            FileStream? pendingDispose = stream;
             try
             {
                 InitializeLockFile(stream);
                 acquired = new AcmeExclusiveFileLock(stream);
+                pendingDispose = null;
                 return true;
             }
-            catch
+            finally
             {
-                stream.Dispose();
-                throw;
+                pendingDispose?.Dispose();
             }
         }
 

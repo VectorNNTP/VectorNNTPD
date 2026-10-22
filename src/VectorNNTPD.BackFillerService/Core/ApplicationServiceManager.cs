@@ -311,7 +311,7 @@ namespace VectorNNTPD.BackFillerService.Core
                             ApplicationServiceManagerLogMessages.ServiceStopAbortedAfterBudget(_logger, service.Name);
                         }
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         ApplicationServiceManagerLogMessages.ServiceStopFailed(_logger, ex, service.Name);
                         failures.Add(ex);
@@ -383,7 +383,7 @@ namespace VectorNNTPD.BackFillerService.Core
                     await service.StopAsync(timeoutCts.Token).ConfigureAwait(false);
                 }
                 // codeql[cs/catch-of-all-exceptions] A service start or stop failure must be recorded without abandoning the remaining services.
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     ApplicationServiceManagerLogMessages.ServiceRollbackFailed(_logger, ex, service.Name);
                 }

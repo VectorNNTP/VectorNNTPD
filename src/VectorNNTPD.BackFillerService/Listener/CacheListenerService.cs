@@ -340,7 +340,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                 _journal.Record(BackFillerStartupStages.ListenerStarted);
                 _acceptTask = AcceptAllAsync(_runCts.Token);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 CacheListenerLogMessages.StartFailed(_logger, ex.Message);
                 await DisposeBoundResourcesAsync().ConfigureAwait(false);
@@ -822,7 +822,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                 CacheListenerLogMessages.ConnectionIoClosed(_logger, remote, ex.GetType().Name);
             }
             // codeql[cs/catch-of-all-exceptions] One connection failure must be logged and must not leave the accept loop with an unobserved task fault.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 CacheListenerLogMessages.ConnectionFailed(_logger, remote, ex.GetType().Name);
             }
@@ -940,14 +940,14 @@ namespace VectorNNTPD.BackFillerService.Listener
                 await Task.WhenAll(tasks).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A connection-task fault during drain must not skip the remaining listener cleanup.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 try
                 {
                     CacheListenerLogMessages.ConnectionDrainFailed(_logger, ex.GetBaseException().GetType().Name);
                 }
                 // codeql[cs/catch-of-all-exceptions] A connection-task fault during drain must not skip the remaining listener cleanup.
-                catch (Exception logFailure)
+                catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
                 {
                     try
                     {
@@ -956,7 +956,7 @@ namespace VectorNNTPD.BackFillerService.Listener
                             logFailure);
                     }
                     // codeql[cs/catch-of-all-exceptions] A connection-task fault during drain must not skip the remaining listener cleanup.
-                    catch (Exception)
+                    catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
                     {
                         // Drain logging is best-effort. Remaining dispose work still runs.
                     }

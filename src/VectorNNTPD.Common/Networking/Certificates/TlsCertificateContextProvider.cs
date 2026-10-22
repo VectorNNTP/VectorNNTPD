@@ -2,6 +2,7 @@ using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Networking.Certificates
 {
@@ -339,7 +340,7 @@ namespace VectorNNTPD.Common.Networking.Certificates
                 var generation = Interlocked.Increment(ref s_generation);
                 return new TlsCertificateHolder(context, leaf, collection, generation);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 foreach (var cert in collection)
                 {

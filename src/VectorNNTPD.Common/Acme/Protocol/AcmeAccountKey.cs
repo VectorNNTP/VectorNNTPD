@@ -66,6 +66,7 @@ namespace VectorNNTPD.Common.Acme.Protocol
             }
 
             RSA rsa = RSA.Create();
+            RSA? pendingDispose = rsa;
             try
             {
                 rsa.ImportPkcs8PrivateKey(pkcs8Der, out int bytesRead);
@@ -75,12 +76,12 @@ namespace VectorNNTPD.Common.Acme.Protocol
                         $"PKCS#8 import consumed {bytesRead} of {pkcs8Der.Length} bytes.");
                 }
 
+                pendingDispose = null;
                 return new AcmeAccountKey(rsa);
             }
-            catch
+            finally
             {
-                rsa.Dispose();
-                throw;
+                pendingDispose?.Dispose();
             }
         }
 

@@ -15,32 +15,33 @@ namespace VectorNNTPD.Common.NntpDb
         public async Task<INntpDbSession> OpenAsync(string connectionString, CancellationToken cancellationToken)
         {
             var connection = CreateConnection(connectionString);
+            MySqlConnection? pendingDispose = connection;
             try
             {
                 await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+                pendingDispose = null;
                 return new MySqlNntpDbSession(connection);
             }
             catch (MySqlException ex) when (IsAuthenticationFailure(ex))
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbAuthenticationException("MySQL authentication failed.", ex);
             }
             catch (ArgumentException ex)
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbConfigurationException(ex.Message, ex);
             }
             catch (Exception ex) when (ex is not OperationCanceledException
                 and not NntpDbAuthenticationException
                 and not NntpDbConfigurationException)
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
                 throw new NntpDbUnavailableException("MySQL connection failed.", ex);
             }
-            catch
+            finally
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (pendingDispose is not null)
+                {
+                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
 

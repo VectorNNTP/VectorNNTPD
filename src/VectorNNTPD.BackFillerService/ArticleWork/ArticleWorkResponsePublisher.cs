@@ -163,7 +163,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
                 ArticleWorkLogMessages.PublisherRunning(_logger, Generation);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherStartFailed(_logger, ex.Message);
                 _connections.ConnectionReplaced -= OnConnectionReplaced;
@@ -229,7 +229,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await replace.ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A publish or replacement failure must not escape this publisher boundary.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherReplaceFailed(_logger, ex.Message);
             }
@@ -536,7 +536,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await ReplaceChannelAsync(startup: false, _runCts.Token).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A publish or replacement failure must not escape this publisher boundary.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.PublisherReplaceFailed(_logger, ex.Message);
             }
@@ -615,6 +615,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             var channel = await handle.Connection
                 .CreatePublishChannelAsync(handle.Generation, cancellationToken)
                 .ConfigureAwait(false);
+            IAsyncDisposable? pendingDispose = channel;
             try
             {
                 if (!handle.IsCurrent || channel.Generation != handle.Generation)
@@ -623,11 +624,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 }
 
                 await InstallPublishChannelAsync(channel).ConfigureAwait(false);
+                pendingDispose = null;
             }
-            catch
+            finally
             {
-                await channel.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (pendingDispose is not null)
+                {
+                    await pendingDispose.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
 

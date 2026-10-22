@@ -4,6 +4,7 @@ using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.RabbitMq;
 using VectorNNTPD.Common.Messaging.RabbitMq;
+using VectorNNTPD.Common.Core;
 
 
 namespace VectorNNTPD.BackFillerService.ArticleWork
@@ -240,7 +241,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await ReconcileSessionsAsync(cancellationToken).ConfigureAwait(false);
                 _reconcileLoop = RunReconcileLoopAsync(_reconcileCts.Token);
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 _connections.ConnectionReplaced -= OnConnectionReplaced;
                 _capacity.SnapshotPublished -= OnCapacitySnapshotPublished;
@@ -431,7 +432,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await replace.ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A background reconcile or replacement failure must be logged without faulting an unobserved task.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.ConsumerReplaceFailed(_logger, ex.Message);
             }
@@ -498,7 +499,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         throw;
                     }
                     // codeql[cs/catch-of-all-exceptions] A reconcile fault must stay inside this loop so membership recovery continues.
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         Interlocked.Increment(ref _unexpectedReconcileFaults);
                         ArticleWorkLogMessages.ConsumerReconcileFailed(_logger, ex.Message);
@@ -582,7 +583,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await ReconcileAsync(CancellationToken.None).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A background reconcile or replacement failure must be logged without faulting an unobserved task.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.ConsumerReplaceFailed(_logger, ex.Message);
             }
@@ -687,7 +688,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     started.Add(session);
                 }
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 foreach (var session in started)
                 {
@@ -1129,7 +1130,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await ReconcileSessionsAsync(CancellationToken.None).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A background reconcile or replacement failure must be logged without faulting an unobserved task.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.ConsumerReplaceFailed(_logger, ex.Message);
             }
@@ -1158,7 +1159,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 await RunReplacementBodyAsync().ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] A background reconcile or replacement failure must be logged without faulting an unobserved task.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 ArticleWorkLogMessages.ConsumerReplaceFailed(_logger, ex.Message);
             }

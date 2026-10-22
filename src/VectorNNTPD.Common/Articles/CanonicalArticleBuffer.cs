@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Threading;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Articles
 {
@@ -218,7 +219,7 @@ namespace VectorNNTPD.Common.Articles
                     lease = new CanonicalBufferLease(buffer);
                     return true;
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     buffer.ReleaseConsumer();
                     throw;

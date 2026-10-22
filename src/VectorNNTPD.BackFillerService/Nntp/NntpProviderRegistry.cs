@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -509,14 +510,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 NntpLogMessages.SessionReplenishFailed(_logger, "consumers", ex.Message);
             }
             // codeql[cs/catch-of-all-exceptions] An observed reconcile task must log every failure, including a failure of that log.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 try
                 {
                     NntpLogMessages.SessionReplenishFailed(_logger, "consumers", ex.Message);
                 }
                 // codeql[cs/catch-of-all-exceptions] An observed reconcile task must log every failure, including a failure of that log.
-                catch (Exception logFailure)
+                catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
                 {
                     try
                     {
@@ -525,7 +526,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             logFailure);
                     }
                     // codeql[cs/catch-of-all-exceptions] An observed reconcile task must log every failure, including a failure of that log.
-                    catch (Exception)
+                    catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
                     {
                         // The reconcile task is unobserved. Its failure must not become an unhandled task exception.
                     }

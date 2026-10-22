@@ -5,6 +5,7 @@ using VectorNNTPD.Common.Configuration;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.NntpDb;
 using VectorNNTPD.Common.Acme;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Accounts
 {
@@ -329,7 +330,7 @@ namespace VectorNNTPD.BackFillerService.Accounts
             {
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (required && !_hadSuccessfulSnapshot)
                 {

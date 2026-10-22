@@ -1,6 +1,7 @@
 using System.Globalization;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
 {
@@ -110,7 +111,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     await _channel.CloseAsync().ConfigureAwait(false);
                 }
             }
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
             }
 

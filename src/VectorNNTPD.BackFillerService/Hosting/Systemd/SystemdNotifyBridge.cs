@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting.Systemd;
 using Serilog.Debugging;
 using VectorNNTPD.BackFillerService.Logging;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Hosting.Systemd
 {
@@ -113,21 +114,21 @@ namespace VectorNNTPD.BackFillerService.Hosting.Systemd
                 SystemdLogMessages.NotificationSent(_logger, label);
             }
             // codeql[cs/catch-of-all-exceptions] A notification or diagnostic failure must not escape the notifier.
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 try
                 {
                     SystemdLogMessages.NotificationFailed(_logger, ex, label);
                 }
                 // codeql[cs/catch-of-all-exceptions] A notification or diagnostic failure must not escape the notifier.
-                catch (Exception logFailure)
+                catch (Exception logFailure) when (!ExceptionHelpers.IsFatal(logFailure))
                 {
                     try
                     {
                         SelfLog.WriteLine("systemd notification failure log failed: {0}", logFailure);
                     }
                     // codeql[cs/catch-of-all-exceptions] A notification or diagnostic failure must not escape the notifier.
-                    catch (Exception)
+                    catch (Exception selfLogFailure) when (!ExceptionHelpers.IsFatal(selfLogFailure))
                     {
                         // Notification and its diagnostic log are both best-effort.
                     }

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
 {
@@ -417,7 +418,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         {
                             await ReadByteAfterPendingCarriageReturnAsync(timeoutCts.Token).ConfigureAwait(false);
                         }
-                        catch (Exception)
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                         {
                             _offset = 0;
                             _count = 0;
@@ -747,7 +748,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     _payloadScratch.AsSpan(0, _payloadCount).CopyTo(next);
                 }
             }
-            catch
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 _payloadPool.Return(next);
                 throw;

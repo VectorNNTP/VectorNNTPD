@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using VectorNNTPD.BackFillerService.Networking;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.Configuration;
+using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Configuration
 {
@@ -416,7 +417,7 @@ namespace VectorNNTPD.BackFillerService.Configuration
                 totalPhysicalMemoryBytes = _physicalMemoryProvider.GetTotalPhysicalMemoryBytes();
             }
             // codeql[cs/catch-of-all-exceptions] Validation must report every rejected value and continue checking the remaining options.
-            catch (Exception)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 failures.Add(
                     $"The host must have at least {BackFillerArticleRetentionOptions.MinimumPhysicalMemoryGibibytes} GiB ({BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes} bytes) of physical RAM, but total physical memory could not be determined.");

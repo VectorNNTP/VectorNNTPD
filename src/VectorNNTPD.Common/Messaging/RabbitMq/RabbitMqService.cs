@@ -348,7 +348,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     if (attempt == 1)
                     {
@@ -447,7 +447,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
                 return live.Current.Generation;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 if (!installed && connection is not null)
                 {
@@ -880,7 +880,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
                 await connection.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 RabbitMqLogMessages.ConnectionDisposeFailed(_logger, ex);
             }

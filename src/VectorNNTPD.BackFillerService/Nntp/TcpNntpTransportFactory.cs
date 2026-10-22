@@ -44,6 +44,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             ArgumentNullException.ThrowIfNull(options);
 
             var client = new TcpClient();
+            TcpClient? pendingClient = client;
 
             try
             {
@@ -66,6 +67,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 Stream stream = client.GetStream();
                 if (!provider.UseTls)
                 {
+                    pendingClient = null;
                     return new TcpOwnedStream(client, stream);
                 }
 
@@ -76,12 +78,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         options.ServerCertificateValidationCallback,
                         cancellationToken)
                     .ConfigureAwait(false);
+                pendingClient = null;
                 return new TcpOwnedStream(client, ssl);
             }
-            catch
+            finally
             {
-                client.Dispose();
-                throw;
+                pendingClient?.Dispose();
             }
         }
 
