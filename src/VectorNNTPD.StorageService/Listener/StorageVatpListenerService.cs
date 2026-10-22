@@ -272,8 +272,9 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     await accept.ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
 
@@ -459,8 +460,9 @@ namespace VectorNNTPD.StorageService.Listener
                     storeAdmission: _storeAdmission);
                 await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
             catch (AuthenticationException)
             {
@@ -475,6 +477,8 @@ namespace VectorNNTPD.StorageService.Listener
             }
             catch (IOException)
             {
+                // Routine peer reset / transport tear-down after accept; not an operational failure.
+                StorageVatpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
             }
             catch (Exception ex)
             {
@@ -515,8 +519,10 @@ namespace VectorNNTPD.StorageService.Listener
                     {
                         socket.Dispose();
                     }
-                    catch (Exception)
+                    catch (Exception ex) when (ex is ObjectDisposedException or System.Net.Sockets.SocketException)
                     {
+                        // Concurrent retire may dispose the same listen socket twice.
+                        ExpectedException.Ignore(ex);
                     }
                 }
 
@@ -534,10 +540,47 @@ namespace VectorNNTPD.StorageService.Listener
 
             try
             {
+                // Wait for every tracked connection so one fault cannot skip cleanup of the others.
                 await Task.WhenAll(tasks).ConfigureAwait(false);
             }
-            catch (Exception)
+            catch (OperationCanceledException ex)
             {
+                ExpectedException.Ignore(ex);
+            }
+            catch (Exception ex)
+            {
+                // ProcessAsync logs expected connection faults and completes successfully; a faulted
+                // tracked task here is unexpected and must remain observable without aborting drain.
+                LogUnexpectedDrainFailures(tasks, ex);
+            }
+        }
+
+        private void LogUnexpectedDrainFailures(Task[] tasks, Exception awaitException)
+        {
+            var logged = false;
+            foreach (var task in tasks)
+            {
+                if (task.Exception is null)
+                {
+                    continue;
+                }
+
+                foreach (var inner in task.Exception.Flatten().InnerExceptions)
+                {
+                    if (inner is OperationCanceledException oce)
+                    {
+                        ExpectedException.Ignore(oce);
+                        continue;
+                    }
+
+                    logged = true;
+                    StorageVatpListenerLogMessages.ConnectionDrainFailed(_logger, inner);
+                }
+            }
+
+            if (!logged)
+            {
+                StorageVatpListenerLogMessages.ConnectionDrainFailed(_logger, awaitException);
             }
         }
 

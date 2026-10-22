@@ -8,6 +8,7 @@ using VectorNNTPD.Common.Transport.ArticleTransfer;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Listener;
+using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
@@ -806,8 +807,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 {
                     await _run;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 _cts.Dispose();

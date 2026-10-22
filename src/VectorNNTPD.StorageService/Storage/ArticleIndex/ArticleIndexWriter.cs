@@ -233,8 +233,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     }
                 }
             }
-            catch (ChannelClosedException)
+            catch (ChannelClosedException ex)
             {
+                ExpectedException.Ignore(ex);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -245,8 +246,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 await ObservePendingReadAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
             catch (Exception ex) when (failure is null)
             {
@@ -476,8 +478,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 await read.ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 

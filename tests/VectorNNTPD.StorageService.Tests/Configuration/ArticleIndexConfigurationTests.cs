@@ -28,7 +28,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
         [Fact]
         public void Explicit_relative_and_absolute_directories_bind()
         {
-            var absolute = Path.Combine(Path.GetTempPath(), "vectornntp-db-absolute");
+            var absolute = Path.Join(Path.GetTempPath(), "vectornntp-db-absolute");
             var configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -77,14 +77,14 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
         [Fact]
         public void DbDir_nested_with_a_spool_fails_validation()
         {
-            var spool = Path.Combine(Path.GetTempPath(), "vectornntp-spool-overlap-" + Guid.NewGuid().ToString("N"));
+            var spool = Path.Join(Path.GetTempPath(), "vectornntp-spool-overlap-" + Guid.NewGuid().ToString("N"));
             var options = StorageServerTestOptions.CreateValid();
             options.SegmentPools.Directories = [spool];
             options.DbDir = spool;
             var same = new StorageServerOptionsValidator().Validate(null, options);
             Assert.Contains(same.Failures!, static failure => failure.Contains("does not fall back", StringComparison.Ordinal));
 
-            options.DbDir = Path.Combine(spool, "db");
+            options.DbDir = Path.Join(spool, "db");
             var child = new StorageServerOptionsValidator().Validate(null, options);
             Assert.Contains(child.Failures!, static failure => failure.Contains("StorageServer:DbDir must not", StringComparison.Ordinal));
         }
@@ -93,7 +93,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
         public void Shipped_json_sets_DbDir_to_db()
         {
             var root = FindRepositoryRoot();
-            var json = File.ReadAllText(Path.Combine(root, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json"));
+            var json = File.ReadAllText(Path.Join(root, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json"));
             Assert.Contains("\"DbDir\": \"db\"", json, StringComparison.Ordinal);
         }
 
@@ -113,7 +113,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
                 Assert.StartsWith(expected, service.DatabasePath, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("article-index-", service.DatabasePath, StringComparison.Ordinal);
                 Assert.True(File.Exists(service.DatabasePath));
-                Assert.True(File.Exists(Path.Combine(spool, ArticleIndexSettings.SpoolIdentityFileName)));
+                Assert.True(File.Exists(Path.Join(spool, ArticleIndexSettings.SpoolIdentityFileName)));
                 var path = service.DatabasePath;
                 await service.StopAsync(CancellationToken.None);
                 var again = ArticleIndexTestSupport.Create(name, ArticleIndexTestSupport.Catalog(spool));
@@ -136,7 +136,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
         [Fact]
         public async Task Startup_fails_when_DbDir_is_a_file_and_does_not_substitute_a_spool()
         {
-            var file = Path.Combine(Path.GetTempPath(), "vectornntp-db-file-" + Guid.NewGuid().ToString("N"));
+            var file = Path.Join(Path.GetTempPath(), "vectornntp-db-file-" + Guid.NewGuid().ToString("N"));
             await File.WriteAllBytesAsync(file, [1]);
             var service = ArticleIndexTestSupport.Create(file);
             try
@@ -157,7 +157,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null)
             {
-                if (File.Exists(Path.Combine(directory.FullName, "VectorNNTPD.slnx")))
+                if (File.Exists(Path.Join(directory.FullName, "VectorNNTPD.slnx")))
                 {
                     return directory.FullName;
                 }

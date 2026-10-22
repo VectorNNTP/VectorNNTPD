@@ -111,7 +111,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
                     }
                 }
 
-                combined = Path.Combine(combined, segment.ToString());
+                combined = Path.Join(combined, segment.ToString());
                 if (slash < 0)
                 {
                     break;

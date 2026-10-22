@@ -317,7 +317,7 @@ namespace VectorNNTPD.StorageService.Listener
             var previous = Volatile.Read(ref _clientWriteEndedAt);
             if (previous != 0 && !afterLoopWait)
             {
-                NoteGap(now - previous, ref _sendGapLt20Us, ref _sendGapLt100Us, ref _sendGapLt1Ms, ref _sendGapGe1Ms);
+                NoteSendGap(now - previous);
             }
 
             if (readyBehind > 0)
@@ -525,26 +525,117 @@ namespace VectorNNTPD.StorageService.Listener
             }
         }
 
-        /// <summary>Buckets a same-clock gap. The buckets are mutually exclusive.</summary>
-        private static void NoteGap(long ticks, ref long lt20Us, ref long lt100Us, ref long lt1Ms, ref long ge1Ms)
+        /// <summary>Process-wide read-gap buckets. The buckets are mutually exclusive.</summary>
+        private static void NoteReadGap(long ticks)
         {
             var microseconds = ticks * 1_000_000d / Stopwatch.Frequency;
             if (microseconds < 20)
             {
-                Interlocked.Increment(ref lt20Us);
+                Interlocked.Increment(ref _readGapLt20Us);
             }
             else if (microseconds < 100)
             {
-                Interlocked.Increment(ref lt100Us);
+                Interlocked.Increment(ref _readGapLt100Us);
             }
             else if (microseconds < 1_000)
             {
-                Interlocked.Increment(ref lt1Ms);
+                Interlocked.Increment(ref _readGapLt1Ms);
             }
             else
             {
-                Interlocked.Increment(ref ge1Ms);
+                Interlocked.Increment(ref _readGapGe1Ms);
             }
+        }
+
+        /// <summary>Process-wide send-gap buckets used by the bench client write markers.</summary>
+        private static void NoteSendGap(long ticks)
+        {
+            var microseconds = ticks * 1_000_000d / Stopwatch.Frequency;
+            if (microseconds < 20)
+            {
+                Interlocked.Increment(ref _sendGapLt20Us);
+            }
+            else if (microseconds < 100)
+            {
+                Interlocked.Increment(ref _sendGapLt100Us);
+            }
+            else if (microseconds < 1_000)
+            {
+                Interlocked.Increment(ref _sendGapLt1Ms);
+            }
+            else
+            {
+                Interlocked.Increment(ref _sendGapGe1Ms);
+            }
+        }
+
+        private static void AddProcessTicks(long ticks) => Interlocked.Add(ref _processTicks, ticks);
+
+        private static void AddReadWaitTicks(long ticks) => Interlocked.Add(ref _readWaitTicks, ticks);
+
+        private static void AddParseTicks(long ticks) => Interlocked.Add(ref _parseTicks, ticks);
+
+        private static void AddWriteGateTicks(long ticks) => Interlocked.Add(ref _writeGateTicks, ticks);
+
+        private static void AddSessionCpu(long cpu100Ns) => Interlocked.Add(ref _sessionCpu100Ns, cpu100Ns);
+
+        private static void NoteIncompleteParse() => Interlocked.Increment(ref _incompleteParses);
+
+        private static void NoteFrameParsed() => Interlocked.Increment(ref _framesParsed);
+
+        private static void NoteCompact(long ticks, int bytes)
+        {
+            Interlocked.Add(ref _compactTicks, ticks);
+            Interlocked.Increment(ref _compactCount);
+            Interlocked.Add(ref _compactBytes, bytes);
+        }
+
+        private static void NoteReadOverlap(bool clientWriting, long readTicks)
+        {
+            if (clientWriting)
+            {
+                Interlocked.Add(ref _readDuringWriteTicks, readTicks);
+                Interlocked.Increment(ref _readDuringWriteCount);
+            }
+            else
+            {
+                Interlocked.Add(ref _readAfterWriteTicks, readTicks);
+                Interlocked.Increment(ref _readAfterWriteCount);
+            }
+        }
+
+        private static void SetServerIoPhase(int phase) => Volatile.Write(ref _serverIoPhase, phase);
+
+        private static bool IsClientWriteActive() => Volatile.Read(ref _clientWriteActive) != 0;
+
+        private static long ReadClientWriteEndedAt() => Volatile.Read(ref _clientWriteEndedAt);
+
+        private static void NoteDataAccept(long ticks, long copiedBytes)
+        {
+            Interlocked.Add(ref _dataAcceptTicks, ticks);
+            Interlocked.Increment(ref _dataAcceptCount);
+            if (copiedBytes > 0)
+            {
+                Interlocked.Add(ref _dataCopyBytes, copiedBytes);
+            }
+        }
+
+        private static void NoteWindowWrite(long ticks)
+        {
+            Interlocked.Add(ref _windowWriteTicks, ticks);
+            Interlocked.Increment(ref _windowWriteCount);
+        }
+
+        private static void NoteEndValidate(long ticks)
+        {
+            Interlocked.Add(ref _endValidateTicks, ticks);
+            Interlocked.Increment(ref _endValidateCount);
+        }
+
+        private static void NoteEnqueueToResult(long ticks)
+        {
+            Interlocked.Add(ref _enqueueToResultTicks, ticks);
+            Interlocked.Increment(ref _enqueueToResultCount);
         }
 
         private readonly IStorageVatpTransport _transport;
@@ -611,7 +702,7 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     if (markProcess)
                     {
-                        Interlocked.Add(ref _processTicks, Stopwatch.GetTimestamp() - processMark);
+                        AddProcessTicks(Stopwatch.GetTimestamp() - processMark);
                         markProcess = false;
                     }
 
@@ -626,43 +717,29 @@ namespace VectorNNTPD.StorageService.Listener
                     }
 
                     int bytesRead;
-                    var clientWriting = Volatile.Read(ref _clientWriteActive) != 0;
+                    var clientWriting = IsClientWriteActive();
                     if (!clientWriting)
                     {
-                        var ended = Volatile.Read(ref _clientWriteEndedAt);
+                        var ended = ReadClientWriteEndedAt();
                         if (ended != 0)
                         {
-                            NoteGap(
-                                Stopwatch.GetTimestamp() - ended,
-                                ref _readGapLt20Us,
-                                ref _readGapLt100Us,
-                                ref _readGapLt1Ms,
-                                ref _readGapGe1Ms);
+                            NoteReadGap(Stopwatch.GetTimestamp() - ended);
                         }
                     }
 
                     try
                     {
                         NotePartialAtRead(buffered);
-                        Volatile.Write(ref _serverIoPhase, 1);
+                        SetServerIoPhase(1);
                         var readStarted = Stopwatch.GetTimestamp();
                         bytesRead = await _transport
                             .ReadAsync(parseBuffer.AsMemory(buffered, usable - buffered), cancellationToken)
                             .ConfigureAwait(false);
                         var readTicks = Stopwatch.GetTimestamp() - readStarted;
-                        Volatile.Write(ref _serverIoPhase, 0);
-                        Interlocked.Add(ref _readWaitTicks, readTicks);
+                        SetServerIoPhase(0);
+                        AddReadWaitTicks(readTicks);
                         NoteReadDuration(readTicks);
-                        if (clientWriting)
-                        {
-                            Interlocked.Add(ref _readDuringWriteTicks, readTicks);
-                            Interlocked.Increment(ref _readDuringWriteCount);
-                        }
-                        else
-                        {
-                            Interlocked.Add(ref _readAfterWriteTicks, readTicks);
-                            Interlocked.Increment(ref _readAfterWriteCount);
-                        }
+                        NoteReadOverlap(clientWriting, readTicks);
 
                         processMark = Stopwatch.GetTimestamp();
                         markProcess = true;
@@ -702,10 +779,10 @@ namespace VectorNNTPD.StorageService.Listener
                         var remaining = new ReadOnlySequence<byte>(parseBuffer, consumedTotal, buffered - consumedTotal);
                         var parseStarted = Stopwatch.GetTimestamp();
                         var parsed = VatpFrameParser.ParseOneFrame(remaining, _maxFramePayload);
-                        Interlocked.Add(ref _parseTicks, Stopwatch.GetTimestamp() - parseStarted);
+                        AddParseTicks(Stopwatch.GetTimestamp() - parseStarted);
                         if (parsed.Status == VatpFrameParseStatus.Incomplete)
                         {
-                            Interlocked.Increment(ref _incompleteParses);
+                            NoteIncompleteParse();
                             break;
                         }
 
@@ -721,7 +798,7 @@ namespace VectorNNTPD.StorageService.Listener
 
                         consumedTotal += checked((int)parsed.ConsumedBytes);
                         framesThisRead++;
-                        Interlocked.Increment(ref _framesParsed);
+                        NoteFrameParsed();
                         if (parsed.Frame is not { } frame)
                         {
                             await WriteFailAsync(
@@ -751,9 +828,7 @@ namespace VectorNNTPD.StorageService.Listener
                         {
                             var compactStarted = Stopwatch.GetTimestamp();
                             Buffer.BlockCopy(parseBuffer, consumedTotal, parseBuffer, 0, remainingBytes);
-                            Interlocked.Add(ref _compactTicks, Stopwatch.GetTimestamp() - compactStarted);
-                            Interlocked.Increment(ref _compactCount);
-                            Interlocked.Add(ref _compactBytes, remainingBytes);
+                            NoteCompact(Stopwatch.GetTimestamp() - compactStarted, remainingBytes);
                         }
 
                         buffered = remainingBytes;
@@ -775,7 +850,7 @@ namespace VectorNNTPD.StorageService.Listener
                 _readyRing.Clear();
                 ArrayPool<byte>.Shared.Return(parseBuffer);
                 var cpuEnd = ThreadCpuTimes.Capture();
-                Interlocked.Add(ref _sessionCpu100Ns, (cpuEnd.Kernel - cpuStart.Kernel) + (cpuEnd.User - cpuStart.User));
+                AddSessionCpu((cpuEnd.Kernel - cpuStart.Kernel) + (cpuEnd.User - cpuStart.User));
                 StorageVatpSessionLogMessages.ConnectionClosed(_logger);
             }
         }
@@ -1073,12 +1148,12 @@ namespace VectorNNTPD.StorageService.Listener
 
         private async Task WriteEncodedAsync(VatpFrameEncoder.EncodedFrame encoded, CancellationToken cancellationToken)
         {
-            Volatile.Write(ref _serverIoPhase, 2);
+            SetServerIoPhase(2);
             try
             {
                 var gateStarted = Stopwatch.GetTimestamp();
                 await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                Interlocked.Add(ref _writeGateTicks, Stopwatch.GetTimestamp() - gateStarted);
+                AddWriteGateTicks(Stopwatch.GetTimestamp() - gateStarted);
                 try
                 {
                     var headerLength = encoded.Header.Length;
@@ -1117,7 +1192,7 @@ namespace VectorNNTPD.StorageService.Listener
             }
             finally
             {
-                Volatile.Write(ref _serverIoPhase, 0);
+                SetServerIoPhase(0);
             }
         }
 

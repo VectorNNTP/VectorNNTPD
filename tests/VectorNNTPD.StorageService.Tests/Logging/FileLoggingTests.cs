@@ -57,7 +57,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
             var logDir = CreateTempLogDir();
             try
             {
-                var configuration = new ConfigurationManager();
+                using var configuration = new ConfigurationManager();
                 configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
                 configuration.AddInMemoryCollection(
                     new Dictionary<string, string?>
@@ -88,7 +88,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
         [Fact]
         public void ResolveDirectory_UsesDefaultLogsAgainstApplicationBase()
         {
-            var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-log-base", Guid.NewGuid().ToString("N"));
+            var baseDir = Path.Join(Path.GetTempPath(), "vectornntp-ss-log-base", Guid.NewGuid().ToString("N"));
             var resolved = StorageServerFileLogging.ResolveDirectory(StorageServerOptions.DefaultLogDir, baseDir);
             Assert.Equal(
                 ApplicationLocalPath.ResolveApplicationLocalPath(
@@ -105,7 +105,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
                 || resolved.StartsWith(normalizedBase + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(resolved, normalizedBase, StringComparison.OrdinalIgnoreCase));
 
-            var absolute = Path.Combine(Path.GetTempPath(), "vectornntp-ss-logdir-abs");
+            var absolute = Path.Join(Path.GetTempPath(), "vectornntp-ss-logdir-abs");
             Assert.Equal(Path.GetFullPath(absolute), StorageServerFileLogging.ResolveDirectory(absolute));
         }
 
@@ -113,7 +113,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
         public void RollingFilePath_UsesStorageServerApplicationName()
         {
             var path = StorageServerFileLogging.RollingFilePath("/logs", "VectorNNTPD.StorageService");
-            Assert.Equal(Path.Combine("/logs", "VectorNNTPD.StorageService-.log"), path);
+            Assert.Equal(Path.Join("/logs", "VectorNNTPD.StorageService-.log"), path);
             Assert.DoesNotContain("VectorNNTP.NNTPD", path, StringComparison.Ordinal);
         }
 
@@ -131,7 +131,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
             var logDir = CreateTempLogDir();
             try
             {
-                var configuration = new ConfigurationManager();
+                using var configuration = new ConfigurationManager();
                 configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
                 configuration.AddInMemoryCollection(
                     new Dictionary<string, string?>
@@ -218,7 +218,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
 
         private static string CreateTempLogDir()
         {
-            var dir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-file-logging", Guid.NewGuid().ToString("N"));
+            var dir = Path.Join(Path.GetTempPath(), "vectornntp-ss-file-logging", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             return dir;
         }
@@ -228,7 +228,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
             var start = new DirectoryInfo(AppContext.BaseDirectory);
             for (var dir = start; dir is not null; dir = dir.Parent)
             {
-                var candidate = Path.Combine(dir.FullName, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json");
+                var candidate = Path.Join(dir.FullName, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json");
                 if (File.Exists(candidate))
                 {
                     return candidate;

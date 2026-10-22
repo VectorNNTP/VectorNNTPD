@@ -13,7 +13,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task Missing_directory_fails_inspection()
         {
-            var missing = Path.Combine(Path.GetTempPath(), "vectornntp-missing-" + Guid.NewGuid().ToString("N"));
+            var missing = Path.Join(Path.GetTempPath(), "vectornntp-missing-" + Guid.NewGuid().ToString("N"));
             var inspection = Inspector().Inspect(missing, AppContext.BaseDirectory, CancellationToken.None);
             Assert.NotNull(inspection.Failure);
             Assert.Contains("does not exist", inspection.Failure, StringComparison.Ordinal);
@@ -23,7 +23,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void File_is_not_a_directory()
         {
-            var file = Path.Combine(Path.GetTempPath(), "vectornntp-pool-file-" + Guid.NewGuid().ToString("N"));
+            var file = Path.Join(Path.GetTempPath(), "vectornntp-pool-file-" + Guid.NewGuid().ToString("N"));
             File.WriteAllText(file, "x");
             try
             {
@@ -422,12 +422,12 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         private static string DebugSpoolCache()
         {
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "VectorNNTPD.slnx")))
+            while (dir is not null && !File.Exists(Path.Join(dir.FullName, "VectorNNTPD.slnx")))
             {
                 dir = dir.Parent;
             }
 
-            return Path.Combine(
+            return Path.Join(
                 dir?.FullName ?? AppContext.BaseDirectory,
                 "src",
                 "VectorNNTPD.StorageService",

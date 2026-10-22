@@ -150,8 +150,9 @@ namespace VectorNNTPD.StorageService.Ingress
             {
                 await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -237,8 +238,9 @@ namespace VectorNNTPD.StorageService.Ingress
                         .ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
             finally
             {

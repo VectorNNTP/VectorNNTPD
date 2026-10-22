@@ -142,10 +142,15 @@ namespace VectorNNTPD.StorageService.NntpDb
 
             try
             {
+                // WaitAsync throws OCE when the caller cancels this wait, or when the execution task
+                // itself completed canceled. RunAsync swallows its own loop cancellation and completes
+                // successfully after CancelAsync above, so an OCE here is normally the caller's stop
+                // budget. Propagate unexpected cancellation from a canceled execution task.
                 await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -164,8 +169,9 @@ namespace VectorNNTPD.StorageService.NntpDb
                     await TryRefreshAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
 
             StorageServerSharedConfigurationLogMessages.RefreshLoopStopped(_logger);

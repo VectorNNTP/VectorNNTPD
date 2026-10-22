@@ -688,7 +688,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 Directory.CreateDirectory(Path.GetDirectoryName(undatedPath)!);
                 await File.WriteAllTextAsync(datedPath, "dated");
                 await File.WriteAllTextAsync(undatedPath, "undated");
-                await File.WriteAllTextAsync(Path.Combine(spool, "not-an-article.txt"), "skip");
+                await File.WriteAllTextAsync(Path.Join(spool, "not-an-article.txt"), "skip");
                 var catalog = new SegmentPoolCatalog();
                 catalog.Publish([new SegmentPoolDevice("block:test", [spool])]);
                 var index = await ArticleIndexTestSupport.StartAsync(root, catalog);
@@ -868,8 +868,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var first = await ArticleIndexTestSupport.StartSpoolAsync(root, left);
                 await ArticleIndexTestSupport.StopAsync(first);
                 File.Copy(
-                    Path.Combine(left, ArticleIndexSettings.SpoolIdentityFileName),
-                    Path.Combine(right, ArticleIndexSettings.SpoolIdentityFileName));
+                    Path.Join(left, ArticleIndexSettings.SpoolIdentityFileName),
+                    Path.Join(right, ArticleIndexSettings.SpoolIdentityFileName));
                 var moved = ArticleIndexTestSupport.Create(root, ArticleIndexTestSupport.Catalog(right));
                 var movedError = await Assert.ThrowsAsync<InvalidOperationException>(() => moved.StartAsync(CancellationToken.None));
                 Assert.Contains("cannot be reassigned", movedError.Message, StringComparison.Ordinal);
@@ -963,7 +963,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var root = ArticleIndexTestSupport.NewDirectory();
             var spool = ArticleIndexTestSupport.NewDirectory();
             var id = ArticleIndexTestSupport.Id(42);
-            var legacy = Path.Combine(root, ArticleIndexSettings.DatabaseFileName);
+            var legacy = Path.Join(root, ArticleIndexSettings.DatabaseFileName);
             var hash = new byte[32];
             id.CopyTo(hash);
             await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -1142,12 +1142,12 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var ignored = ArticleIndexTestSupport.Id(99);
                 var path = ArticleIndexTestSupport.PlacePayload(spool, stored, "not-the-digest");
                 var leaf = Path.GetDirectoryName(path)!;
-                var uppercase = Path.Combine(leaf, ignored.ToLowerHexString().ToUpperInvariant());
+                var uppercase = Path.Join(leaf, ignored.ToLowerHexString().ToUpperInvariant());
                 var temporary = path + ".writing-0123456789abcdef0123456789abcdef";
-                await File.WriteAllTextAsync(Path.Combine(leaf, "not-a-hash"), "ignored");
+                await File.WriteAllTextAsync(Path.Join(leaf, "not-a-hash"), "ignored");
                 await File.WriteAllTextAsync(uppercase, "uppercase");
                 await File.WriteAllTextAsync(temporary, "temp");
-                await File.WriteAllTextAsync(Path.Combine(leaf, stored.ToLowerHexString()[..63]), "short");
+                await File.WriteAllTextAsync(Path.Join(leaf, stored.ToLowerHexString()[..63]), "short");
                 var index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool);
                 var report = await index.Reconciliation.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(0, report.FilesSeen);

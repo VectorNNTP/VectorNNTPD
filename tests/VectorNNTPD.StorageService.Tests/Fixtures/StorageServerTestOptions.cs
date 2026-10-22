@@ -34,9 +34,9 @@ namespace VectorNNTPD.StorageService.Tests.Fixtures
 
         internal static Dictionary<string, string?> CreateValidConfigurationPairs()
         {
-            var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-logs", Guid.NewGuid().ToString("N"));
-            var acmeDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-acme", Guid.NewGuid().ToString("N"));
-            var spoolDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-spool", Guid.NewGuid().ToString("N"));
+            var logDir = Path.Join(Path.GetTempPath(), "vectornntp-storageserver-testhost-logs", Guid.NewGuid().ToString("N"));
+            var acmeDir = Path.Join(Path.GetTempPath(), "vectornntp-storageserver-testhost-acme", Guid.NewGuid().ToString("N"));
+            var spoolDir = Path.Join(Path.GetTempPath(), "vectornntp-storageserver-testhost-spool", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(logDir);
             Directory.CreateDirectory(acmeDir);
             Directory.CreateDirectory(spoolDir);
@@ -50,7 +50,7 @@ namespace VectorNNTPD.StorageService.Tests.Fixtures
                 ["StorageServer:BindPortTls"] = "1191",
                 ["StorageServer:AcmeStateDir"] = acmeDir,
                 ["StorageServer:CertificateDirectory"] = acmeDir,
-                ["StorageServer:DbDir"] = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-db", Guid.NewGuid().ToString("N")),
+                ["StorageServer:DbDir"] = Path.Join(Path.GetTempPath(), "vectornntp-storageserver-db", Guid.NewGuid().ToString("N")),
                 ["StorageServer:SegmentPools:Directories:0"] = spoolDir,
                 ["StorageServer:GracefulShutdownTimeout"] = "00:00:30",
                 ["ConnectionStrings:NntpDB"] = FakeNntpDbConnectionFactory.ConnectionString,

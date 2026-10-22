@@ -29,6 +29,12 @@ namespace VectorNNTPD.StorageService.Listener
     /// overlapping writes, are not supported. A read and a write keep separate timeout sources,
     /// so a WINDOW write that passes <see cref="CancellationToken.None"/> cannot cancel the read.
     /// </summary>
+    /// <remarks>
+    /// Timeout CTS and dispose state are per transport instance. I/O-split and TLS thread-cost
+    /// counters are process-wide aggregates for bench observation (same model as
+    /// <see cref="StorageVatpSession"/> receive metrics): every live transport contributes through
+    /// <see cref="Interlocked"/> updates, and <see cref="ResetIoSplit"/> clears the process totals.
+    /// </remarks>
     public sealed class StreamStorageVatpTransport : IStorageVatpTransport
     {
         private readonly Stream _stream;
@@ -42,6 +48,9 @@ namespace VectorNNTPD.StorageService.Listener
         private CancellationToken _writeTimeoutCaller;
         private int _suspendReadProgress;
         private int _disposed;
+
+        // Process-wide bench counters. Updated only from static helpers so concurrent transports
+        // share one Interlocked total without instance methods writing static fields directly.
         private static long _ioTimeoutTicks;
         private static long _streamReadTicks;
         private static long _readSameThreadCount;
@@ -114,36 +123,57 @@ namespace VectorNNTPD.StorageService.Listener
             double WriteSameThreadSeconds,
             double WriteSameThreadCpuSeconds);
 
+        /// <summary>Adds timeout-arming elapsed ticks to the process-wide I/O split.</summary>
+        private static void NoteIoTimeoutTicks(long elapsedTicks) =>
+            Interlocked.Add(ref _ioTimeoutTicks, elapsedTicks);
+
+        /// <summary>Adds inner-stream read elapsed ticks to the process-wide I/O split.</summary>
+        private static void NoteStreamReadTicks(long elapsedTicks) =>
+            Interlocked.Add(ref _streamReadTicks, elapsedTicks);
+
         /// <summary>
-        /// Records elapsed and CPU for one TLS call that resumed on the same thread.
-        /// A hop is counted and omitted from the CPU ratio, because the two samples would be different threads.
+        /// Records TLS read cost. Same-thread CPU is counted only when resume stays on the start thread.
         /// </summary>
-        private static void NoteSameThreadCost(
-            int threadId,
-            long cpuKernel,
-            long cpuUser,
-            long elapsedTicks,
-            ref long sameCount,
-            ref long hopCount,
-            ref long hopElapsed,
-            ref long sameElapsed,
-            ref long sameCpu)
+        private static void NoteReadTlsThreadCost(int threadId, long cpuKernel, long cpuUser, long elapsedTicks)
         {
             var after = ThreadCpuTimes.Capture();
             if (threadId != 0 && threadId == ThreadCpuTimes.CurrentThreadId)
             {
-                Interlocked.Increment(ref sameCount);
-                Interlocked.Add(ref sameElapsed, elapsedTicks);
+                Interlocked.Increment(ref _readSameThreadCount);
+                Interlocked.Add(ref _readSameThreadElapsedTicks, elapsedTicks);
                 var cpu = (after.Kernel - cpuKernel) + (after.User - cpuUser);
                 if (cpu > 0)
                 {
-                    Interlocked.Add(ref sameCpu, cpu);
+                    Interlocked.Add(ref _readSameThreadCpu100Ns, cpu);
                 }
             }
             else
             {
-                Interlocked.Increment(ref hopCount);
-                Interlocked.Add(ref hopElapsed, elapsedTicks);
+                Interlocked.Increment(ref _readHopCount);
+                Interlocked.Add(ref _readHopElapsedTicks, elapsedTicks);
+            }
+        }
+
+        /// <summary>
+        /// Records TLS write cost. Same-thread CPU is counted only when resume stays on the start thread.
+        /// </summary>
+        private static void NoteWriteTlsThreadCost(int threadId, long cpuKernel, long cpuUser, long elapsedTicks)
+        {
+            var after = ThreadCpuTimes.Capture();
+            if (threadId != 0 && threadId == ThreadCpuTimes.CurrentThreadId)
+            {
+                Interlocked.Increment(ref _serverWriteSameThreadCount);
+                Interlocked.Add(ref _serverWriteSameThreadElapsedTicks, elapsedTicks);
+                var cpu = (after.Kernel - cpuKernel) + (after.User - cpuUser);
+                if (cpu > 0)
+                {
+                    Interlocked.Add(ref _serverWriteSameThreadCpu100Ns, cpu);
+                }
+            }
+            else
+            {
+                Interlocked.Increment(ref _serverWriteHopCount);
+                Interlocked.Add(ref _serverWriteHopElapsedTicks, elapsedTicks);
             }
         }
 
@@ -172,7 +202,7 @@ namespace VectorNNTPD.StorageService.Listener
                 }
             }
 
-            Interlocked.Add(ref _ioTimeoutTicks, Stopwatch.GetTimestamp() - timeoutStarted);
+            NoteIoTimeoutTicks(Stopwatch.GetTimestamp() - timeoutStarted);
             try
             {
                 var threadId = ThreadCpuTimes.CurrentThreadId;
@@ -180,17 +210,8 @@ namespace VectorNNTPD.StorageService.Listener
                 var streamStarted = Stopwatch.GetTimestamp();
                 var read = await _stream.ReadAsync(buffer, timeoutCts.Token).ConfigureAwait(false);
                 var elapsed = Stopwatch.GetTimestamp() - streamStarted;
-                Interlocked.Add(ref _streamReadTicks, elapsed);
-                NoteSameThreadCost(
-                    threadId,
-                    cpu.Kernel,
-                    cpu.User,
-                    elapsed,
-                    ref _readSameThreadCount,
-                    ref _readHopCount,
-                    ref _readHopElapsedTicks,
-                    ref _readSameThreadElapsedTicks,
-                    ref _readSameThreadCpu100Ns);
+                NoteStreamReadTicks(elapsed);
+                NoteReadTlsThreadCost(threadId, cpu.Kernel, cpu.User, elapsed);
                 return read;
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -219,16 +240,7 @@ namespace VectorNNTPD.StorageService.Listener
                 var cpu = ThreadCpuTimes.Capture();
                 var started = Stopwatch.GetTimestamp();
                 await _stream.WriteAsync(buffer, timeoutCts.Token).ConfigureAwait(false);
-                NoteSameThreadCost(
-                    threadId,
-                    cpu.Kernel,
-                    cpu.User,
-                    Stopwatch.GetTimestamp() - started,
-                    ref _serverWriteSameThreadCount,
-                    ref _serverWriteHopCount,
-                    ref _serverWriteHopElapsedTicks,
-                    ref _serverWriteSameThreadElapsedTicks,
-                    ref _serverWriteSameThreadCpu100Ns);
+                NoteWriteTlsThreadCost(threadId, cpu.Kernel, cpu.User, Stopwatch.GetTimestamp() - started);
                 return buffer.Length;
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -289,8 +301,10 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     timeout.CancelAfter(suspended ? Timeout.InfiniteTimeSpan : _ioProgressTimeout);
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    // CancelAfter after Dispose races with SetReadProgressSuspended.
+                    ExpectedException.Ignore(ex);
                 }
             }
         }

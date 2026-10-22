@@ -305,7 +305,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
             var start = new DirectoryInfo(AppContext.BaseDirectory);
             for (var dir = start; dir is not null; dir = dir.Parent)
             {
-                var candidate = Path.Combine(dir.FullName, "src", "VectorNNTPD.StorageService", fileName);
+                var candidate = Path.Join(dir.FullName, "src", "VectorNNTPD.StorageService", fileName);
                 if (File.Exists(candidate))
                 {
                     return candidate;

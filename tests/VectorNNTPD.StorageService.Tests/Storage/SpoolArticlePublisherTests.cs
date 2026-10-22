@@ -82,7 +82,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void Real_filesystem_publish_round_trips_and_replaces_an_existing_file()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
             try
             {
@@ -111,7 +111,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void Real_filesystem_recreates_a_leaf_removed_after_the_first_publish()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
             try
             {
@@ -135,17 +135,17 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task Concurrent_writers_create_one_missing_leaf_without_losing_articles()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
             try
             {
                 var files = new FileSpoolArticleFiles();
-                var leaf = Path.Combine(root, "a", "b", "c");
+                var leaf = Path.Join(root, "a", "b", "c");
                 var body = "same-leaf"u8.ToArray();
                 var tasks = new Task[8];
                 for (var i = 0; i < tasks.Length; i++)
                 {
-                    var name = Path.Combine(leaf, "article-" + i.ToString("00") + ".bin");
+                    var name = Path.Join(leaf, "article-" + i.ToString("00") + ".bin");
                     tasks[i] = Task.Run(() =>
                     {
                         files.CreateDirectory(leaf);
@@ -159,7 +159,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var retry = new Task[8];
                 for (var i = 0; i < retry.Length; i++)
                 {
-                    var name = Path.Combine(leaf, "retry-" + i.ToString("00") + ".bin");
+                    var name = Path.Join(leaf, "retry-" + i.ToString("00") + ".bin");
                     retry[i] = Task.Run(() =>
                     {
                         files.CreateDirectory(leaf);

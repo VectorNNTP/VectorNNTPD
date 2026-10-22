@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Transport.ArticleTransfer;
+using VectorNNTPD.StorageService;
 
 using VectorNNTPD.StorageService.Tests.Support.Placement;
 
@@ -152,6 +153,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                     }
                     catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
                     {
+                        ExpectedException.Ignore(ex);
                     }
                 }
 
@@ -250,6 +252,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException or TimeoutException)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
 
@@ -293,8 +296,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             {
                 await pending.ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             lock (_gate)
@@ -508,6 +512,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                     }
                     catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                     {
+                        ExpectedException.Ignore(ex);
                     }
 
                     return new ArticlePlacementResult(ArticlePlacementKind.Cancelled);

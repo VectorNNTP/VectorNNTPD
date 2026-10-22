@@ -17,6 +17,7 @@ using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Listener;
 using VectorNNTPD.StorageService.Tests.Fixtures;
 using VectorNNTPD.StorageService.Tests.TestDoubles;
+using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
@@ -863,11 +864,13 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 {
                     await _reader.WaitAsync(TimeSpan.FromSeconds(2));
                 }
-                catch (TimeoutException)
+                catch (TimeoutException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 await _ssl.DisposeAsync();
@@ -926,8 +929,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                         count += read;
                     }
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {

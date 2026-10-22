@@ -400,12 +400,9 @@ namespace VectorNNTPD.StorageService.Listener
                 return true;
             }
 
-            Interlocked.Add(ref _dataAcceptTicks, Stopwatch.GetTimestamp() - dataStarted);
-            Interlocked.Increment(ref _dataAcceptCount);
-            if (apply.Success)
-            {
-                Interlocked.Add(ref _dataCopyBytes, frame.Payload.Length);
-            }
+            NoteDataAccept(
+                Stopwatch.GetTimestamp() - dataStarted,
+                apply.Success ? frame.Payload.Length : 0);
             if (!apply.Success)
             {
                 var error = store.Receive.Failure;
@@ -420,8 +417,7 @@ namespace VectorNNTPD.StorageService.Listener
                 var windowStarted = Stopwatch.GetTimestamp();
                 await WriteEncodedAsync(VatpFrameEncoder.EncodeWindow(streamId, payloadLength), cancellationToken)
                     .ConfigureAwait(false);
-                Interlocked.Add(ref _windowWriteTicks, Stopwatch.GetTimestamp() - windowStarted);
-                Interlocked.Increment(ref _windowWriteCount);
+                NoteWindowWrite(Stopwatch.GetTimestamp() - windowStarted);
             }
 
             if (store.Receive.IsTerminal)
@@ -458,8 +454,7 @@ namespace VectorNNTPD.StorageService.Listener
                 }
             }
 
-            Interlocked.Add(ref _endValidateTicks, Stopwatch.GetTimestamp() - endStarted);
-            Interlocked.Increment(ref _endValidateCount);
+            NoteEndValidate(Stopwatch.GetTimestamp() - endStarted);
             if (!tookRecord)
             {
                 var error = store.Receive.Failure == VatpErrorCode.None
@@ -521,8 +516,7 @@ namespace VectorNNTPD.StorageService.Listener
                     VatpFrameEncoder.EncodeResult(streamId, VatpStoreOutcome.Accepted),
                     cancellationToken)
                 .ConfigureAwait(false);
-            Interlocked.Add(ref _enqueueToResultTicks, Stopwatch.GetTimestamp() - resultStarted);
-            Interlocked.Increment(ref _enqueueToResultCount);
+            NoteEnqueueToResult(Stopwatch.GetTimestamp() - resultStarted);
             return true;
         }
 
@@ -569,8 +563,9 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 store.AdmissionCts?.Cancel();
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             if (store.HasReservation && !store.Committed)

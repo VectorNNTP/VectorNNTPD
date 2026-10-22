@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -242,6 +243,75 @@ namespace VectorNNTPD.StorageService.Tests.NntpDb
                 await shared.StopAsync(CancellationToken.None);
                 await database.StopAsync(CancellationToken.None);
             }
+        }
+
+        [Fact]
+        public async Task Stop_ignores_caller_cancellation_of_the_execution_wait()
+        {
+            var (database, shared) = await CreateStartedSharedConfigurationAsync(TimeSpan.FromHours(1));
+            try
+            {
+                using var cts = new CancellationTokenSource();
+                cts.Cancel();
+                await shared.StopAsync(cts.Token);
+            }
+            finally
+            {
+                await database.StopAsync(CancellationToken.None);
+            }
+        }
+
+        [Fact]
+        public async Task Stop_propagates_unrelated_execution_cancellation()
+        {
+            var (database, shared) = await CreateStartedSharedConfigurationAsync(TimeSpan.FromHours(1));
+            try
+            {
+                using var foreign = new CancellationTokenSource();
+                foreign.Cancel();
+                SetExecution(shared, Task.FromCanceled(foreign.Token));
+
+                var canceled = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                    () => shared.StopAsync(CancellationToken.None));
+                Assert.Equal(foreign.Token, canceled.CancellationToken);
+            }
+            finally
+            {
+                await database.StopAsync(CancellationToken.None);
+            }
+        }
+
+        private static async Task<(NntpDbService Database, StorageServerSharedConfigurationService Shared)> CreateStartedSharedConfigurationAsync(
+            TimeSpan interval)
+        {
+            var storage = StorageServerTestOptions.CreateValid();
+            var source = new StorageServerRuntimeOptionsSource();
+            var database = new NntpDbService(
+                new FakeNntpDbConnectionFactory(FakeNntpDbConnectionFactory.SharedRow()),
+                Options.Create(new NntpDbOptions { ConnectionString = FakeNntpDbConnectionFactory.ConnectionString }),
+                NullLogger<NntpDbService>.Instance);
+            var shared = new StorageServerSharedConfigurationService(
+                database,
+                Options.Create(storage),
+                Options.Create(new AcmeCloudflareOptions { BindPortTls = 1191, AcmeStateDir = "certs" }),
+                Options.Create(new RabbitMqOptions()),
+                source,
+                NullLogger<StorageServerSharedConfigurationService>.Instance,
+                TimeProvider.System,
+                interval);
+
+            await database.StartAsync(CancellationToken.None);
+            await shared.StartAsync(CancellationToken.None);
+            return (database, shared);
+        }
+
+        private static void SetExecution(StorageServerSharedConfigurationService shared, Task execution)
+        {
+            var field = typeof(StorageServerSharedConfigurationService).GetField(
+                "_execution",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(field);
+            field.SetValue(shared, execution);
         }
 
         private static async Task WaitForRefreshAsync(FakeTimeProvider time, Func<bool> condition)

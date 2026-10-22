@@ -164,8 +164,9 @@ namespace VectorNNTPD.StorageService.Storage
                     }
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -353,8 +354,9 @@ namespace VectorNNTPD.StorageService.Storage
                 {
                     await loop.ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
 

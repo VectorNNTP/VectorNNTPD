@@ -76,6 +76,60 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 await transport.ReadAsync(new byte[4], cts.Token));
         }
 
+        [Fact]
+        public async Task Independent_transports_keep_separate_timeout_state_and_share_process_io_counters()
+        {
+            // Io-split counters are intentionally process-wide; timeout CTS ownership stays per instance.
+            StreamStorageVatpTransport.ResetIoSplit();
+            await using var left = new StreamStorageVatpTransport(new ScriptedStream(2), TimeSpan.FromSeconds(2));
+            var rightStream = new MemoryStream();
+            rightStream.Write([1, 2, 3]);
+            rightStream.Position = 0;
+            await using var right = new StreamStorageVatpTransport(rightStream, TimeSpan.FromSeconds(2));
+
+            Assert.Equal(1, await left.ReadAsync(new byte[4], CancellationToken.None));
+            Assert.Equal(3, await right.ReadAsync(new byte[4], CancellationToken.None));
+            await right.WriteAsync(new byte[] { 9 }, CancellationToken.None);
+
+            var (timeoutSeconds, streamReadSeconds) = StreamStorageVatpTransport.ReadIoSplit();
+            Assert.True(timeoutSeconds >= 0);
+            Assert.True(streamReadSeconds >= 0);
+            Assert.True(timeoutSeconds + streamReadSeconds > 0);
+
+            var tls = StreamStorageVatpTransport.ReadTlsThreadCost();
+            Assert.True(tls.ReadSameThread + tls.ReadHops >= 2);
+            Assert.True(tls.WriteSameThread + tls.WriteHops >= 1);
+
+            await left.DisposeAsync();
+            Assert.Equal(0, await right.ReadAsync(new byte[4], CancellationToken.None));
+
+            StreamStorageVatpTransport.ResetIoSplit();
+            var afterReset = StreamStorageVatpTransport.ReadIoSplit();
+            Assert.Equal(0, afterReset.TimeoutSetupSeconds);
+            Assert.Equal(0, afterReset.StreamReadSeconds);
+        }
+
+        [Fact]
+        public async Task Concurrent_reads_on_separate_transports_do_not_corrupt_instance_lifecycle()
+        {
+            // One outstanding read per transport (contract); both transports may run in parallel.
+            StreamStorageVatpTransport.ResetIoSplit();
+            await using var left = new StreamStorageVatpTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
+            await using var right = new StreamStorageVatpTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
+
+            for (var i = 0; i < 8; i++)
+            {
+                var pair = await Task.WhenAll(
+                    left.ReadAsync(new byte[4], CancellationToken.None).AsTask(),
+                    right.ReadAsync(new byte[4], CancellationToken.None).AsTask());
+                Assert.Equal(1, pair[0]);
+                Assert.Equal(1, pair[1]);
+            }
+
+            var tls = StreamStorageVatpTransport.ReadTlsThreadCost();
+            Assert.Equal(16, tls.ReadSameThread + tls.ReadHops);
+        }
+
         private sealed class ScriptedStream : Stream
         {
             private readonly int _immediateReads;

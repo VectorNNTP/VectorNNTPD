@@ -2,6 +2,7 @@ using VectorNNTPD.StorageService.Logging;
 using VectorNNTPD.StorageService.Storage;
 using VectorNNTPD.StorageService.Storage.ArticleIndex;
 using VectorNNTPD.StorageService.Storage.SegmentPools;
+using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
 {
@@ -11,9 +12,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void CombineUnder_keeps_valid_leaf_under_base()
         {
-            var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
+            var baseDir = Path.Join(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
             var combined = StorageRelativePath.CombineUnder(baseDir, "article-index.sqlite");
-            Assert.Equal(Path.Combine(baseDir, "article-index.sqlite"), combined);
+            Assert.Equal(Path.Join(baseDir, "article-index.sqlite"), combined);
             StorageRelativePath.EnsureContained(baseDir, combined);
         }
 
@@ -31,16 +32,16 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 return;
             }
 
-            var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
+            var baseDir = Path.Join(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
             Assert.Throws<ArgumentException>(() => StorageRelativePath.CombineUnder(baseDir, leaf));
         }
 
         [Fact]
         public void CombineUnder_rejects_rooted_leaf()
         {
-            var baseDir = Path.Combine(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
+            var baseDir = Path.Join(Path.GetTempPath(), "vectornntp-rel-" + Guid.NewGuid().ToString("N"));
             var rooted = OperatingSystem.IsWindows()
-                ? Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "escape.sqlite")
+                ? Path.Join(Path.GetPathRoot(Path.GetTempPath())!, "escape.sqlite")
                 : "/tmp/escape.sqlite";
             Assert.Throws<ArgumentException>(() => StorageRelativePath.CombineUnder(baseDir, rooted));
         }
@@ -56,7 +57,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 Assert.Single(bindings);
                 var databasePath = bindings[0].DatabasePath;
                 Assert.Equal(
-                    Path.Combine(dbDir, "article-index-" + bindings[0].Id + ".sqlite"),
+                    Path.Join(dbDir, "article-index-" + bindings[0].Id + ".sqlite"),
                     databasePath);
                 StorageRelativePath.EnsureContained(dbDir, databasePath);
                 Assert.StartsWith(
@@ -74,13 +75,13 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void RollingFilePath_rejects_escaping_application_names()
         {
-            var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-logs-" + Guid.NewGuid().ToString("N"));
+            var logDir = Path.Join(Path.GetTempPath(), "vectornntp-logs-" + Guid.NewGuid().ToString("N"));
             Assert.Throws<ArgumentException>(() => StorageServerFileLogging.RollingFilePath(logDir, ".."));
             Assert.Throws<ArgumentException>(
                 () => StorageServerFileLogging.RollingFilePath(logDir, "a" + Path.DirectorySeparatorChar + "b"));
 
             var rooted = OperatingSystem.IsWindows()
-                ? Path.Combine(Path.GetPathRoot(Path.GetTempPath())!, "evil")
+                ? Path.Join(Path.GetPathRoot(Path.GetTempPath())!, "evil")
                 : "/evil";
             Assert.Throws<ArgumentException>(() => StorageServerFileLogging.RollingFilePath(logDir, rooted));
         }
@@ -88,10 +89,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void RollingFilePath_keeps_valid_application_name_layout()
         {
-            var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-logs-" + Guid.NewGuid().ToString("N"));
+            var logDir = Path.Join(Path.GetTempPath(), "vectornntp-logs-" + Guid.NewGuid().ToString("N"));
             var path = StorageServerFileLogging.RollingFilePath(logDir, "VectorNNTPD.StorageService");
             Assert.Equal(
-                Path.Combine(logDir, "VectorNNTPD.StorageService" + StorageServerFileLogging.RollingPathSuffix),
+                Path.Join(logDir, "VectorNNTPD.StorageService" + StorageServerFileLogging.RollingPathSuffix),
                 path);
             StorageRelativePath.EnsureContained(logDir, path);
         }
@@ -102,10 +103,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var root = Directory.CreateTempSubdirectory("vectornntp-sysfs-").FullName;
             try
             {
-                Directory.CreateDirectory(Path.Combine(root, "dev", "block"));
+                Directory.CreateDirectory(Path.Join(root, "dev", "block"));
                 var blockRoot = StorageRelativePath.CombineUnder(root, "dev", "block");
                 var node = StorageRelativePath.CombineUnderCheckedSegment(blockRoot, "259:0");
-                Assert.Equal(Path.Combine(root, "dev", "block", "259:0"), node);
+                Assert.Equal(Path.Join(root, "dev", "block", "259:0"), node);
                 StorageRelativePath.EnsureContained(root, node);
 
                 var sysfs = new LinuxSysfsReader(root);
@@ -116,7 +117,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 if (!OperatingSystem.IsWindows())
                 {
                     Directory.CreateDirectory(node);
-                    File.WriteAllText(Path.Combine(node, "partition"), "1");
+                    File.WriteAllText(Path.Join(node, "partition"), "1");
                     Assert.True(sysfs.Exists("259:0"));
                     Assert.True(sysfs.HasPartition("259:0"));
                 }
@@ -142,7 +143,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var root = Directory.CreateTempSubdirectory("vectornntp-sysfs-").FullName;
             try
             {
-                Directory.CreateDirectory(Path.Combine(root, "dev", "block"));
+                Directory.CreateDirectory(Path.Join(root, "dev", "block"));
                 var sysfs = new LinuxSysfsReader(root);
                 Assert.ThrowsAny<ArgumentException>(() => sysfs.Exists(majorMinor));
             }
@@ -177,11 +178,13 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                     Directory.Delete(path, recursive: true);
                 }
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                ExpectedException.Ignore(ex);
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
+                ExpectedException.Ignore(ex);
             }
         }
     }

@@ -36,7 +36,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var service = CreateService(directories, spool);
             for (var i = 0; i < 100; i++)
             {
-                var path = Path.Combine(spool, SpoolShardLayout.RelativeDirectories[i].Replace('/', Path.DirectorySeparatorChar));
+                var path = Path.Join(spool, SpoolShardLayout.RelativeDirectories[i].Replace('/', Path.DirectorySeparatorChar));
                 Assert.Equal(SpoolDirectoryCreateResult.Created, directories.CreateDirectory(path));
             }
 
@@ -138,7 +138,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task Cancellation_stops_initialization_without_publishing_a_result()
         {
-            var cts = new CancellationTokenSource();
+            using var cts = new CancellationTokenSource();
             var directories = new CancelOnFirstCreate(cts);
             var service = CreateService(directories, @"C:\spool\cancel", concurrency: 2);
 
@@ -167,7 +167,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task Real_directory_initialization_is_idempotent_and_creates_no_article_files()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-shards-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-shards-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
             try
             {
@@ -205,9 +205,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task A_file_where_a_shard_directory_belongs_fails_initialization()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-file-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-file-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
-            await File.WriteAllBytesAsync(Path.Combine(root, "0"), [1]);
+            await File.WriteAllBytesAsync(Path.Join(root, "0"), [1]);
             try
             {
                 var service = CreateService(new FileSpoolShardDirectorySystem(), root, concurrency: 4);
@@ -223,8 +223,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void File_spool_directory_system_reports_created_and_already_present()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-dir-" + Guid.NewGuid().ToString("n"));
-            var leaf = Path.Combine(root, "shard");
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-dir-" + Guid.NewGuid().ToString("n"));
+            var leaf = Path.Join(root, "shard");
             var directories = new FileSpoolShardDirectorySystem();
             try
             {
@@ -244,9 +244,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public void File_spool_directory_system_rejects_an_existing_file_path()
         {
-            var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-notdir-" + Guid.NewGuid().ToString("n"));
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-spool-notdir-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(root);
-            var filePath = Path.Combine(root, "not-a-dir");
+            var filePath = Path.Join(root, "not-a-dir");
             File.WriteAllBytes(filePath, [1]);
             var directories = new FileSpoolShardDirectorySystem();
             try

@@ -17,7 +17,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
 
         internal static string NewDirectory()
         {
-            var path = Path.Combine(Path.GetTempPath(), "vectornntp-article-index-" + Guid.NewGuid().ToString("N"));
+            var path = Path.Join(Path.GetTempPath(), "vectornntp-article-index-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(path);
             return path;
         }

@@ -197,8 +197,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 {
                     transaction.Rollback();
                 }
-                catch (SqliteException)
+                catch (SqliteException ex)
                 {
+                    // Prefer the original commit failure over a secondary rollback fault.
+                    ExpectedException.Ignore(ex);
                 }
 
                 throw;
@@ -305,8 +307,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 {
                     transaction.Rollback();
                 }
-                catch (SqliteException)
+                catch (SqliteException ex)
                 {
+                    // Prefer the original commit failure over a secondary rollback fault.
+                    ExpectedException.Ignore(ex);
                 }
 
                 throw;
@@ -672,9 +676,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         _readerGate?.Dispose();
                         _readerGate = null;
                     }
-                    catch
+                    catch (Exception cleanupEx)
                     {
                         // Prefer the original initialization failure over cleanup faults.
+                        ExpectedException.Ignore(cleanupEx);
                     }
 
                     throw;

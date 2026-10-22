@@ -198,11 +198,14 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
             {
                 _files.Delete(path);
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                // Temp cleanup after a failed publish; the caller already has the primary failure.
+                ExpectedException.Ignore(ex);
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 

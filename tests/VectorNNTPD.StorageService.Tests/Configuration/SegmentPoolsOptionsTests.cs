@@ -75,7 +75,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
         public void Shipped_json_contains_the_segment_pool_section()
         {
             var root = FindRepositoryRoot();
-            var json = File.ReadAllText(Path.Combine(root, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json"));
+            var json = File.ReadAllText(Path.Join(root, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json"));
             Assert.Contains("\"SegmentPools\"", json, StringComparison.Ordinal);
             Assert.Contains("\"CriticalPercent\": 85", json, StringComparison.Ordinal);
             Assert.Contains("\"HighPercent\": 79", json, StringComparison.Ordinal);
@@ -95,7 +95,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
                 var resolved = ApplicationLocalPath.ResolveApplicationLocalPath("spool/cache", root.FullName);
                 var normalizedRoot = SegmentPoolPaths.Normalize(root.FullName);
                 Assert.StartsWith(normalizedRoot, resolved, SegmentPoolPaths.Comparison);
-                Assert.EndsWith(Path.Combine("spool", "cache"), resolved, SegmentPoolPaths.Comparison);
+                Assert.EndsWith(Path.Join("spool", "cache"), resolved, SegmentPoolPaths.Comparison);
                 Assert.DoesNotContain(SegmentPoolPaths.Normalize(other.FullName), resolved, SegmentPoolPaths.Comparison);
             }
             finally
@@ -228,7 +228,7 @@ namespace VectorNNTPD.StorageService.Tests.Configuration
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir is not null)
             {
-                if (File.Exists(Path.Combine(dir.FullName, "VectorNNTPD.slnx")))
+                if (File.Exists(Path.Join(dir.FullName, "VectorNNTPD.slnx")))
                 {
                     return dir.FullName;
                 }

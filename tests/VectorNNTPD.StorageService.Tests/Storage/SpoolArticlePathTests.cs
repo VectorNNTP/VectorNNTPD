@@ -59,11 +59,11 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         public void Combine_under_root_keeps_the_same_relative_path_on_every_spool()
         {
             var relative = SpoolArticlePath.RelativePath(ArticleId.ParseLowerHex(Hex));
-            var first = SpoolArticlePath.CombineUnderRoot(Path.Combine(Path.GetTempPath(), "spool-a"), relative);
-            var second = SpoolArticlePath.CombineUnderRoot(Path.Combine(Path.GetTempPath(), "spool-b"), relative);
+            var first = SpoolArticlePath.CombineUnderRoot(Path.Join(Path.GetTempPath(), "spool-a"), relative);
+            var second = SpoolArticlePath.CombineUnderRoot(Path.Join(Path.GetTempPath(), "spool-b"), relative);
 
-            Assert.EndsWith(Path.Combine("a", "b", "0", Hex), first, StringComparison.Ordinal);
-            Assert.EndsWith(Path.Combine("a", "b", "0", Hex), second, StringComparison.Ordinal);
+            Assert.EndsWith(Path.Join("a", "b", "0", Hex), first, StringComparison.Ordinal);
+            Assert.EndsWith(Path.Join("a", "b", "0", Hex), second, StringComparison.Ordinal);
             Assert.NotEqual(first, second);
         }
 
@@ -72,7 +72,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var id = ArticleId.ParseLowerHex(Hex);
             var relative = SpoolArticlePath.RelativePath(id);
-            var root = Path.Combine(Path.GetTempPath(), "spool-combine-article");
+            var root = Path.Join(Path.GetTempPath(), "spool-combine-article");
             var combined = SpoolArticlePath.CombineUnderRoot(root, relative);
             var direct = SpoolArticlePath.CombineArticle(root, id);
 
@@ -90,7 +90,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [InlineData("a/g/0")]
         public void Combine_under_root_rejects_traversal_and_invalid_segments(string relative)
         {
-            var root = Path.Combine(Path.GetTempPath(), "spool-root");
+            var root = Path.Join(Path.GetTempPath(), "spool-root");
             Assert.Throws<InvalidOperationException>(() => SpoolArticlePath.CombineUnderRoot(root, relative));
         }
     }

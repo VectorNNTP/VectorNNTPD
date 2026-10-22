@@ -11,10 +11,23 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var gate = new SpoolArticleIdentityGate();
             var id = ArticleId.FromMessageId("<one@example.test>"u8);
-            var lease = gate.Acquire(id, CancellationToken.None);
-            Assert.Equal(1, gate.Reservations(id));
-            lease.Dispose();
-            lease.Dispose();
+            using (var lease = gate.Acquire(id, CancellationToken.None))
+            {
+                Assert.Equal(1, gate.Reservations(id));
+            }
+
+            Assert.Equal(0, gate.Reservations(id));
+
+            var again = gate.Acquire(id, CancellationToken.None);
+            try
+            {
+                again.Dispose();
+            }
+            finally
+            {
+                again.Dispose();
+            }
+
             Assert.Equal(0, gate.Reservations(id));
         }
 

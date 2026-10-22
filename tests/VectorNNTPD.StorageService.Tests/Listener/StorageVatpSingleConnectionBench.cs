@@ -18,6 +18,7 @@ using VectorNNTPD.StorageService.Listener;
 using VectorNNTPD.StorageService.Tests.Fixtures;
 using VectorNNTPD.StorageService.Tests.TestDoubles;
 using Xunit.Abstractions;
+using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
@@ -84,9 +85,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 _output.WriteLine(line);
             }
 
-            var directory = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".artifacts", "experiments"));
+            var directory = Path.GetFullPath(Path.Join(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".artifacts", "experiments"));
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, "vatp-single-connection-raw.txt");
+            var path = Path.Join(directory, "vatp-single-connection-raw.txt");
             await File.WriteAllTextAsync(path, report.ToString());
             _output.WriteLine(path);
         }
@@ -380,11 +381,13 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 {
                     await _drain.WaitAsync(TimeSpan.FromSeconds(5));
                 }
-                catch (TimeoutException)
+                catch (TimeoutException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 _drainCts.Dispose();
@@ -684,11 +687,13 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 {
                     await _reader;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 await _ssl.DisposeAsync();
@@ -880,8 +885,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                         }
                     }
                 }
-                catch (OperationCanceledException) when (_dispose.IsCancellationRequested)
+                catch (OperationCanceledException ex) when (_dispose.IsCancellationRequested)
                 {
+                    ExpectedException.Ignore(ex);
                 }
                 catch (Exception ex)
                 {

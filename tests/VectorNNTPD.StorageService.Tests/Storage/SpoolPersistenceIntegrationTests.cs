@@ -460,7 +460,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
 
         private static string NewRoot()
         {
-            var path = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
+            var path = Path.Join(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
             Directory.CreateDirectory(path);
             return path;
         }

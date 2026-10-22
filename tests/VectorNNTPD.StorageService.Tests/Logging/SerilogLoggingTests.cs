@@ -118,10 +118,10 @@ namespace VectorNNTPD.StorageService.Tests.Logging
         [Fact]
         public void LoggingConfiguration_LoadsWithoutErrors()
         {
-            var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-ss-serilog-load", Guid.NewGuid().ToString("N"));
+            var logDir = Path.Join(Path.GetTempPath(), "vectornntp-ss-serilog-load", Guid.NewGuid().ToString("N"));
             try
             {
-                var configuration = new ConfigurationManager();
+                using var configuration = new ConfigurationManager();
                 configuration.AddJsonFile(FindProductionAppsettings(), optional: false, reloadOnChange: false);
                 configuration.AddInMemoryCollection(
                     new Dictionary<string, string?>
@@ -197,7 +197,7 @@ namespace VectorNNTPD.StorageService.Tests.Logging
             var start = new DirectoryInfo(AppContext.BaseDirectory);
             for (var dir = start; dir is not null; dir = dir.Parent)
             {
-                var candidate = Path.Combine(dir.FullName, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json");
+                var candidate = Path.Join(dir.FullName, "src", "VectorNNTPD.StorageService", "VectorNNTPD.StorageService.json");
                 if (File.Exists(candidate))
                 {
                     return candidate;

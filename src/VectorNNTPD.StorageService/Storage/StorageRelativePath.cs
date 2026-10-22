@@ -2,13 +2,12 @@ namespace VectorNNTPD.StorageService.Storage
 {
 
     /// <summary>
-    /// Builds paths under a caller-chosen base so a later rooted argument cannot replace that base
-    /// the way <see cref="Path.Combine(string, string)"/> does.
+    /// Builds paths under a caller-chosen base using validated relative segments and
+    /// <see cref="Path.Join(string, string)"/> (which does not drop the base for a rooted later argument).
     /// </summary>
     /// <remarks>
-    /// <see cref="Path.Combine(string, string)"/> ignores earlier arguments when a later argument is rooted.
     /// Callers that intend <c>base/leaf</c> must pass a single relative segment (no roots, separators, or
-    /// <c>.</c>/<c>..</c>). After combining, the fully qualified result must stay under the base directory.
+    /// <c>.</c>/<c>..</c>). After joining, the fully qualified result must stay under the base directory.
     /// </remarks>
     internal static class StorageRelativePath
     {
@@ -18,7 +17,7 @@ namespace VectorNNTPD.StorageService.Storage
         /// </summary>
         /// <param name="baseDirectory">Directory that must own the result.</param>
         /// <param name="relativeName">Single relative file or directory name.</param>
-        /// <returns>The combined path (same shape as <see cref="Path.Combine(string, string)"/>).</returns>
+        /// <returns>The joined path under <paramref name="baseDirectory"/>.</returns>
         /// <exception cref="ArgumentException">
         /// <paramref name="relativeName"/> is empty, rooted, contains separators, is <c>.</c>/<c>..</c>,
         /// or contains invalid file-name characters.
@@ -28,7 +27,8 @@ namespace VectorNNTPD.StorageService.Storage
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
             var leaf = RequireSingleRelativeSegment(relativeName);
-            var combined = Path.Combine(baseDirectory, leaf);
+            // Path.Join keeps the base even if a later segment were rooted; leaf is already validated.
+            var combined = Path.Join(baseDirectory, leaf);
             EnsureContained(baseDirectory, combined);
             return combined;
         }
@@ -69,7 +69,7 @@ namespace VectorNNTPD.StorageService.Storage
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
             var leaf = RequireRelativeSegmentWithoutFileNameCharset(relativeName);
-            var combined = Path.Combine(baseDirectory, leaf);
+            var combined = Path.Join(baseDirectory, leaf);
             EnsureContained(baseDirectory, combined);
             return combined;
         }

@@ -156,8 +156,9 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             {
                 await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -171,8 +172,9 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                     await Task.Delay(_interval, _time, cancellationToken).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 

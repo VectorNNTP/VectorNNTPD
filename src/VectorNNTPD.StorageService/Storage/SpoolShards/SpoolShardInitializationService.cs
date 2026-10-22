@@ -270,7 +270,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
             {
                 var slash = rest.IndexOf('/');
                 var segment = slash < 0 ? rest : rest[..slash];
-                path = Path.Combine(path, segment.ToString());
+                path = Path.Join(path, segment.ToString());
                 if (slash < 0)
                 {
                     return path;

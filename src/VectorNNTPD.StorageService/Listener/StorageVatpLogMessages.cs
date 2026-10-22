@@ -75,6 +75,23 @@ namespace VectorNNTPD.StorageService.Listener
             Level = LogLevel.Warning,
             Message = "Storage VATP Listener connection failed remote={Remote} error={ErrorType}")]
         public static partial void ConnectionFailed(ILogger logger, string Remote, string ErrorType);
+
+        /// <summary>Routine peer reset or transport tear-down after accept; not an operational failure.</summary>
+        [LoggerMessage(
+            EventId = 5412,
+            Level = LogLevel.Debug,
+            Message = "Storage VATP Listener connection peer disconnect remote={Remote}")]
+        public static partial void ConnectionPeerDisconnected(ILogger logger, string Remote);
+
+        /// <summary>
+        /// A tracked connection task faulted during drain. Per-connection handlers already log expected
+        /// handshake/I/O/protocol faults and complete successfully; a fault here is unexpected.
+        /// </summary>
+        [LoggerMessage(
+            EventId = 5413,
+            Level = LogLevel.Error,
+            Message = "Storage VATP Listener connection drain observed unexpected task failure")]
+        public static partial void ConnectionDrainFailed(ILogger logger, Exception exception);
     }
 
     /// <summary>Source-generated StorageServer VATP session logs.</summary>

@@ -451,8 +451,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 await _runCts.CancelAsync().ConfigureAwait(false);
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             try
@@ -635,8 +636,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             {
                 await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                // Idle observer completes when the service stops or startup is cancelled.
+                ExpectedException.Ignore(ex);
             }
         }
 

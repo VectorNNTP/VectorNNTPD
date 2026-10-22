@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Transport.ArticleTransfer;
 using VectorNNTPD.StorageService.Tests.Support.Placement;
+using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Support.Placement
 {
@@ -112,8 +113,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 tcp.SendBufferSize = 1 << 20;
                 tcp.ReceiveBufferSize = 1 << 20;
             }
-            catch (SocketException)
+            catch (SocketException ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -236,8 +238,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 {
                     _slots.Release();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -255,8 +258,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             {
                 await _lifetime.CancelAsync().ConfigureAwait(false);
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             try
@@ -266,11 +270,13 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                     await _reader.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
             }
-            catch (TimeoutException)
+            catch (TimeoutException ex)
             {
+                ExpectedException.Ignore(ex);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                ExpectedException.Ignore(ex);
             }
 
             FaultOutstanding(shutdown: true);
@@ -516,8 +522,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                     {
                         operation.Credit.Release();
                     }
-                    catch (ObjectDisposedException)
+                    catch (ObjectDisposedException ex)
                     {
+                        ExpectedException.Ignore(ex);
                     }
 
                     break;
@@ -586,6 +593,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException or OperationCanceledException)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -618,8 +626,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 {
                     _write.Release();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -720,8 +729,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 {
                     timeout.CancelAfter(Timeout.InfiniteTimeSpan);
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -814,8 +824,9 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 {
                     Credit.Release();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 return releasedCreditWait;
