@@ -44,9 +44,9 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.NotNull(loaded);
             Assert.Equal("https://acme.example/acme/acct/1", loaded.AccountUri);
             Assert.True(key.AsSpan().SequenceEqual(loaded.PrivateKeyDer));
-            Assert.Equal(AcmePaths.AccountKeyPath(dir.Path), Path.Combine(dir.Path, "account", "private_key.der"));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "account", "nntpd01_private_key.der")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "account", "backfiller01_private_key.der")));
+            Assert.Equal(AcmePaths.AccountKeyPath(dir.Path), Path.Join(dir.Path, "account", "private_key.der"));
+            Assert.False(File.Exists(Path.Join(dir.Path, "account", "nntpd01_private_key.der")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "account", "backfiller01_private_key.der")));
         }
 
         /// <summary>
@@ -59,33 +59,33 @@ namespace VectorNNTPD.Common.Tests.Acme
         {
             using var dir = new TempStateDir();
             Assert.Equal(
-                Path.Combine(dir.Path, "live", NntpdFqdn, "dns01"),
+                Path.Join(dir.Path, "live", NntpdFqdn, "dns01"),
                 AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn));
             Assert.Equal(
-                Path.Combine(dir.Path, "journal", BackFillerFqdn + ".json"),
+                Path.Join(dir.Path, "journal", BackFillerFqdn + ".json"),
                 AcmePaths.TransactionJournalPath(dir.Path, BackFillerFqdn));
             Assert.Equal(
-                Path.Combine(dir.Path, "live", NntpdFqdn, "current"),
+                Path.Join(dir.Path, "live", NntpdFqdn, "current"),
                 AcmePaths.CurrentGenerationPointerPath(dir.Path, NntpdFqdn));
             Assert.Equal(
-                Path.Combine(dir.Path, "live", NntpdFqdn, "gens"),
+                Path.Join(dir.Path, "live", NntpdFqdn, "gens"),
                 AcmePaths.GenerationsDir(dir.Path, NntpdFqdn));
             Assert.Equal(
-                Path.Combine(dir.Path, "live", BackFillerFqdn, ".issuance.lock"),
+                Path.Join(dir.Path, "live", BackFillerFqdn, ".issuance.lock"),
                 AcmePaths.IssuanceLockPath(dir.Path, BackFillerFqdn));
             Assert.NotEqual(
                 AcmePaths.CurrentGenerationPointerPath(dir.Path, NntpdFqdn),
                 AcmePaths.CurrentGenerationPointerPath(dir.Path, BackFillerFqdn));
             Assert.DoesNotContain(
-                Path.Combine("dns01", "journal"),
+                Path.Join("dns01", "journal"),
                 AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn),
                 StringComparison.Ordinal);
             Assert.DoesNotContain(
-                Path.Combine("journal", "dns01"),
+                Path.Join("journal", "dns01"),
                 AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn),
                 StringComparison.Ordinal);
             Assert.DoesNotContain(
-                Path.Combine("journal", "acme"),
+                Path.Join("journal", "acme"),
                 AcmePaths.TransactionJournalPath(dir.Path, NntpdFqdn),
                 StringComparison.Ordinal);
         }
@@ -186,10 +186,10 @@ namespace VectorNNTPD.Common.Tests.Acme
             var solver = CreateSolver(client, NntpdFqdn, dir.Path);
             await solver.RecoverAsync(CancellationToken.None);
 
-            Assert.False(File.Exists(Path.Combine(
+            Assert.False(File.Exists(Path.Join(
                 AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn),
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json")));
-            Assert.True(File.Exists(Path.Combine(
+            Assert.True(File.Exists(Path.Join(
                 AcmePaths.Dns01RecoveryDir(dir.Path, BackFillerFqdn),
                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json")));
             Assert.DoesNotContain(client.Snapshot(), static r => r.Id == "nntpd-rec");
@@ -249,10 +249,10 @@ namespace VectorNNTPD.Common.Tests.Acme
             var failed = history.Single(static r => r.Status == AcmeTransactionJournal.StatusFailed);
             Assert.Contains(failed.Events, static e => e.Type == AcmeTransactionJournal.EventCertificateIssuanceFailed);
             Assert.Equal(
-                Path.Combine(dir.Path, "journal", NntpdFqdn + ".json"),
+                Path.Join(dir.Path, "journal", NntpdFqdn + ".json"),
                 journal.FilePath);
             Assert.True(File.Exists(journal.FilePath));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "acme")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "acme")));
             Assert.Empty(new AcmeTransactionJournal(dir.Path, BackFillerFqdn).LoadHistory());
             Assert.False(File.Exists(AcmePaths.TransactionJournalPath(dir.Path, BackFillerFqdn)));
         }
@@ -297,7 +297,7 @@ namespace VectorNNTPD.Common.Tests.Acme
             using var dir = new TempStateDir();
             await using var nntpdLock = await AcmeIssuanceLock.AcquireAsync(dir.Path, NntpdFqdn, CancellationToken.None);
             await using var backfillerLock = await AcmeIssuanceLock.AcquireAsync(dir.Path, BackFillerFqdn, CancellationToken.None);
-            Assert.Equal(AcmePaths.IssuanceLockPath(dir.Path, NntpdFqdn), Path.Combine(dir.Path, "live", NntpdFqdn, ".issuance.lock"));
+            Assert.Equal(AcmePaths.IssuanceLockPath(dir.Path, NntpdFqdn), Path.Join(dir.Path, "live", NntpdFqdn, ".issuance.lock"));
             Assert.NotEqual(
                 AcmePaths.IssuanceLockPath(dir.Path, NntpdFqdn),
                 AcmePaths.IssuanceLockPath(dir.Path, BackFillerFqdn));
@@ -348,10 +348,10 @@ namespace VectorNNTPD.Common.Tests.Acme
                 backfillerManager.EnsureCertificateAsync(CancellationToken.None));
 
             Assert.Equal(
-                Path.Combine(dir.Path, "live", NntpdFqdn, "current"),
+                Path.Join(dir.Path, "live", NntpdFqdn, "current"),
                 AcmePaths.CurrentGenerationPointerPath(dir.Path, NntpdFqdn));
             Assert.Equal(
-                Path.Combine(dir.Path, "live", BackFillerFqdn, "current"),
+                Path.Join(dir.Path, "live", BackFillerFqdn, "current"),
                 AcmePaths.CurrentGenerationPointerPath(dir.Path, BackFillerFqdn));
             Assert.NotEqual(
                 File.ReadAllText(AcmePaths.CurrentGenerationPointerPath(dir.Path, NntpdFqdn)),
@@ -362,11 +362,11 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.NotEmpty(new AcmeTransactionJournal(dir.Path, BackFillerFqdn).LoadHistory());
             Assert.True(File.Exists(AcmePaths.TransactionJournalPath(dir.Path, NntpdFqdn)));
             Assert.True(File.Exists(AcmePaths.TransactionJournalPath(dir.Path, BackFillerFqdn)));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "live", "gens")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "live", "current")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "acme")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "dns01")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "live", "gens")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "live", "current")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "acme")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "dns01")));
             using var nntpdCert = nntpdManager.CreateTlsCertificate();
             using var backfillerCert = backfillerManager.CreateTlsCertificate();
             var nntpdSans = nntpdCert.Extensions.OfType<X509SubjectAlternativeNameExtension>().Single()
@@ -376,7 +376,7 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.Contains(NntpdFqdn, nntpdSans);
             Assert.Contains(CertificateIdentities.NewsHostname, nntpdSans);
             Assert.Equal([BackFillerFqdn], backfillerSans);
-            Assert.Equal(AcmePaths.AccountKeyPath(dir.Path), Path.Combine(dir.Path, "account", "private_key.der"));
+            Assert.Equal(AcmePaths.AccountKeyPath(dir.Path), Path.Join(dir.Path, "account", "private_key.der"));
         }
 
         /// <summary>
@@ -388,10 +388,10 @@ namespace VectorNNTPD.Common.Tests.Acme
         {
             using var dir = new TempStateDir();
             AcmePaths.EnsureStateLayout(dir.Path);
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "live")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "acme")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "dns01")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "live")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "acme")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "dns01")));
 
             AcmePaths.EnsureCertificateIdentityLayout(dir.Path, NntpdFqdn);
             var names = CertificateIdentities.ForFqdn(NntpdFqdn);
@@ -401,12 +401,12 @@ namespace VectorNNTPD.Common.Tests.Acme
             Assert.True(Directory.Exists(AcmePaths.GenerationsDir(dir.Path, NntpdFqdn)));
             Assert.True(File.Exists(AcmePaths.CurrentGenerationPointerPath(dir.Path, NntpdFqdn)));
             Assert.True(Directory.Exists(AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn)));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "live", "gens")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, "live", "current")));
-            Assert.False(File.Exists(Path.Combine(dir.Path, ".issuance.lock")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "acme")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "dns01")));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "live", "gens")));
+            Assert.False(File.Exists(Path.Join(dir.Path, "live", "current")));
+            Assert.False(File.Exists(Path.Join(dir.Path, ".issuance.lock")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "acme")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "dns01")));
         }
 
         /// <summary>
@@ -441,7 +441,7 @@ namespace VectorNNTPD.Common.Tests.Acme
 
             Assert.Empty(Directory.GetFiles(AcmePaths.Dns01RecoveryDir(dir.Path, NntpdFqdn), "*.json"));
             Assert.True(File.Exists(journal.FilePath));
-            Assert.False(Directory.Exists(Path.Combine(dir.Path, "journal", "dns01")));
+            Assert.False(Directory.Exists(Path.Join(dir.Path, "journal", "dns01")));
             var transaction = Assert.Single(journal.LoadHistory());
             Assert.Contains(
                 transaction.Events,
@@ -619,7 +619,7 @@ namespace VectorNNTPD.Common.Tests.Acme
                 .Replace("%CONTENT%", content, StringComparison.Ordinal)
                 .Replace("%RECORD%", recordId, StringComparison.Ordinal)
                 .Replace("%FQDN%", fqdn, StringComparison.Ordinal);
-            File.WriteAllText(Path.Combine(AcmePaths.Dns01RecoveryDir(stateDir, fqdn), entryId + ".json"), payload);
+            File.WriteAllText(Path.Join(AcmePaths.Dns01RecoveryDir(stateDir, fqdn), entryId + ".json"), payload);
         }
 
         /// <summary>

@@ -19,7 +19,7 @@ namespace VectorNNTPD.Common.Acme
                 Directory.CreateDirectory(directory);
             }
 
-            var tempPath = Path.Combine(
+            var tempPath = Path.Join(
                 directory ?? ".",
                 $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
 

@@ -212,7 +212,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         [Fact]
         public void ConfigurationDocumentation_DoesNotPrescribeObsoletePrefixes()
         {
-            var docs = FindRepoFile(Path.Combine("docs", "common", "configuration.md"));
+            var docs = FindRepoFile(Path.Join("docs", "common", "configuration.md"));
             Assert.True(File.Exists(docs), docs);
             var text = File.ReadAllText(docs);
             Assert.Contains("VECTOR__CLOUDFLAREAPIKEY", text, StringComparison.Ordinal);
@@ -316,7 +316,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
         {
             for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
             {
-                var candidate = Path.Combine(directory.FullName, relativePath);
+                var candidate = Path.Join(directory.FullName, relativePath);
                 if (File.Exists(candidate))
                 {
                     return candidate;

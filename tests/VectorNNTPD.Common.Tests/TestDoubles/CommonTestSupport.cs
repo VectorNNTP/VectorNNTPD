@@ -16,7 +16,7 @@ namespace VectorNNTPD.Common.Tests.TestDoubles
         /// Directory created for one test, under the process temp path and named with a new GUID.
         /// </summary>
         /// <value>The full path of the directory this instance creates and later deletes.</value>
-        public string Path { get; } = System.IO.Path.Combine(
+        public string Path { get; } = System.IO.Path.Join(
             System.IO.Path.GetTempPath(),
             "vectornntp-common-" + Guid.NewGuid().ToString("N"));
 

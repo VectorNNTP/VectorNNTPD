@@ -1010,7 +1010,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         public void Parse_WhenYEncFixtureInvalid_RejectsAsYEncDecodingFailed()
         {
             NntpArticleParser parser = new(LocalFqdn);
-            byte[] fixtureBytes = File.ReadAllBytes(Path.Combine(FixtureRoot, "test_bad_crc_end.yenc"));
+            byte[] fixtureBytes = File.ReadAllBytes(Path.Join(FixtureRoot, "test_bad_crc_end.yenc"));
             byte[] body = NormalizeFixtureBodyForParserContract("test_bad_crc_end.yenc", fixtureBytes);
             byte[] article = BuildArticle(
                 headers:
@@ -2221,7 +2221,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         public void Parse_WhenYEncPayloadHasInvalidEscape_RejectsAsYEncDecodingFailed()
         {
             NntpArticleParser parser = new(LocalFqdn);
-            byte[] body = File.ReadAllBytes(Path.Combine(FixtureRoot, "test_invalid_escape.yenc"));
+            byte[] body = File.ReadAllBytes(Path.Join(FixtureRoot, "test_invalid_escape.yenc"));
             byte[] article = BuildArticle(
                 headers:
                 [
@@ -2936,7 +2936,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
         /// <exception cref="DirectoryNotFoundException">Thrown when neither candidate directory exists.</exception>
         private static string ResolveFixtureRoot()
         {
-            string outputCandidate = Path.Combine(AppContext.BaseDirectory, "Fixtures", "SabctoolsYEnc");
+            string outputCandidate = Path.Join(AppContext.BaseDirectory, "Fixtures", "SabctoolsYEnc");
             if (Directory.Exists(outputCandidate))
             {
                 return outputCandidate;
@@ -2946,9 +2946,9 @@ namespace VectorNNTPD.Common.Tests.Articles.Parsing
 
             while (!string.IsNullOrWhiteSpace(current))
             {
-                if (File.Exists(Path.Combine(current, "VectorNNTPD.slnx")))
+                if (File.Exists(Path.Join(current, "VectorNNTPD.slnx")))
                 {
-                    string root = Path.Combine(current, "tests", "VectorNNTPD.Common.Tests", "Fixtures", "SabctoolsYEnc");
+                    string root = Path.Join(current, "tests", "VectorNNTPD.Common.Tests", "Fixtures", "SabctoolsYEnc");
                     if (Directory.Exists(root))
                     {
                         return root;

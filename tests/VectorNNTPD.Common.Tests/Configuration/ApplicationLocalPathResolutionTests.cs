@@ -266,9 +266,9 @@ namespace VectorNNTPD.Common.Tests.Configuration
         public void Relative_path_algorithm_exists_only_in_application_local_path()
         {
             var helper = File.ReadAllText(FindRepoFile(
-                Path.Combine("src", "VectorNNTPD.Common", "Configuration", "ApplicationLocalPath.cs")));
+                Path.Join("src", "VectorNNTPD.Common", "Configuration", "ApplicationLocalPath.cs")));
             var acmeWrapper = File.ReadAllText(FindRepoFile(
-                Path.Combine("src", "VectorNNTPD.Common", "Configuration", "AcmeCloudflareOptionsValidator.cs")));
+                Path.Join("src", "VectorNNTPD.Common", "Configuration", "AcmeCloudflareOptionsValidator.cs")));
             Assert.Contains("Path.GetFullPath(trimmed, fullRoot)", helper, StringComparison.Ordinal);
             Assert.Contains("A relative path must resolve inside the application base directory.", helper, StringComparison.Ordinal);
             Assert.Contains("ApplicationLocalPath.ResolveApplicationLocalPath", acmeWrapper, StringComparison.Ordinal);
@@ -320,7 +320,7 @@ namespace VectorNNTPD.Common.Tests.Configuration
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
             while (directory is not null)
             {
-                var candidate = Path.Combine(directory.FullName, relativePath);
+                var candidate = Path.Join(directory.FullName, relativePath);
                 if (File.Exists(candidate))
                 {
                     return candidate;

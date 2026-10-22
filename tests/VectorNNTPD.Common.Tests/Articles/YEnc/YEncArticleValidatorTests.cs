@@ -947,7 +947,7 @@ namespace VectorNNTPD.Common.Tests.Articles.YEnc
         /// <returns>Raw fixture bytes.</returns>
         private static byte[] LoadFixtureBytes(string fixtureName)
         {
-            string path = Path.Combine(FixtureRoot, fixtureName);
+            string path = Path.Join(FixtureRoot, fixtureName);
             return File.ReadAllBytes(path);
         }
 
@@ -1053,7 +1053,7 @@ namespace VectorNNTPD.Common.Tests.Articles.YEnc
         /// <exception cref="DirectoryNotFoundException">Thrown when neither the output fixture directory nor the solution-relative directory exists.</exception>
         private static string ResolveFixtureRoot()
         {
-            string outputCandidate = Path.Combine(AppContext.BaseDirectory, "Fixtures", "SabctoolsYEnc");
+            string outputCandidate = Path.Join(AppContext.BaseDirectory, "Fixtures", "SabctoolsYEnc");
             if (Directory.Exists(outputCandidate))
             {
                 return outputCandidate;
@@ -1063,9 +1063,9 @@ namespace VectorNNTPD.Common.Tests.Articles.YEnc
 
             while (!string.IsNullOrWhiteSpace(current))
             {
-                if (File.Exists(Path.Combine(current, "VectorNNTPD.slnx")))
+                if (File.Exists(Path.Join(current, "VectorNNTPD.slnx")))
                 {
-                    string root = Path.Combine(current, "tests", "VectorNNTPD.Common.Tests", "Fixtures", "SabctoolsYEnc");
+                    string root = Path.Join(current, "tests", "VectorNNTPD.Common.Tests", "Fixtures", "SabctoolsYEnc");
                     if (Directory.Exists(root))
                     {
                         return root;
