@@ -41,11 +41,11 @@ namespace VectorNNTPD.StorageService.Tests.Lifecycle
                     return Task.CompletedTask;
                 });
             var listener = new FakeApplicationService(
-                "StorageVatpListener",
+                "StorageNntpListener",
                 onStart: _ => throw new InvalidOperationException("listener-fail"),
                 onStop: _ =>
                 {
-                    stopped.Add("StorageVatpListener");
+                    stopped.Add("StorageNntpListener");
                     return Task.CompletedTask;
                 });
 
@@ -68,7 +68,7 @@ namespace VectorNNTPD.StorageService.Tests.Lifecycle
             {
                 new FakeApplicationService("CloudflareDns", onStop: _ => { stopped.Add("CloudflareDns"); return Task.CompletedTask; }),
                 new FakeApplicationService("AcmeCertificate", onStop: _ => { stopped.Add("AcmeCertificate"); return Task.CompletedTask; }),
-                new FakeApplicationService("StorageVatpListener", onStop: _ => { stopped.Add("StorageVatpListener"); return Task.CompletedTask; }),
+                new FakeApplicationService("StorageNntpListener", onStop: _ => { stopped.Add("StorageNntpListener"); return Task.CompletedTask; }),
             };
             var options = StorageServerTestOptions.CreateValid();
             var manager = new ApplicationServiceManager(services, options, NullLogger<ApplicationServiceManager>.Instance);
@@ -78,7 +78,7 @@ namespace VectorNNTPD.StorageService.Tests.Lifecycle
             Assert.Equal(ApplicationState.Running, lifecycle.State);
             await lifecycle.StopAsync(CancellationToken.None);
             Assert.Equal(ApplicationState.Stopped, lifecycle.State);
-            Assert.Equal(["StorageVatpListener", "AcmeCertificate", "CloudflareDns"], stopped);
+            Assert.Equal(["StorageNntpListener", "AcmeCertificate", "CloudflareDns"], stopped);
         }
 
         [Fact]

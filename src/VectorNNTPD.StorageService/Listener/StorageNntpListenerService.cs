@@ -7,29 +7,27 @@ using System.Security.Cryptography.X509Certificates;
 using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Networking.Certificates;
-using VectorNNTPD.Common.Transport.ArticleTransfer;
 using VectorNNTPD.StorageService.Configuration;
+using VectorNNTPD.Common.Articles;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.Common.Networking.Listeners;
 
 namespace VectorNNTPD.StorageService.Listener
 {
-
     /// <summary>
-    /// Process-wide VATP TLS listener: binds configured endpoints, authenticates TLS, and serves
-    /// minimal VATP sessions. Does not own article storage.
+    /// Process-wide NNTP TLS listener: binds configured endpoints, authenticates TLS, and serves
+    /// RFC 4644 STREAMING feed sessions (<c>CHECK</c>/<c>TAKETHIS</c>). Does not own article storage.
     /// </summary>
-    public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisposable
+    public sealed class StorageNntpListenerService : IApplicationService, IAsyncDisposable
     {
         private readonly StorageServerRuntimeOptionsSource? _runtimeSource;
         private StorageServerRuntimeOptions? _runtime;
         private readonly ITlsCertificateContextProvider _certificates;
-        private readonly IStorageArticleOpenBoundary _openBoundary;
         private readonly IAcmeCertificateReadiness _readiness;
-        private readonly ILogger<StorageVatpListenerService> _logger;
+        private readonly ILogger<StorageNntpListenerService> _logger;
         private readonly IAcceptedArticleQueue? _acceptedArticles;
-        private readonly StoreAssemblyAdmission? _storeAdmission;
-        private readonly ArticleTransferLimits? _transferLimits;
+        private readonly StoreAssemblyAdmission? _assemblyAdmission;
+        private readonly Func<ArticleId, bool>? _articlePresent;
 
         /// <summary>
         /// Publishes DNS after at least one socket is bound. Null skips publication.
@@ -42,7 +40,7 @@ namespace VectorNNTPD.StorageService.Listener
         private readonly CancellationTokenSource _runCts = new();
 
         private Task? _acceptTask;
-        private StorageVatpListenerState _state = StorageVatpListenerState.Created;
+        private StorageNntpListenerState _state = StorageNntpListenerState.Created;
         private int _started;
         private int _disposed;
         private int _activeConnections;
@@ -54,41 +52,39 @@ namespace VectorNNTPD.StorageService.Listener
         internal static int LastAcceptedReceiveBuffer { get; private set; }
 
         /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
-        public StorageVatpListenerService(
+        public StorageNntpListenerService(
             StorageServerRuntimeOptions runtime,
             ITlsCertificateContextProvider certificates,
-            IStorageArticleOpenBoundary openBoundary,
-            ILogger<StorageVatpListenerService> logger,
-            ArticleTransferLimits? transferLimits = null)
-            : this(runtime, certificates, openBoundary, CreateReadyGate(), logger, transferLimits: transferLimits)
+            ILogger<StorageNntpListenerService> logger,
+            IAcceptedArticleQueue? acceptedArticles = null,
+            StoreAssemblyAdmission? assemblyAdmission = null,
+            Func<ArticleId, bool>? articlePresent = null)
+            : this(runtime, certificates, CreateReadyGate(), logger, acceptedArticles, assemblyAdmission, articlePresent)
         {
         }
 
         /// <summary>Initializes the Listener service.</summary>
-        public StorageVatpListenerService(
+        public StorageNntpListenerService(
             StorageServerRuntimeOptions runtime,
             ITlsCertificateContextProvider certificates,
-            IStorageArticleOpenBoundary openBoundary,
             IAcmeCertificateReadiness readiness,
-            ILogger<StorageVatpListenerService> logger,
+            ILogger<StorageNntpListenerService> logger,
             IAcceptedArticleQueue? acceptedArticles = null,
-            StoreAssemblyAdmission? storeAdmission = null,
-            ArticleTransferLimits? transferLimits = null,
+            StoreAssemblyAdmission? assemblyAdmission = null,
+            Func<ArticleId, bool>? articlePresent = null,
             Func<CancellationToken, Task>? publishAfterBind = null)
         {
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(certificates);
-            ArgumentNullException.ThrowIfNull(openBoundary);
             ArgumentNullException.ThrowIfNull(readiness);
             ArgumentNullException.ThrowIfNull(logger);
             _runtime = runtime;
             _certificates = certificates;
-            _openBoundary = openBoundary;
             _readiness = readiness;
             _logger = logger;
             _acceptedArticles = acceptedArticles;
-            _storeAdmission = storeAdmission;
-            _transferLimits = transferLimits;
+            _assemblyAdmission = assemblyAdmission;
+            _articlePresent = articlePresent;
             _publishAfterBind = publishAfterBind;
         }
 
@@ -96,38 +92,29 @@ namespace VectorNNTPD.StorageService.Listener
         /// Initializes the listener for the host. Runtime options are read when <see cref="StartAsync"/> runs,
         /// after <c>nntpsharedconfig</c> has been published.
         /// </summary>
-        public StorageVatpListenerService(
+        public StorageNntpListenerService(
             StorageServerRuntimeOptionsSource runtimeSource,
             ITlsCertificateContextProvider certificates,
-            IStorageArticleOpenBoundary openBoundary,
             IAcmeCertificateReadiness readiness,
-            ILogger<StorageVatpListenerService> logger,
+            ILogger<StorageNntpListenerService> logger,
             IAcceptedArticleQueue? acceptedArticles,
-            StoreAssemblyAdmission? storeAdmission,
-            ArticleTransferLimits? transferLimits = null,
+            StoreAssemblyAdmission? assemblyAdmission,
+            Func<ArticleId, bool>? articlePresent = null,
             Func<CancellationToken, Task>? publishAfterBind = null)
         {
             ArgumentNullException.ThrowIfNull(runtimeSource);
             ArgumentNullException.ThrowIfNull(certificates);
-            ArgumentNullException.ThrowIfNull(openBoundary);
             ArgumentNullException.ThrowIfNull(readiness);
             ArgumentNullException.ThrowIfNull(logger);
             _runtimeSource = runtimeSource;
             _certificates = certificates;
-            _openBoundary = openBoundary;
             _readiness = readiness;
             _logger = logger;
             _acceptedArticles = acceptedArticles;
-            _storeAdmission = storeAdmission;
-            _transferLimits = transferLimits;
+            _assemblyAdmission = assemblyAdmission;
+            _articlePresent = articlePresent;
             _publishAfterBind = publishAfterBind;
         }
-
-        /// <summary>
-        /// Gets the per-stream transfer limits for sessions this listener creates.
-        /// Null at construction uses <see cref="ArticleTransferLimits.Default"/>, including the 1 MiB initial window.
-        /// </summary>
-        internal ArticleTransferLimits TransferLimits => _transferLimits ?? ArticleTransferLimits.Default;
 
         private StorageServerRuntimeOptions Runtime =>
             _runtime ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
@@ -140,13 +127,13 @@ namespace VectorNNTPD.StorageService.Listener
         }
 
         /// <inheritdoc />
-        public string Name => "StorageVatpListener";
+        public string Name => "StorageNntpListener";
 
         /// <inheritdoc />
         public Task? Execution => _acceptTask;
 
         /// <summary>Gets the local lifecycle state.</summary>
-        public StorageVatpListenerState State
+        public StorageNntpListenerState State
         {
             get
             {
@@ -182,7 +169,7 @@ namespace VectorNNTPD.StorageService.Listener
 
             lock (_gate)
             {
-                _state = StorageVatpListenerState.Starting;
+                _state = StorageNntpListenerState.Starting;
             }
 
             try
@@ -193,26 +180,26 @@ namespace VectorNNTPD.StorageService.Listener
                 if (!_readiness.IsReady)
                 {
                     throw new InvalidOperationException(
-                        "Storage VATP Listener cannot start because the ACME certificate is not ready. StorageServer is TLS-only and the listener must wait for a usable certificate.");
+                        "Storage NNTP Listener cannot start because the ACME certificate is not ready. StorageServer is TLS-only and the listener must wait for a usable certificate.");
                 }
 
                 if (!_certificates.IsAvailable)
                 {
                     throw new InvalidOperationException(
-                        $"Storage VATP Listener cannot start because no TLS certificate is available from ACME state '{Runtime.CertificateDirectory}'.");
+                        $"Storage NNTP Listener cannot start because no TLS certificate is available from ACME state '{Runtime.CertificateDirectory}'.");
                 }
 
                 var bindings = ListenEndpointPlanner.Plan(Runtime.BindAddressTokens, Runtime.BindPortTls);
                 if (bindings.Count == 0)
                 {
-                    throw new InvalidOperationException("Storage VATP Listener has no bind endpoints.");
+                    throw new InvalidOperationException("Storage NNTP Listener has no bind endpoints.");
                 }
 
-                StorageVatpListenerLogMessages.Starting(_logger, Runtime.BindPortTls, bindings.Count);
+                StorageNntpListenerLogMessages.Starting(_logger, Runtime.BindPortTls, bindings.Count);
                 BindEndpoints(bindings);
                 if (_listenSockets.Count == 0)
                 {
-                    throw new InvalidOperationException("Storage VATP Listener failed to bind any endpoint.");
+                    throw new InvalidOperationException("Storage NNTP Listener failed to bind any endpoint.");
                 }
 
                 if (_publishAfterBind is not null)
@@ -222,19 +209,19 @@ namespace VectorNNTPD.StorageService.Listener
 
                 lock (_gate)
                 {
-                    _state = StorageVatpListenerState.Running;
+                    _state = StorageNntpListenerState.Running;
                 }
 
-                StorageVatpListenerLogMessages.Running(_logger, _listenSockets.Count, Runtime.BindPortTls);
+                StorageNntpListenerLogMessages.Running(_logger, _listenSockets.Count, Runtime.BindPortTls);
                 _acceptTask = AcceptAllAsync(_runCts.Token);
             }
             catch (Exception ex)
             {
-                StorageVatpListenerLogMessages.StartFailed(_logger, ex.Message);
+                StorageNntpListenerLogMessages.StartFailed(_logger, ex.Message);
                 await DisposeBoundResourcesAsync().ConfigureAwait(false);
                 lock (_gate)
                 {
-                    _state = StorageVatpListenerState.Stopped;
+                    _state = StorageNntpListenerState.Stopped;
                 }
 
                 Interlocked.Exchange(ref _started, 0);
@@ -258,10 +245,10 @@ namespace VectorNNTPD.StorageService.Listener
 
             lock (_gate)
             {
-                _state = StorageVatpListenerState.Retiring;
+                _state = StorageNntpListenerState.Retiring;
             }
 
-            StorageVatpListenerLogMessages.Retiring(_logger);
+            StorageNntpListenerLogMessages.Retiring(_logger);
             await _runCts.CancelAsync().ConfigureAwait(false);
             CloseListenSockets();
 
@@ -284,10 +271,10 @@ namespace VectorNNTPD.StorageService.Listener
             _runCts.Dispose();
             lock (_gate)
             {
-                _state = StorageVatpListenerState.Stopped;
+                _state = StorageNntpListenerState.Stopped;
             }
 
-            StorageVatpListenerLogMessages.Stopped(_logger);
+            StorageNntpListenerLogMessages.Stopped(_logger);
         }
 
         private void BindEndpoints(IReadOnlyList<ListenBinding> bindings)
@@ -302,7 +289,7 @@ namespace VectorNNTPD.StorageService.Listener
                         _listenSockets.Add(socket);
                     }
 
-                    StorageVatpListenerLogMessages.EndpointBound(
+                    StorageNntpListenerLogMessages.EndpointBound(
                         _logger,
                         binding.EndPoint.ToString() ?? string.Empty,
                         binding.Address.AddressFamily.ToString());
@@ -311,7 +298,7 @@ namespace VectorNNTPD.StorageService.Listener
                     IsImplicitWildcard(binding.EndPoint)
                     && ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.ProtocolNotSupported or SocketError.AddressNotAvailable)
                 {
-                    StorageVatpListenerLogMessages.WildcardFamilySkipped(
+                    StorageNntpListenerLogMessages.WildcardFamilySkipped(
                         _logger,
                         binding.Address.AddressFamily.ToString(),
                         ex.SocketErrorCode.ToString());
@@ -395,16 +382,16 @@ namespace VectorNNTPD.StorageService.Listener
                 var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
                 if (!TryAdmit())
                 {
-                    StorageVatpListenerLogMessages.CapacityRejected(_logger, remote, Runtime.Listener.MaxActiveConnections);
+                    StorageNntpListenerLogMessages.CapacityRejected(_logger, remote, Runtime.Listener.MaxActiveConnections);
                     accepted.Dispose();
                     continue;
                 }
 
-                StorageVatpListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
+                StorageNntpListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
                 var connection = ProcessAsync(accepted, remote, cancellationToken);
                 _connections[connection] = 0;
                 _ = connection.ContinueWith(
-                    static (task, state) => ((StorageVatpListenerService)state!)._connections.TryRemove(task, out _),
+                    static (task, state) => ((StorageNntpListenerService)state!)._connections.TryRemove(task, out _),
                     this,
                     TaskScheduler.Default);
             }
@@ -440,19 +427,19 @@ namespace VectorNNTPD.StorageService.Listener
                 }
 
                 handshakeCompleted = true;
-                await using var transport = new StreamStorageVatpTransport(
+                await using var transport = new StreamStorageListenerTransport(
                     ssl,
                     Runtime.Listener.IoProgressTimeout,
                     leaveInnerStreamOpen: true);
-                await using var vatpSession = new StorageVatpSession(
+                await using var session = new StorageNntpFeedSession(
                     transport,
-                    _openBoundary,
                     Runtime.Listener,
                     _logger,
-                    limits: _transferLimits,
+                    Runtime.Fqdn,
                     acceptedArticles: _acceptedArticles,
-                    storeAdmission: _storeAdmission);
-                await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
+                    assemblyAdmission: _assemblyAdmission,
+                    articlePresent: _articlePresent);
+                await session.RunAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
@@ -460,11 +447,11 @@ namespace VectorNNTPD.StorageService.Listener
             }
             catch (AuthenticationException)
             {
-                StorageVatpListenerLogMessages.HandshakeFailed(_logger, remote);
+                StorageNntpListenerLogMessages.HandshakeFailed(_logger, remote);
             }
             catch (TimeoutException ex)
             {
-                StorageVatpListenerLogMessages.ConnectionTimedOut(
+                StorageNntpListenerLogMessages.ConnectionTimedOut(
                     _logger,
                     handshakeCompleted ? "io-progress" : ex.Message,
                     remote);
@@ -472,11 +459,11 @@ namespace VectorNNTPD.StorageService.Listener
             catch (IOException)
             {
                 // Routine peer reset / transport tear-down after accept; not an operational failure.
-                StorageVatpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
+                StorageNntpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
-                StorageVatpListenerLogMessages.ConnectionFailed(_logger, remote, ex.GetType().Name);
+                StorageNntpListenerLogMessages.ConnectionFailed(_logger, remote, ex.GetType().Name);
             }
             finally
             {
@@ -568,13 +555,13 @@ namespace VectorNNTPD.StorageService.Listener
                     }
 
                     logged = true;
-                    StorageVatpListenerLogMessages.ConnectionDrainFailed(_logger, inner);
+                    StorageNntpListenerLogMessages.ConnectionDrainFailed(_logger, inner);
                 }
             }
 
             if (!logged)
             {
-                StorageVatpListenerLogMessages.ConnectionDrainFailed(_logger, awaitException);
+                StorageNntpListenerLogMessages.ConnectionDrainFailed(_logger, awaitException);
             }
         }
 
@@ -585,8 +572,8 @@ namespace VectorNNTPD.StorageService.Listener
         }
     }
 
-    /// <summary>Local lifecycle states for the StorageServer VATP listener.</summary>
-    public enum StorageVatpListenerState
+    /// <summary>Local lifecycle states for the StorageServer NNTP listener.</summary>
+    public enum StorageNntpListenerState
     {
         /// <summary>Created but not started.</summary>
         Created = 0,

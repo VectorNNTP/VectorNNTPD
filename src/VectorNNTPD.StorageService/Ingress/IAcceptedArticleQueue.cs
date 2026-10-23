@@ -9,7 +9,7 @@ namespace VectorNNTPD.StorageService.Ingress
     public readonly record struct AcceptedArticleDelivery(bool HasArticle, AcceptedArticle Article);
 
     /// <summary>
-    /// In-memory handoff of accepted VATP articles. Multiple sessions may enqueue,
+    /// In-memory handoff of accepted feed articles. Multiple sessions may enqueue,
     /// and multiple consumers may dequeue. The queue does not persist articles.
     /// </summary>
     public interface IAcceptedArticleQueue

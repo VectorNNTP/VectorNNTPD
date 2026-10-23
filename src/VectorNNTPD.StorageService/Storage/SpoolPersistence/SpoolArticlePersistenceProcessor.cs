@@ -13,7 +13,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
 
     /// <summary>
     /// Rewrites Path, publishes the rewritten bytes to a selected spool, and then indexes the article.
-    /// A successful VATP enqueue has already happened. This processor does not change that.
+    /// A successful feed enqueue has already happened. This processor does not change that.
     /// The index insert runs only after a stored or duplicate publish and waits for the SQLite commit.
     /// </summary>
     internal sealed class SpoolArticlePersistenceProcessor : IAcceptedArticleProcessor

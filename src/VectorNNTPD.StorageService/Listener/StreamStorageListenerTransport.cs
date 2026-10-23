@@ -2,40 +2,13 @@ using System.Diagnostics;
 
 namespace VectorNNTPD.StorageService.Listener
 {
-
-    /// <summary>One established connected transport owned by a StorageServer VATP session.</summary>
-    public interface IStorageVatpTransport : IAsyncDisposable
-    {
-        /// <summary>Reads bytes. Zero means the peer closed.</summary>
-        ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken);
-
-        /// <summary>Writes bytes and returns how many were accepted.</summary>
-        ValueTask<int> WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken);
-
-        /// <summary>
-        /// Suspends or resumes the read no-progress timeout.
-        /// STORE admission suspends it while the client must stay silent, then resumes it
-        /// when that wait ends so a later stall still times out. The default does nothing.
-        /// </summary>
-        /// <param name="suspended"><see langword="true"/> to disarm the outstanding read timer.</param>
-        void SetReadProgressSuspended(bool suspended) { }
-    }
-
     /// <summary>
     /// Stream adapter that applies the configured I/O no-progress timeout to each read or write.
     /// Successive reads reuse one timeout source, and successive writes reuse another.
-    /// One read may overlap one write. STORE admission does that when it grants WINDOW while the
-    /// session is blocked waiting for the next client frame. Two overlapping reads, or two
-    /// overlapping writes, are not supported. A read and a write keep separate timeout sources,
-    /// so a WINDOW write that passes <see cref="CancellationToken.None"/> cannot cancel the read.
+    /// One read may overlap one write. Queue admission may suspend the read timer while waiting
+    /// for capacity. Two overlapping reads, or two overlapping writes, are not supported.
     /// </summary>
-    /// <remarks>
-    /// Timeout CTS and dispose state are per transport instance. I/O-split and TLS thread-cost
-    /// counters are process-wide aggregates for bench observation (same model as
-    /// <see cref="StorageVatpSession"/> receive metrics): every live transport contributes through
-    /// <see cref="Interlocked"/> updates, and <see cref="ResetIoSplit"/> clears the process totals.
-    /// </remarks>
-    public sealed class StreamStorageVatpTransport : IStorageVatpTransport
+    public sealed class StreamStorageListenerTransport : IStorageListenerTransport
     {
         private readonly Stream _stream;
         private readonly TimeSpan _ioProgressTimeout;
@@ -178,7 +151,7 @@ namespace VectorNNTPD.StorageService.Listener
         }
 
         /// <summary>Initializes a stream-backed transport.</summary>
-        public StreamStorageVatpTransport(Stream stream, TimeSpan ioProgressTimeout, bool leaveInnerStreamOpen = false)
+        public StreamStorageListenerTransport(Stream stream, TimeSpan ioProgressTimeout, bool leaveInnerStreamOpen = false)
         {
             ArgumentNullException.ThrowIfNull(stream);
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(ioProgressTimeout, TimeSpan.Zero);
@@ -216,7 +189,7 @@ namespace VectorNNTPD.StorageService.Listener
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException($"Storage VATP transport read exceeded no-progress timeout of {_ioProgressTimeout}.");
+                throw new TimeoutException($"Storage NNTP transport read exceeded no-progress timeout of {_ioProgressTimeout}.");
             }
         }
 
@@ -245,7 +218,7 @@ namespace VectorNNTPD.StorageService.Listener
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException($"Storage VATP transport write exceeded no-progress timeout of {_ioProgressTimeout}.");
+                throw new TimeoutException($"Storage NNTP transport write exceeded no-progress timeout of {_ioProgressTimeout}.");
             }
         }
 

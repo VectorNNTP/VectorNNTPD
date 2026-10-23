@@ -7,7 +7,7 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 {
 
     /// <summary>
-    /// Hard startup gate. Completes, or throws, before the accepted-article worker, VATP listener,
+    /// Hard startup gate. Completes, or throws, before the accepted-article worker, NNTP feed listener,
     /// and RabbitMQ advertisement publisher are started. Thresholds are not enforced here.
     /// </summary>
     internal sealed class SegmentPoolValidationService : IApplicationService

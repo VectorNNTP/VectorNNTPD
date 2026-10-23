@@ -2,13 +2,22 @@ using VectorNNTPD.StorageService.Listener;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
+    /// <summary>
+    /// Process-wide I/O and TLS sample counters on <see cref="StreamStorageListenerTransport"/> must not
+    /// race with listener or placement tests that construct the same type.
+    /// </summary>
+    [CollectionDefinition("StorageNntpTransportCounters", DisableParallelization = true)]
+    public sealed class StorageNntpTransportCountersCollection
+    {
+    }
 
-    public sealed class StorageVatpTransportTimeoutTests
+    [Collection("StorageNntpTransportCounters")]
+    public sealed class StorageNntpTransportTimeoutTests
     {
         [Fact]
         public async Task Successive_reads_complete()
         {
-            await using var transport = new StreamStorageVatpTransport(new ScriptedStream(2), TimeSpan.FromSeconds(2));
+            await using var transport = new StreamStorageListenerTransport(new ScriptedStream(2), TimeSpan.FromSeconds(2));
             Assert.Equal(1, await transport.ReadAsync(new byte[4], CancellationToken.None));
             Assert.Equal(1, await transport.ReadAsync(new byte[4], CancellationToken.None));
         }
@@ -16,7 +25,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         [Fact]
         public async Task Second_stalled_read_still_times_out_after_a_successful_read()
         {
-            await using var transport = new StreamStorageVatpTransport(new ScriptedStream(1), TimeSpan.FromMilliseconds(80));
+            await using var transport = new StreamStorageListenerTransport(new ScriptedStream(1), TimeSpan.FromMilliseconds(80));
             Assert.Equal(1, await transport.ReadAsync(new byte[4], CancellationToken.None));
             await Assert.ThrowsAsync<TimeoutException>(async () =>
                 await transport.ReadAsync(new byte[4], CancellationToken.None));
@@ -26,7 +35,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         public async Task Write_during_a_blocked_read_does_not_cancel_the_read()
         {
             var stream = new HoldThenReleaseStream();
-            await using var transport = new StreamStorageVatpTransport(stream, TimeSpan.FromSeconds(2));
+            await using var transport = new StreamStorageListenerTransport(stream, TimeSpan.FromSeconds(2));
             var read = transport.ReadAsync(new byte[4], CancellationToken.None).AsTask();
             await stream.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             await transport.WriteAsync(new byte[] { 9, 8, 7 }, CancellationToken.None);
@@ -40,7 +49,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         public async Task Suspended_read_does_not_time_out_until_resumed()
         {
             var stream = new HoldThenReleaseStream();
-            await using var transport = new StreamStorageVatpTransport(stream, TimeSpan.FromMilliseconds(80));
+            await using var transport = new StreamStorageListenerTransport(stream, TimeSpan.FromMilliseconds(80));
             var read = transport.ReadAsync(new byte[4], CancellationToken.None).AsTask();
             await stream.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             transport.SetReadProgressSuspended(true);
@@ -56,7 +65,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         public async Task Stalled_write_times_out_without_cancelling_a_suspended_read()
         {
             var stream = new HoldThenReleaseStream { BlockWrites = true };
-            await using var transport = new StreamStorageVatpTransport(stream, TimeSpan.FromMilliseconds(80));
+            await using var transport = new StreamStorageListenerTransport(stream, TimeSpan.FromMilliseconds(80));
             var read = transport.ReadAsync(new byte[4], CancellationToken.None).AsTask();
             await stream.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
             transport.SetReadProgressSuspended(true);
@@ -70,7 +79,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         [Fact]
         public async Task Caller_cancellation_is_not_reported_as_an_idle_timeout()
         {
-            await using var transport = new StreamStorageVatpTransport(new ScriptedStream(0), TimeSpan.FromSeconds(30));
+            await using var transport = new StreamStorageListenerTransport(new ScriptedStream(0), TimeSpan.FromSeconds(30));
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(80));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
                 await transport.ReadAsync(new byte[4], cts.Token));
@@ -79,32 +88,31 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         [Fact]
         public async Task Independent_transports_keep_separate_timeout_state_and_share_process_io_counters()
         {
-            // Io-split counters are intentionally process-wide; timeout CTS ownership stays per instance.
-            StreamStorageVatpTransport.ResetIoSplit();
-            await using var left = new StreamStorageVatpTransport(new ScriptedStream(2), TimeSpan.FromSeconds(2));
+            StreamStorageListenerTransport.ResetIoSplit();
+            await using var left = new StreamStorageListenerTransport(new ScriptedStream(2), TimeSpan.FromSeconds(2));
             var rightStream = new MemoryStream();
             rightStream.Write([1, 2, 3]);
             rightStream.Position = 0;
-            await using var right = new StreamStorageVatpTransport(rightStream, TimeSpan.FromSeconds(2));
+            await using var right = new StreamStorageListenerTransport(rightStream, TimeSpan.FromSeconds(2));
 
             Assert.Equal(1, await left.ReadAsync(new byte[4], CancellationToken.None));
             Assert.Equal(3, await right.ReadAsync(new byte[4], CancellationToken.None));
             await right.WriteAsync(new byte[] { 9 }, CancellationToken.None);
 
-            var (timeoutSeconds, streamReadSeconds) = StreamStorageVatpTransport.ReadIoSplit();
+            var (timeoutSeconds, streamReadSeconds) = StreamStorageListenerTransport.ReadIoSplit();
             Assert.True(timeoutSeconds >= 0);
             Assert.True(streamReadSeconds >= 0);
             Assert.True(timeoutSeconds + streamReadSeconds > 0);
 
-            var tls = StreamStorageVatpTransport.ReadTlsThreadCost();
+            var tls = StreamStorageListenerTransport.ReadTlsThreadCost();
             Assert.True(tls.ReadSameThread + tls.ReadHops >= 2);
             Assert.True(tls.WriteSameThread + tls.WriteHops >= 1);
 
             await left.DisposeAsync();
             Assert.Equal(0, await right.ReadAsync(new byte[4], CancellationToken.None));
 
-            StreamStorageVatpTransport.ResetIoSplit();
-            var afterReset = StreamStorageVatpTransport.ReadIoSplit();
+            StreamStorageListenerTransport.ResetIoSplit();
+            var afterReset = StreamStorageListenerTransport.ReadIoSplit();
             Assert.Equal(0, afterReset.TimeoutSetupSeconds);
             Assert.Equal(0, afterReset.StreamReadSeconds);
         }
@@ -112,10 +120,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         [Fact]
         public async Task Concurrent_reads_on_separate_transports_do_not_corrupt_instance_lifecycle()
         {
-            // One outstanding read per transport (contract); both transports may run in parallel.
-            StreamStorageVatpTransport.ResetIoSplit();
-            await using var left = new StreamStorageVatpTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
-            await using var right = new StreamStorageVatpTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
+            StreamStorageListenerTransport.ResetIoSplit();
+            await using var left = new StreamStorageListenerTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
+            await using var right = new StreamStorageListenerTransport(new ScriptedStream(8), TimeSpan.FromSeconds(2));
 
             for (var i = 0; i < 8; i++)
             {
@@ -126,7 +133,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 Assert.Equal(1, pair[1]);
             }
 
-            var tls = StreamStorageVatpTransport.ReadTlsThreadCost();
+            var tls = StreamStorageListenerTransport.ReadTlsThreadCost();
+            // Exact sample count: this collection disables parallelization so other tests cannot
+            // increment the process-wide counters between ResetIoSplit and this assert.
             Assert.Equal(16, tls.ReadSameThread + tls.ReadHops);
         }
 
@@ -217,16 +226,14 @@ namespace VectorNNTPD.StorageService.Tests.Listener
 
             public override void SetLength(long value) => throw new NotSupportedException();
 
-            public override void Write(byte[] buffer, int offset, int count) => Written += count;
-
-            public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            public override void Write(byte[] buffer, int offset, int count)
             {
                 if (BlockWrites)
                 {
-                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    throw new NotSupportedException();
                 }
 
-                Written += buffer.Length;
+                Written += count;
             }
 
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
@@ -235,6 +242,17 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 await _release.Task.WaitAsync(cancellationToken);
                 buffer.Span[0] = (byte)_releaseByte;
                 return 1;
+            }
+
+            public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                if (BlockWrites)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                    return;
+                }
+
+                Written += buffer.Length;
             }
         }
     }

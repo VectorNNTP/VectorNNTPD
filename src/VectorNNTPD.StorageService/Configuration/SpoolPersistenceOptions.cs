@@ -6,7 +6,7 @@ namespace VectorNNTPD.StorageService.Configuration
     /// </summary>
     /// <remarks>
     /// <para>
-    /// VATP RESULT is still sent when an article enters <c>AcceptedArticleQueue</c>.
+    /// TAKETHIS 239 is still sent when an article enters <c>AcceptedArticleQueue</c>.
     /// These settings bound later disk work. They do not make that RESULT durable.
     /// </para>
     /// <para>

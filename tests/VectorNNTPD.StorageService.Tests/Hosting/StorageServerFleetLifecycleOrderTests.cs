@@ -35,7 +35,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
         public async Task AdvertisementPublisher_DoesNotStartBeforeVatpListener()
         {
             await using var session = await FleetSession.StartHeldAtListenerAsync();
-            Assert.NotEqual(StorageVatpListenerState.Running, session.Listener.State);
+            Assert.NotEqual(StorageNntpListenerState.Running, session.Listener.State);
             Assert.Equal(0, session.Publisher.PublishedCount);
             Assert.Null(session.Publisher.Execution);
             Assert.DoesNotContain(
@@ -47,7 +47,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
         public async Task AdvertisementPublisher_StartsAfterVatpListener()
         {
             await using var session = await FleetSession.StartAsync();
-            Assert.Equal(StorageVatpListenerState.Running, session.Listener.State);
+            Assert.Equal(StorageNntpListenerState.Running, session.Listener.State);
             await WaitForAsync(() => session.Publisher.PublishedCount >= 1, TimeSpan.FromSeconds(5));
             var publications = session.Connection.PublishChannels.SelectMany(static channel => channel.Publications).ToArray();
             Assert.Contains(publications, static publication => IsAdvertisement(publication));
@@ -61,7 +61,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             await WaitForAsync(() => session.Publisher.PublishedCount >= 1, TimeSpan.FromSeconds(5));
             await session.StopAsync();
             var publisherEnd = session.StopEvents.IndexOf("end:StorageServerAdvertisementPublisher");
-            var listenerBegin = session.StopEvents.IndexOf("begin:StorageVatpListener");
+            var listenerBegin = session.StopEvents.IndexOf("begin:StorageNntpListener");
             Assert.True(publisherEnd >= 0);
             Assert.True(listenerBegin > publisherEnd);
             Assert.Equal(session.PublishedCountWhenListenerStopBegan, session.Publisher.PublishedCount);
@@ -80,7 +80,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             Assert.NotNull(failure);
             Assert.Equal(0, session.Publisher.PublishedCount);
             Assert.Null(session.Publisher.Execution);
-            Assert.NotEqual(StorageVatpListenerState.Running, session.Listener.State);
+            Assert.NotEqual(StorageNntpListenerState.Running, session.Listener.State);
             Assert.DoesNotContain(
                 session.Connection.PublishChannels.SelectMany(static channel => channel.Publications),
                 static publication => IsDraining(publication));
@@ -140,7 +140,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
             private FleetSession(
                 IHost host,
-                StorageVatpListenerService listener,
+                StorageNntpListenerService listener,
                 StorageServerAdvertisementPublisherService publisher,
                 RecordingStorageServerRabbitMqConnectionFactory factory,
                 bool held)
@@ -156,7 +156,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
             public ApplicationServiceManager Manager { get; private set; } = null!;
 
-            public StorageVatpListenerService Listener { get; }
+            public StorageNntpListenerService Listener { get; }
 
             public StorageServerAdvertisementPublisherService Publisher { get; }
 
@@ -236,16 +236,16 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 var host = CreateHost(port, factory);
                 var ordered = host.Services.GetServices<IApplicationService>().ToArray();
                 AssertProductionOrder(ordered);
-                var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
+                var listener = host.Services.GetRequiredService<StorageNntpListenerService>();
                 var publisher = host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>();
                 var session = new FleetSession(host, listener, publisher, factory, holdListener);
                 var services = ordered.Select(service => service switch
                 {
-                    StorageVatpListenerService when holdListener => (IApplicationService)new HoldListener(
+                    StorageNntpListenerService when holdListener => (IApplicationService)new HoldListener(
                         listener,
                         session.ListenerEntered,
                         session._releaseListener),
-                    StorageVatpListenerService when traceStops => new StopTrace(
+                    StorageNntpListenerService when traceStops => new StopTrace(
                         service,
                         session.StopEvents,
                         () =>
@@ -268,7 +268,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
             private static void AssertProductionOrder(IApplicationService[] ordered)
             {
-                var listenerIndex = Array.FindIndex(ordered, static service => service is StorageVatpListenerService);
+                var listenerIndex = Array.FindIndex(ordered, static service => service is StorageNntpListenerService);
                 var publisherIndex = Array.FindIndex(
                     ordered,
                     static service => service is StorageServerAdvertisementPublisherService);
@@ -328,12 +328,12 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
         private sealed class HoldListener : IApplicationService
         {
-            private readonly StorageVatpListenerService _inner;
+            private readonly StorageNntpListenerService _inner;
             private readonly TaskCompletionSource _entered;
             private readonly TaskCompletionSource<bool> _release;
 
             public HoldListener(
-                StorageVatpListenerService inner,
+                StorageNntpListenerService inner,
                 TaskCompletionSource entered,
                 TaskCompletionSource<bool> release)
             {

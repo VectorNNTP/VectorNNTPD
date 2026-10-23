@@ -8,8 +8,6 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Acme;
-using VectorNNTPD.Common.Networking.Certificates;
-using VectorNNTPD.Common.Transport.ArticleTransfer;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Listener;
 using VectorNNTPD.StorageService.Tests.Fixtures;
@@ -17,8 +15,7 @@ using VectorNNTPD.StorageService.Tests.TestDoubles;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
-
-    public sealed class StorageVatpListenerServiceTests
+    public sealed class StorageNntpListenerServiceTests
     {
         private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
 
@@ -27,16 +24,15 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         {
             var runtime = CreateRuntime(StorageServerTestOptions.GetFreeTcpPort());
             var readiness = new AcmeCertificateReadiness();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance);
+                NullLogger<StorageNntpListenerService>.Instance);
 
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
             Assert.Contains("ACME certificate is not ready", ex.Message, StringComparison.Ordinal);
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
             Assert.Empty(service.LocalEndPoints);
         }
 
@@ -46,16 +42,15 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var runtime = CreateRuntime(StorageServerTestOptions.GetFreeTcpPort());
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreateUnavailableProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance);
+                NullLogger<StorageNntpListenerService>.Instance);
 
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
             Assert.Contains("no TLS certificate", ex.Message, StringComparison.Ordinal);
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
         }
 
         [Fact]
@@ -65,15 +60,14 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var runtime = CreateRuntime(port);
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance);
+                NullLogger<StorageNntpListenerService>.Instance);
 
             await service.StartAsync(CancellationToken.None);
-            Assert.Equal(StorageVatpListenerState.Running, service.State);
+            Assert.Equal(StorageNntpListenerState.Running, service.State);
             Assert.All(service.LocalEndPoints, endpoint =>
             {
                 var ip = Assert.IsType<IPEndPoint>(endpoint);
@@ -81,9 +75,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             });
 
             await service.StopAsync(CancellationToken.None);
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
             await service.DisposeAsync();
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
         }
 
         [Fact]
@@ -98,18 +92,17 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var runtime = CreateRuntime(port);
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance);
+                NullLogger<StorageNntpListenerService>.Instance);
 
             var ex = await Assert.ThrowsAnyAsync<Exception>(() => service.StartAsync(CancellationToken.None));
             Assert.True(
                 ex is SocketException or InvalidOperationException,
                 "Expected bind failure or no-endpoints failure, got " + ex.GetType().Name);
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
             Assert.Empty(service.LocalEndPoints);
         }
 
@@ -121,12 +114,11 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var certificates = TestListenerCertificates.CreatePublishedProvider("cache-original.test");
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 certificates,
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance);
+                NullLogger<StorageNntpListenerService>.Instance);
 
             await service.StartAsync(CancellationToken.None);
 
@@ -166,47 +158,6 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
-        public async Task Listener_uses_the_production_initial_window_when_no_limits_are_supplied()
-        {
-            await using var service = new StorageVatpListenerService(
-                CreateRuntime(StorageServerTestOptions.GetFreeTcpPort()),
-                TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
-                NullLogger<StorageVatpListenerService>.Instance);
-            Assert.Equal(1024 * 1024, service.TransferLimits.InitialStreamWindowBytes);
-            Assert.Equal(64L * 1024 * 1024, service.TransferLimits.MaxStreamCreditBytes);
-        }
-
-        [Fact]
-        public async Task Listener_keeps_an_explicit_initial_window_for_its_sessions()
-        {
-            var limits = new ArticleTransferLimits { InitialStreamWindowBytes = 2 * 1024 * 1024 };
-            await using var service = new StorageVatpListenerService(
-                CreateRuntime(StorageServerTestOptions.GetFreeTcpPort()),
-                TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
-                NullLogger<StorageVatpListenerService>.Instance,
-                transferLimits: limits);
-            Assert.Same(limits, service.TransferLimits);
-            Assert.Equal(2 * 1024 * 1024, service.TransferLimits.InitialStreamWindowBytes);
-            Assert.Equal(ArticleTransferLimits.Default.MaxStreamCreditBytes, service.TransferLimits.MaxStreamCreditBytes);
-        }
-
-        [Fact]
-        public void Bench_window_accepts_only_the_five_sizes()
-        {
-            Assert.Equal(1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow(null));
-            Assert.Equal(256 * 1024, StorageVatpThroughputBench.ParseBenchWindow("262144"));
-            Assert.Equal(512 * 1024, StorageVatpThroughputBench.ParseBenchWindow("524288"));
-            Assert.Equal(1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("1048576"));
-            Assert.Equal(2 * 1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("2097152"));
-            Assert.Equal(4 * 1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("4194304"));
-            var rejected = Assert.Throws<InvalidOperationException>(() => StorageVatpThroughputBench.ParseBenchWindow("1048575"));
-            Assert.Contains("262144", rejected.Message, StringComparison.Ordinal);
-            Assert.Throws<InvalidOperationException>(() => StorageVatpThroughputBench.ParseBenchWindow("67108864"));
-        }
-
-        [Fact]
         public async Task Peer_disconnect_releases_admission_and_keeps_the_listener_accepting()
         {
             var port = StorageServerTestOptions.GetFreeTcpPort();
@@ -214,10 +165,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
             var logger = new CapturingListenerLogger();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
                 logger);
 
@@ -259,7 +209,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             await WaitUntilAsync(() => service.ActiveConnections == 1);
 
             await service.StopAsync(CancellationToken.None);
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
             Assert.Equal(0, service.ActiveConnections);
         }
 
@@ -271,10 +221,9 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
             var logger = new CapturingListenerLogger();
-            await using var service = new StorageVatpListenerService(
+            await using var service = new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
                 logger);
 
@@ -288,14 +237,14 @@ namespace VectorNNTPD.StorageService.Tests.Listener
 
             await service.StopAsync(CancellationToken.None);
 
-            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, service.State);
             Assert.Contains("unexpected task failure", logger.Text, StringComparison.Ordinal);
             Assert.Contains("injected-drain-fault", logger.Text, StringComparison.Ordinal);
         }
 
-        private static ConcurrentDictionary<Task, byte> GetConnectionMap(StorageVatpListenerService service)
+        private static ConcurrentDictionary<Task, byte> GetConnectionMap(StorageNntpListenerService service)
         {
-            var field = typeof(StorageVatpListenerService).GetField(
+            var field = typeof(StorageNntpListenerService).GetField(
                 "_connections",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.NotNull(field);
@@ -329,7 +278,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             return StorageServerRuntimeOptionsFactory.Create(identity, acme);
         }
 
-        private sealed class CapturingListenerLogger : ILogger<StorageVatpListenerService>
+        private sealed class CapturingListenerLogger : ILogger<StorageNntpListenerService>
         {
             private readonly List<string> _messages = [];
 
@@ -357,13 +306,13 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             {
                 lock (_messages)
                 {
-                    var message = formatter(state, exception);
+                    var line = formatter(state, exception);
                     if (exception is not null)
                     {
-                        message = $"{message} {exception}";
+                        line = line + " " + exception;
                     }
 
-                    _messages.Add(message);
+                    _messages.Add(line);
                 }
             }
         }

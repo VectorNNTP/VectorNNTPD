@@ -22,7 +22,7 @@ namespace VectorNNTPD.StorageService.Ingress
     /// Each worker holds at most one dequeued article. A waiting-for-capacity result keeps that
     /// article off the queue and retries after <see cref="SpoolPersistenceOptions.IneligibleRetryMilliseconds"/>.
     /// Shutdown cancels in-flight publishes. An article already dequeued and not yet published is
-    /// logged and dropped. VATP RESULT was sent at enqueue and is not repeated here.
+    /// logged and dropped. TAKETHIS 239 was sent at enqueue and is not repeated here.
     /// </para>
     /// </remarks>
     internal sealed class AcceptedArticleWorker : IApplicationService

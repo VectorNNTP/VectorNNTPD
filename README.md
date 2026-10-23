@@ -5,7 +5,7 @@ Standalone VectorNNTPD hosts extracted from VectorNNTP.NNTPD. This repository cu
 ## Structure
 
 - `src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj` - BackFiller worker app (net10.0)
-- `src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj` - StorageService / VATP cache host (net10.0)
+- `src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj` - StorageService / NNTP TAKETHIS feed host (net10.0)
 - `src/VectorNNTPD.Common/VectorNNTPD.Common.csproj` - shared library
 - `tests/VectorNNTPD.BackFillerService.Tests/` / `tests/VectorNNTPD.StorageService.Tests/` / `tests/VectorNNTPD.Common.Tests/` - xUnit suites
 - `VectorNNTPD.slnx` - solution including apps + tests

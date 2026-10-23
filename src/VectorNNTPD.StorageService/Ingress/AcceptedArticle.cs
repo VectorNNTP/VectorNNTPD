@@ -4,7 +4,7 @@ namespace VectorNNTPD.StorageService.Ingress
 {
 
     /// <summary>
-    /// One accepted VATP article handed to in-memory consumers before Path rewrite.
+    /// One accepted feed article handed to in-memory consumers before Path rewrite.
     /// </summary>
     /// <param name="ArtId">Article identity from the accepted inbound bytes.</param>
     /// <param name="ArtHash">Hash of <paramref name="ArtData"/>, matching the inbound META hash.</param>

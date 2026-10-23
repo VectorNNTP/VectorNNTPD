@@ -2,8 +2,8 @@ namespace VectorNNTPD.StorageService.Listener
 {
 
     /// <summary>
-    /// Process-wide cap on in-flight STORE article assemblies, acquired before the receive
-    /// stream allocates ArtData.
+    /// Process-wide cap on in-flight TAKETHIS article assemblies, acquired before the article
+    /// payload is buffered and admitted to the accepted-article queue.
     /// </summary>
     public sealed class StoreAssemblyAdmission
     {
