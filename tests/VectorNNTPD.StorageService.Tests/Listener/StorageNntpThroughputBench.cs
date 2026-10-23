@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.StorageService;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Listener;
@@ -99,9 +100,8 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 _ = await queue.DequeueAsync(CancellationToken.None);
             }
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            // Snapshot counters after warm-up without forcing GC. Deltas may include ambient
+            // runtime activity; compare relative runs with the same harness only.
             var gen0 = GC.CollectionCount(0);
             var gen1 = GC.CollectionCount(1);
             var gen2 = GC.CollectionCount(2);
@@ -117,13 +117,13 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var allocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
             // Includes harness status-line reads (PipeDuplex copies) as well as the session path.
             // Compare before/after only with an identical harness; do not treat the absolute
-            // per-article figure as server-only cost.
+            // per-article figure as server-only cost or as a pristine GC baseline.
             _output.WriteLine(
                 $"in-memory articles={measured} bodyBytes={BodyBytes} elapsedMs={clock.ElapsedMilliseconds} "
                 + $"allocatedBytes={allocated} allocatedPerArticle={allocated / (double)measured:0} "
                 + $"gen0={GC.CollectionCount(0) - gen0} gen1={GC.CollectionCount(1) - gen1} gen2={GC.CollectionCount(2) - gen2} "
                 + $"articlesPerSec={measured / clock.Elapsed.TotalSeconds:0} "
-                + $"note=includes-harness-status-reads");
+                + $"note=includes-harness-status-reads;no-forced-gc");
         }
 
         private static byte[] BuildWireArticle()
@@ -138,7 +138,6 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 "Subject: bench\r\n" +
                 "\r\n" +
                 new string('x', BodyBytes) + "\r\n";
-            var destuffed = Encoding.ASCII.GetBytes(text);
             // Transfer form: body lines that start with '.' are stuffed; terminator appended.
             var bodyStart = text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4;
             var header = Encoding.ASCII.GetBytes(text[..bodyStart]);
@@ -222,8 +221,10 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 {
                     await _run;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    // Expected when DisposeAsync cancels the session RunAsync token.
+                    ExpectedException.Ignore(ex);
                 }
 
                 _cts.Dispose();
