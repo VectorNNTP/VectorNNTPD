@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Articles;
@@ -71,6 +72,216 @@ namespace VectorNNTPD.StorageService.Tests.Listener
 
             _output.WriteLine($"accepted={accepted} elapsedMs={clock.ElapsedMilliseconds}");
             Assert.True(accepted > 0);
+        }
+
+        /// <summary>
+        /// In-memory (pipe) TAKETHIS allocation sample. Set <c>VECTORNNTPD_STORAGE_NNTP_BENCH=1</c>.
+        /// Isolates session parse/assembly/materialize/queue from TLS.
+        /// </summary>
+        [Fact]
+        public async Task Optional_in_memory_allocation_sample()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable("VECTORNNTPD_STORAGE_NNTP_BENCH"), "1", StringComparison.Ordinal))
+            {
+                _output.WriteLine("Set VECTORNNTPD_STORAGE_NNTP_BENCH=1 to measure in-memory TAKETHIS allocations.");
+                return;
+            }
+
+            const int warmup = 64;
+            const int measured = 512;
+            var queue = new AcceptedArticleQueue();
+            await using var harness = await InMemoryHarness.StartAsync(queue);
+            var wire = BuildWireArticle();
+
+            for (var i = 0; i < warmup; i++)
+            {
+                Assert.Equal(239, await harness.TakeThisAsync(wire));
+                _ = await queue.DequeueAsync(CancellationToken.None);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            var gen0 = GC.CollectionCount(0);
+            var gen1 = GC.CollectionCount(1);
+            var gen2 = GC.CollectionCount(2);
+            var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+            var clock = Stopwatch.StartNew();
+            for (var i = 0; i < measured; i++)
+            {
+                Assert.Equal(239, await harness.TakeThisAsync(wire));
+                _ = await queue.DequeueAsync(CancellationToken.None);
+            }
+
+            clock.Stop();
+            var allocated = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
+            // Includes harness status-line reads (PipeDuplex copies) as well as the session path.
+            // Compare before/after only with an identical harness; do not treat the absolute
+            // per-article figure as server-only cost.
+            _output.WriteLine(
+                $"in-memory articles={measured} bodyBytes={BodyBytes} elapsedMs={clock.ElapsedMilliseconds} "
+                + $"allocatedBytes={allocated} allocatedPerArticle={allocated / (double)measured:0} "
+                + $"gen0={GC.CollectionCount(0) - gen0} gen1={GC.CollectionCount(1) - gen1} gen2={GC.CollectionCount(2) - gen2} "
+                + $"articlesPerSec={measured / clock.Elapsed.TotalSeconds:0} "
+                + $"note=includes-harness-status-reads");
+        }
+
+        private static byte[] BuildWireArticle()
+        {
+            var messageId = "<bench-alloc@seg.test>";
+            var text =
+                "Path: peer.example\r\n" +
+                "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n" +
+                $"Message-ID: {messageId}\r\n" +
+                "Newsgroups: alt.test\r\n" +
+                "From: user@example.test\r\n" +
+                "Subject: bench\r\n" +
+                "\r\n" +
+                new string('x', BodyBytes) + "\r\n";
+            var destuffed = Encoding.ASCII.GetBytes(text);
+            // Transfer form: body lines that start with '.' are stuffed; terminator appended.
+            var bodyStart = text.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4;
+            var header = Encoding.ASCII.GetBytes(text[..bodyStart]);
+            var body = Encoding.ASCII.GetBytes(text[bodyStart..]);
+            var stuffed = new byte[header.Length + body.Length + 3];
+            header.CopyTo(stuffed, 0);
+            body.CopyTo(stuffed, header.Length);
+            stuffed[^3] = (byte)'.';
+            stuffed[^2] = (byte)'\r';
+            stuffed[^1] = (byte)'\n';
+            var command = Encoding.ASCII.GetBytes($"TAKETHIS {messageId}\r\n");
+            var framed = new byte[command.Length + stuffed.Length];
+            command.CopyTo(framed, 0);
+            stuffed.CopyTo(framed, command.Length);
+            return framed;
+        }
+
+        private sealed class InMemoryHarness : IAsyncDisposable
+        {
+            private readonly CancellationTokenSource _cts = new();
+            private readonly Task _run;
+            private readonly PipeDuplex _transport;
+
+            private InMemoryHarness(PipeDuplex transport, StorageNntpFeedSession session)
+            {
+                _transport = transport;
+                _run = session.RunAsync(_cts.Token);
+            }
+
+            public static async Task<InMemoryHarness> StartAsync(IAcceptedArticleQueue queue)
+            {
+                var transport = new PipeDuplex();
+                var session = new StorageNntpFeedSession(
+                    transport,
+                    new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
+                    NullLogger.Instance,
+                    "cache01.usenet.ninja",
+                    acceptedArticles: queue,
+                    assemblyAdmission: new StoreAssemblyAdmission(8));
+                var harness = new InMemoryHarness(transport, session);
+                _ = await harness.ReadStatusAsync();
+                return harness;
+            }
+
+            public async Task<int> TakeThisAsync(byte[] framed)
+            {
+                await _transport.ClientWriteAsync(framed);
+                return await ReadStatusAsync();
+            }
+
+            private async Task<int> ReadStatusAsync()
+            {
+                var line = new List<byte>(64);
+                while (true)
+                {
+                    var b = new byte[1];
+                    var read = await _transport.ClientReadAsync(b);
+                    if (read == 0)
+                    {
+                        throw new EndOfStreamException();
+                    }
+
+                    if (b[0] == (byte)'\n' && line.Count > 0 && line[^1] == (byte)'\r')
+                    {
+                        line.RemoveAt(line.Count - 1);
+                        break;
+                    }
+
+                    line.Add(b[0]);
+                }
+
+                var text = Encoding.ASCII.GetString(line.ToArray());
+                return int.Parse(text.AsSpan(0, 3));
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                await _cts.CancelAsync();
+                await _transport.DisposeAsync();
+                try
+                {
+                    await _run;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+
+                _cts.Dispose();
+            }
+        }
+
+        private sealed class PipeDuplex : IStorageListenerTransport
+        {
+            private readonly Channel<byte[]> _toServer = Channel.CreateUnbounded<byte[]>();
+            private readonly Channel<byte[]> _toClient = Channel.CreateUnbounded<byte[]>();
+            private byte[] _serverPending = [];
+            private int _serverPendingOffset;
+            private byte[] _clientPending = [];
+            private int _clientPendingOffset;
+
+            public Task ClientWriteAsync(byte[] bytes) =>
+                _toServer.Writer.WriteAsync(bytes).AsTask();
+
+            public async Task<int> ClientReadAsync(byte[] buffer)
+            {
+                if (_clientPendingOffset >= _clientPending.Length)
+                {
+                    _clientPending = await _toClient.Reader.ReadAsync().ConfigureAwait(false);
+                    _clientPendingOffset = 0;
+                }
+
+                var count = Math.Min(buffer.Length, _clientPending.Length - _clientPendingOffset);
+                _clientPending.AsSpan(_clientPendingOffset, count).CopyTo(buffer);
+                _clientPendingOffset += count;
+                return count;
+            }
+
+            public async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+            {
+                if (_serverPendingOffset >= _serverPending.Length)
+                {
+                    _serverPending = await _toServer.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+                    _serverPendingOffset = 0;
+                }
+
+                var count = Math.Min(buffer.Length, _serverPending.Length - _serverPendingOffset);
+                _serverPending.AsSpan(_serverPendingOffset, count).CopyTo(buffer.Span);
+                _serverPendingOffset += count;
+                return count;
+            }
+
+            public async ValueTask<int> WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
+            {
+                await _toClient.Writer.WriteAsync(buffer.ToArray(), cancellationToken).ConfigureAwait(false);
+                return buffer.Length;
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                _toServer.Writer.TryComplete();
+                _toClient.Writer.TryComplete();
+                return ValueTask.CompletedTask;
+            }
         }
 
         public static async Task<PlacementIngressHost> StartPlacementIngressHostAsync()

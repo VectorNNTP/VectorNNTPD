@@ -17,6 +17,12 @@ namespace VectorNNTPD.StorageService.Listener
     {
         private const int MaximumCommandOctets = 512;
 
+        /// <summary>
+        /// Initial destuffed-assembly rental. Grows on demand up to
+        /// <see cref="ArticleResourceLimits.MaxArticleBytes"/>. Avoids a 1 MiB pool rent for typical articles.
+        /// </summary>
+        private const int InitialAssemblyRentBytes = 64 * 1024;
+
         private static readonly byte[] Greeting = "200 VectorNNTP StorageServer ready\r\n"u8.ToArray();
         private static readonly byte[] CapabilitiesHeader = "101 Capability list follows\r\n"u8.ToArray();
         private static readonly byte[] CapabilitiesBody = "VERSION 2\r\nSTREAMING\r\nIMPLEMENTATION VectorNNTP-StorageServer\r\n.\r\n"u8.ToArray();
@@ -128,13 +134,13 @@ namespace VectorNNTPD.StorageService.Listener
 
                 if (TryMatchKeyword(line, CheckKeyword, out var checkRest))
                 {
-                    var checkArg = SkipSpaces(checkRest).ToArray();
-                    await HandleCheckAsync(checkArg, cancellationToken).ConfigureAwait(false);
+                    await HandleCheckAsync(SkipSpaces(checkRest), cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
                 if (TryMatchKeyword(line, TakeThisKeyword, out var takeRest))
                 {
+                    // One heap copy of the message-id argument; spans cannot cross the TAKETHIS awaits.
                     var takeArg = SkipSpaces(takeRest).ToArray();
                     var keepOpen = await HandleTakeThisAsync(takeArg, cancellationToken).ConfigureAwait(false);
                     if (!keepOpen)
@@ -160,23 +166,20 @@ namespace VectorNNTPD.StorageService.Listener
             return ValueTask.CompletedTask;
         }
 
-        private async Task HandleCheckAsync(byte[] argument, CancellationToken cancellationToken)
+        private Task HandleCheckAsync(ReadOnlySpan<byte> argument, CancellationToken cancellationToken)
         {
             if (!TryParseMessageIdArgument(argument, out var messageId))
             {
-                await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
-                return;
+                return WriteFullyAsync(SyntaxError, cancellationToken);
             }
 
-            var messageIdBytes = messageId.ToArray();
-            var alreadyHave = _articlePresent?.Invoke(ArticleId.FromMessageId(messageIdBytes)) == true;
-            await WriteStatusAsync(
-                    alreadyHave ? (byte)'4' : (byte)'2',
-                    (byte)'3',
-                    (byte)'8',
-                    messageIdBytes,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var alreadyHave = _articlePresent?.Invoke(ArticleId.FromMessageId(messageId)) == true;
+            return WriteStatusAsync(
+                alreadyHave ? (byte)'4' : (byte)'2',
+                (byte)'3',
+                (byte)'8',
+                messageId,
+                cancellationToken);
         }
 
         private async Task<bool> HandleTakeThisAsync(byte[] argument, CancellationToken cancellationToken)
@@ -189,8 +192,8 @@ namespace VectorNNTPD.StorageService.Listener
                 return true;
             }
 
-            var requestIdBytes = requestMessageId.ToArray();
-            var requestId = ArticleId.FromMessageId(requestIdBytes);
+            // argument holds the message-id octets for the rest of this method (copied once in RunAsync).
+            var requestId = ArticleId.FromMessageId(requestMessageId);
 
             StoreAssemblyAdmission? admission = null;
             var gate = _assemblyAdmission;
@@ -203,7 +206,7 @@ namespace VectorNNTPD.StorageService.Listener
                             (byte)'4',
                             (byte)'3',
                             (byte)'9',
-                            requestIdBytes,
+                            argument,
                             cancellationToken)
                         .ConfigureAwait(false);
                     return true;
@@ -222,7 +225,7 @@ namespace VectorNNTPD.StorageService.Listener
 
                 if (_articlePresent?.Invoke(requestId) == true)
                 {
-                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -233,7 +236,7 @@ namespace VectorNNTPD.StorageService.Listener
                     ArticlePathMode.Normalize);
                 if (!created.IsAccepted)
                 {
-                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -242,7 +245,7 @@ namespace VectorNNTPD.StorageService.Listener
                 if (!record.ArtId.Equals(requestId))
                 {
                     record.ReleaseUnusedCanonicalBuffer();
-                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -258,7 +261,7 @@ namespace VectorNNTPD.StorageService.Listener
                 if (record.ArtSize > queue.MaxQueuedBytes)
                 {
                     record.ReleaseUnusedCanonicalBuffer();
-                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
                 }
@@ -278,7 +281,7 @@ namespace VectorNNTPD.StorageService.Listener
                     if (reservation is null)
                     {
                         record.ReleaseUnusedCanonicalBuffer();
-                        await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                        await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                             .ConfigureAwait(false);
                         return true;
                     }
@@ -311,10 +314,14 @@ namespace VectorNNTPD.StorageService.Listener
                 }
 
                 // ArtData remains reachable via the queued Memory; Exact buffers are not pooled.
-                StorageNntpFeedSessionLogMessages.ArticleAccepted(
-                    _logger,
-                    record.ArtId.ToLowerHexString());
-                await WriteStatusAsync((byte)'2', (byte)'3', (byte)'9', requestIdBytes, cancellationToken)
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    StorageNntpFeedSessionLogMessages.ArticleAccepted(
+                        _logger,
+                        record.ArtId.ToLowerHexString());
+                }
+
+                await WriteStatusAsync((byte)'2', (byte)'3', (byte)'9', argument, cancellationToken)
                     .ConfigureAwait(false);
                 return true;
             }
@@ -373,10 +380,22 @@ namespace VectorNNTPD.StorageService.Listener
             int maxBytes,
             CancellationToken cancellationToken)
         {
-            var rented = ArrayPool<byte>.Shared.Rent(Math.Min(Math.Max(maxBytes, 1024), 1024 * 1024));
+            var rented = ArrayPool<byte>.Shared.Rent(Math.Min(maxBytes, InitialAssemblyRentBytes));
             var written = 0;
             var atLineStart = true;
-            var input = ArrayPool<byte>.Shared.Rent(_readScratch.Length);
+            // Prefer the session scratch buffer so typical articles do not rent a second read array.
+            byte[]? rentedInput = null;
+            byte[] input;
+            if (_pendingCount > _readScratch.Length)
+            {
+                rentedInput = ArrayPool<byte>.Shared.Rent(_pendingCount);
+                input = rentedInput;
+            }
+            else
+            {
+                input = _readScratch;
+            }
+
             var inputCount = 0;
             var inputOffset = 0;
             try
@@ -384,12 +403,6 @@ namespace VectorNNTPD.StorageService.Listener
                 // Seed from any leftover command-buffer bytes that follow the TAKETHIS line.
                 if (_pendingCount > 0)
                 {
-                    if (_pendingCount > input.Length)
-                    {
-                        ArrayPool<byte>.Shared.Return(input);
-                        input = ArrayPool<byte>.Shared.Rent(_pendingCount);
-                    }
-
                     _pending.AsSpan(0, _pendingCount).CopyTo(input);
                     inputCount = _pendingCount;
                     _pendingCount = 0;
@@ -426,7 +439,7 @@ namespace VectorNNTPD.StorageService.Listener
                             {
                                 inputOffset += index + 2;
                                 PreserveLeftover(input, inputOffset, inputCount - inputOffset);
-                                ArrayPool<byte>.Shared.Return(input);
+                                ReturnRentedInput(rentedInput);
                                 return (rented, rented.AsMemory(0, written));
                             }
 
@@ -434,7 +447,7 @@ namespace VectorNNTPD.StorageService.Listener
                             {
                                 inputOffset += index + 3;
                                 PreserveLeftover(input, inputOffset, inputCount - inputOffset);
-                                ArrayPool<byte>.Shared.Return(input);
+                                ReturnRentedInput(rentedInput);
                                 return (rented, rented.AsMemory(0, written));
                             }
 
@@ -496,8 +509,16 @@ namespace VectorNNTPD.StorageService.Listener
             catch
             {
                 ArrayPool<byte>.Shared.Return(rented);
-                ArrayPool<byte>.Shared.Return(input);
+                ReturnRentedInput(rentedInput);
                 throw;
+            }
+        }
+
+        private static void ReturnRentedInput(byte[]? rentedInput)
+        {
+            if (rentedInput is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rentedInput);
             }
         }
 
@@ -542,16 +563,23 @@ namespace VectorNNTPD.StorageService.Listener
                         return new CommandRead(CommandReadKind.Overlong, ReadOnlyMemory<byte>.Empty);
                     }
 
-                    // Copy the command line before shifting residue. Line must not alias _pending:
-                    // leftover article bytes after CRLF are moved to offset 0 and would overwrite it.
-                    var line = _pending.AsSpan(0, crlf).ToArray();
                     var consumed = crlf + 2;
+                    ReadOnlyMemory<byte> line;
                     if (consumed < _pendingCount)
                     {
+                        // Residue follows the CRLF (pipelined article bytes). Copy the command line
+                        // before BlockCopy shifts that residue over offset 0.
+                        line = _pending.AsSpan(0, crlf).ToArray();
                         Buffer.BlockCopy(_pending, consumed, _pending, 0, _pendingCount - consumed);
+                        _pendingCount -= consumed;
+                    }
+                    else
+                    {
+                        // No residue: caller finishes using Line before the next read or PreserveLeftover.
+                        line = _pending.AsMemory(0, crlf);
+                        _pendingCount = 0;
                     }
 
-                    _pendingCount -= consumed;
                     return new CommandRead(CommandReadKind.Complete, line);
                 }
 
@@ -621,22 +649,42 @@ namespace VectorNNTPD.StorageService.Listener
             }
         }
 
-        private async Task WriteStatusAsync(
+        private Task WriteStatusAsync(
             byte hundreds,
             byte tens,
             byte ones,
-            byte[] messageId,
+            byte[] messageIdArgument,
+            CancellationToken cancellationToken)
+        {
+            if (!TryParseMessageIdArgument(messageIdArgument, out var messageId))
+            {
+                return WriteFullyAsync(SyntaxError, cancellationToken);
+            }
+
+            return WriteStatusAsync(hundreds, tens, ones, messageId, cancellationToken);
+        }
+
+        private Task WriteStatusAsync(
+            byte hundreds,
+            byte tens,
+            byte ones,
+            ReadOnlySpan<byte> messageId,
             CancellationToken cancellationToken)
         {
             var length = 4 + messageId.Length + 2;
+            if ((uint)length > (uint)_statusScratch.Length)
+            {
+                return WriteFullyAsync(SyntaxError, cancellationToken);
+            }
+
             _statusScratch[0] = hundreds;
             _statusScratch[1] = tens;
             _statusScratch[2] = ones;
             _statusScratch[3] = (byte)' ';
-            messageId.AsSpan().CopyTo(_statusScratch.AsSpan(4));
+            messageId.CopyTo(_statusScratch.AsSpan(4));
             _statusScratch[4 + messageId.Length] = (byte)'\r';
             _statusScratch[5 + messageId.Length] = (byte)'\n';
-            await WriteFullyAsync(_statusScratch.AsMemory(0, length), cancellationToken).ConfigureAwait(false);
+            return WriteFullyAsync(_statusScratch.AsMemory(0, length), cancellationToken);
         }
 
         private async Task WriteFullyAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)

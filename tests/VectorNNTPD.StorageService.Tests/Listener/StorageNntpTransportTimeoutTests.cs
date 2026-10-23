@@ -2,6 +2,16 @@ using VectorNNTPD.StorageService.Listener;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
+    /// <summary>
+    /// Process-wide I/O and TLS sample counters on <see cref="StreamStorageListenerTransport"/> must not
+    /// race with listener or placement tests that construct the same type.
+    /// </summary>
+    [CollectionDefinition("StorageNntpTransportCounters", DisableParallelization = true)]
+    public sealed class StorageNntpTransportCountersCollection
+    {
+    }
+
+    [Collection("StorageNntpTransportCounters")]
     public sealed class StorageNntpTransportTimeoutTests
     {
         [Fact]
@@ -124,6 +134,8 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             }
 
             var tls = StreamStorageListenerTransport.ReadTlsThreadCost();
+            // Exact sample count: this collection disables parallelization so other tests cannot
+            // increment the process-wide counters between ResetIoSplit and this assert.
             Assert.Equal(16, tls.ReadSameThread + tls.ReadHops);
         }
 
