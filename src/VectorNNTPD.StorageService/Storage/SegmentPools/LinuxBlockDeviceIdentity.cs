@@ -64,16 +64,10 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             var slaves = sysfs.SlaveMajorMinors(majorMinor);
             if (slaves.Count > 0)
             {
-                foreach (var slave in slaves)
-                {
-                    var failure = Walk(slave, sysfs, seen, devices, depth + 1);
-                    if (failure is not null)
-                    {
-                        return failure;
-                    }
-                }
-
-                return null;
+                // Lazy Select + FirstOrDefault preserves Walk order and stops at the first failure.
+                return slaves
+                    .Select(slave => Walk(slave, sysfs, seen, devices, depth + 1))
+                    .FirstOrDefault(static failure => failure is not null);
             }
 
             if (sysfs.HasPartition(majorMinor))

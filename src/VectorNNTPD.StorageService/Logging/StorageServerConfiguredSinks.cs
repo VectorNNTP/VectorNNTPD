@@ -77,11 +77,24 @@ namespace VectorNNTPD.StorageService.Logging
             // Every configured sink is applied — typed helpers or the binder. Not a filtered subset.
             foreach (var sink in children)
             {
-                if (!TryApply(logger, sink))
-                {
-                    ApplyRemainingSink(logger, configuration, sink);
-                }
+                ApplyConfiguredSink(logger, configuration, sink);
             }
+        }
+
+        /// <summary>
+        /// Applies one WriteTo entry with the typed helper when possible, otherwise the binder.
+        /// </summary>
+        private static void ApplyConfiguredSink(
+            LoggerConfiguration logger,
+            IConfiguration configuration,
+            IConfigurationSection sink)
+        {
+            if (TryApply(logger, sink))
+            {
+                return;
+            }
+
+            ApplyRemainingSink(logger, configuration, sink);
         }
 
         /// <summary>
