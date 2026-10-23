@@ -405,7 +405,9 @@ namespace VectorNNTPD.Common.Articles.Processing
                     written += headerTail;
                 }
 
-                if (extraDots == 0 || bodyMode == CanonicalBodyMode.PreserveCanonicalBody)
+                // PreserveCanonicalBody already forced extraDots to 0 above, so a body copy covers
+                // both "no dots to stuff" and "already CanonicalV1; do not restuff".
+                if (extraDots == 0)
                 {
                     source[bodyStart..].CopyTo(dest[written..]);
                     written += source.Length - bodyStart;
