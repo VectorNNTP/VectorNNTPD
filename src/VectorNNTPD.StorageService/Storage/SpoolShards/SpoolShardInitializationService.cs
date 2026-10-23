@@ -116,23 +116,11 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         /// <summary>Distinct canonical spool paths from the validation catalog.</summary>
-        private List<string> UniqueSpools()
-        {
-            var spools = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var device in _catalog.Devices)
-            {
-                foreach (var path in device.PoolPaths)
-                {
-                    if (seen.Add(path))
-                    {
-                        spools.Add(path);
-                    }
-                }
-            }
-
-            return spools;
-        }
+        private List<string> UniqueSpools() =>
+            _catalog.Devices
+                .SelectMany(static device => device.PoolPaths)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
 
         /// <summary>
         /// Creates every shard directory for one spool. Levels run in order so parents exist.

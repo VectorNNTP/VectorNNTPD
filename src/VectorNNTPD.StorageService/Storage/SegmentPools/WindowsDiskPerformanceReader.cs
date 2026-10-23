@@ -63,26 +63,39 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                     return false;
                 }
 
-                if (!_handles.TryGetValue(disk, out var held)
-                    || held.Handle is not { IsInvalid: false, IsClosed: false } reusable)
+                SafeFileHandle reusable;
+                string devicePath;
+                if (_handles.TryGetValue(disk, out var held)
+                    && held.Handle is { IsInvalid: false, IsClosed: false } cached)
                 {
-                    held.Handle?.Dispose();
+                    reusable = cached;
+                    devicePath = held.DevicePath;
+                }
+                else
+                {
+                    // TryGetValue failed or the cached handle is unusable; dispose any remnant.
+                    if (_handles.TryGetValue(disk, out var stale))
+                    {
+                        stale.Handle.Dispose();
+                        _handles.Remove(disk);
+                    }
+
                     var opened = _open(disk);
                     OpenCount++;
                     if (opened.Handle.IsInvalid)
                     {
                         opened.Handle.Dispose();
                         error = WindowsStorageNative.FormatWin32Failure("CreateFileW", opened.DevicePath, opened.Win32Error, "IOCTL_DISK_PERFORMANCE");
-                        _handles.Remove(disk);
                         return false;
                     }
 
                     held = new HeldDisk(opened.Handle, opened.DevicePath);
                     _handles[disk] = held;
                     reusable = held.Handle;
+                    devicePath = held.DevicePath;
                 }
 
-                var queried = _query(reusable, held.DevicePath);
+                var queried = _query(reusable, devicePath);
                 if (!queried.Ok)
                 {
                     held.Handle.Dispose();

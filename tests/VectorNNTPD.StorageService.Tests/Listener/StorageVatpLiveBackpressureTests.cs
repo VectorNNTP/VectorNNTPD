@@ -216,6 +216,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 dropResult.Kind.ToString());
             await WaitUntilAsync(() => host.Queue.AdmissionWaiters == 0 && host.Queue.ReservedBytes == 0);
             Assert.Equal(budget, host.Queue.QueuedBytes);
+            await WaitUntilAsync(() => host.Admission.InFlight == 0);
 
             await using var windowClient = await TracingClient.ConnectAsync(host.Port);
             await windowClient.SendStoreAndMetaAsync(reserved);
@@ -228,6 +229,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             await windowClient.DisposeAsync();
             await WaitUntilAsync(() => host.Queue.ReservedBytes == 0 && host.Queue.AdmissionWaiters == 0);
             Assert.Equal(0, host.Queue.QueuedBytes);
+            await WaitUntilAsync(() => host.Admission.InFlight == 0);
 
             Assert.Equal(ArticlePlacementKind.Accepted, (await owner.PlaceAsync(filler, host.Target, CancellationToken.None)).Kind);
             await using var partialClient = await TracingClient.ConnectAsync(host.Port);
@@ -579,6 +581,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 TlsCertificateContextProvider certificates,
                 GatePublisher? gate,
                 AcceptedArticleQueue queue,
+                StoreAssemblyAdmission admission,
                 ListLogger logger,
                 StorageServerFleetEntry target,
                 int port)
@@ -588,12 +591,15 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 _certificates = certificates;
                 _gate = gate;
                 Queue = queue;
+                Admission = admission;
                 Logger = logger;
                 Target = target;
                 Port = port;
             }
 
             public AcceptedArticleQueue Queue { get; }
+
+            public StoreAssemblyAdmission Admission { get; }
 
             public ListLogger Logger { get; }
 
@@ -626,6 +632,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 var logger = new ListLogger();
                 var queue = new AcceptedArticleQueue(budget, TimeProvider.System);
                 GatePublisher? gate = processor as GatePublisher;
+                var admission = new StoreAssemblyAdmission(8);
                 var listener = new StorageVatpListenerService(
                     runtime,
                     certificates,
@@ -633,7 +640,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                     readiness,
                     logger,
                     queue,
-                    new StoreAssemblyAdmission(8));
+                    admission);
                 await listener.StartAsync(CancellationToken.None);
                 AcceptedArticleWorker? worker = null;
                 if (startWorker)
@@ -652,6 +659,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                     certificates,
                     gate,
                     queue,
+                    admission,
                     logger,
                     new StorageServerFleetEntry(identity.ServerId!.Value, identity.Fqdn, 1, 0, 1, DateTimeOffset.UtcNow, port),
                     port);

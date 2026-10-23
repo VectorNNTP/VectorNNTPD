@@ -60,7 +60,7 @@ namespace VectorNNTPD.StorageService.Listener
                 StoreReceiveCorrelation,
                 articleId,
                 _limits);
-            if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, slotHeld: acquiredAdmission is not null)))
+            if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, acquiredAdmission)))
             {
                 acquiredAdmission?.Exit();
 
@@ -200,8 +200,7 @@ namespace VectorNNTPD.StorageService.Listener
                     else
                     {
                         metaCopy = store.PendingMeta;
-                        store.Reservation = reservation.Value;
-                        store.HasReservation = true;
+                        store.ReservationHold.Bind(queue, reservation.Value);
                         reservation = null;
                     }
                 }
@@ -234,7 +233,7 @@ namespace VectorNNTPD.StorageService.Listener
                         store,
                         new ReadOnlySequence<byte>(metaCopy),
                         meta,
-                        store.Reservation,
+                        store.ReservationHold.Reservation,
                         CancellationToken.None)
                     .ConfigureAwait(false);
             }
@@ -311,6 +310,10 @@ namespace VectorNNTPD.StorageService.Listener
             QueueReservation reservation,
             CancellationToken cancellationToken)
         {
+            // True when AdmitWhenCapacityAsync already bound this reservation before this call.
+            // Combined with StoreReservationHold.TryRelease (exactly-once), prevents double Release
+            // when RemoveStore races with this failure path.
+            var reservationAlreadyBound = store.ReservationHold.IsBound;
             VatpErrorCode failure;
             lock (_storeGate)
             {
@@ -327,8 +330,7 @@ namespace VectorNNTPD.StorageService.Listener
                     }
                     else
                     {
-                        store.Reservation = reservation;
-                        store.HasReservation = true;
+                        store.ReservationHold.Bind(_acceptedArticles, reservation);
                         store.MetaArtHash = meta.ArtHash;
                         store.MetaArtSize = meta.ArtSize;
                         store.MetaSeen = true;
@@ -341,13 +343,9 @@ namespace VectorNNTPD.StorageService.Listener
 
             if (failure != VatpErrorCode.None)
             {
-                if (store.HasReservation)
+                if (!store.ReservationHold.TryRelease() && !reservationAlreadyBound)
                 {
-                    store.HasReservation = false;
-                    _acceptedArticles?.Release(store.Reservation);
-                }
-                else
-                {
+                    // Unbound TryReserve/ReserveAsync slot still owned by this call.
                     _acceptedArticles?.Release(reservation);
                 }
 
@@ -482,20 +480,24 @@ namespace VectorNNTPD.StorageService.Listener
 
             var queued = new AcceptedArticle(record.ArtId, record.ArtHash, record.ArtSize, record.ArtData);
             var committed = false;
-            if (store.HasReservation)
+            // Take hold ownership before TryCommit so concurrent RemoveStore cannot Release
+            // a reservation the queue has already consumed (or is consuming).
+            if (store.ReservationHold.TryTakeForCommit(out var commitQueue, out var commitReservation))
             {
                 try
                 {
-                    committed = _acceptedArticles.TryCommit(store.Reservation, queued);
+                    committed = commitQueue!.TryCommit(commitReservation, queued);
                 }
                 catch
                 {
+                    // TryCommit throws before mutating the reservation table; return the slot.
+                    commitQueue!.Release(commitReservation);
+                    store.ReservationHold.MarkCommitOutcome(false);
                     RemoveStore(streamId);
                     throw;
                 }
 
-                store.HasReservation = false;
-                store.Committed = committed;
+                store.ReservationHold.MarkCommitOutcome(committed);
             }
 
             if (!committed)
@@ -553,11 +555,8 @@ namespace VectorNNTPD.StorageService.Listener
             }
 
             store.Closed = true;
-            if (store.SlotHeld)
-            {
-                store.SlotHeld = false;
-                _storeAdmission?.Exit();
-            }
+            // Exit the admission instance that TryEnter acquired — never re-read _storeAdmission.
+            store.ReleaseAcquiredAdmission();
 
             try
             {
@@ -568,10 +567,14 @@ namespace VectorNNTPD.StorageService.Listener
                 ExpectedException.Ignore(ex);
             }
 
-            if (store.HasReservation && !store.Committed)
+            // Serialize with Bind (always under _storeGate) so TryRelease cannot miss a
+            // mid-Bind publication. Monitor is reentrant for RemoveStore under the gate.
+            lock (_storeGate)
             {
-                store.HasReservation = false;
-                _acceptedArticles?.Release(store.Reservation);
+                if (!store.ReservationHold.Committed)
+                {
+                    store.ReservationHold.TryRelease();
+                }
             }
         }
 
@@ -592,15 +595,21 @@ namespace VectorNNTPD.StorageService.Listener
 
         private sealed class StoreStream
         {
-            public StoreStream(ArticleTransferReceiveStream receive, bool slotHeld)
+            private StoreAssemblyAdmission? _acquiredAdmission;
+
+            public StoreStream(ArticleTransferReceiveStream receive, StoreAssemblyAdmission? acquiredAdmission)
             {
                 Receive = receive;
-                SlotHeld = slotHeld;
+                _acquiredAdmission = acquiredAdmission;
             }
 
             public ArticleTransferReceiveStream Receive { get; }
 
-            public bool SlotHeld { get; set; }
+            /// <summary>Exactly-once hold for the queue reservation bound to this stream.</summary>
+            public StoreReservationHold ReservationHold { get; } = new();
+
+            /// <summary>Gets whether an assembly admission slot is still held for this stream.</summary>
+            public bool SlotHeld => Volatile.Read(ref _acquiredAdmission) is not null;
 
             public bool MetaSeen { get; set; }
 
@@ -612,21 +621,22 @@ namespace VectorNNTPD.StorageService.Listener
 
             public bool BodyAuthorized { get; set; }
 
-            public bool HasReservation { get; set; }
-
-            public bool Committed { get; set; }
-
             public bool Closed { get; set; }
 
             public bool AdmissionFailed { get; set; }
-
-            public QueueReservation Reservation { get; set; }
 
             public byte[]? PendingMeta { get; set; }
 
             public CancellationTokenSource? AdmissionCts { get; set; }
 
             public Task? AdmissionTask { get; set; }
+
+            /// <summary>Exits the assembly admission slot acquired for this stream, if any.</summary>
+            public void ReleaseAcquiredAdmission()
+            {
+                // Exactly-once: concurrent RemoveStore / failure paths must not double-Exit.
+                Interlocked.Exchange(ref _acquiredAdmission, null)?.Exit();
+            }
         }
     }
 }

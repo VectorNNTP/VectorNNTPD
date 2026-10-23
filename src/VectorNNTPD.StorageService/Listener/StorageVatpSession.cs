@@ -695,15 +695,14 @@ namespace VectorNNTPD.StorageService.Listener
             var cpuStart = ThreadCpuTimes.Capture();
             try
             {
+                // 0 means "no prior successful read yet"; after the first read this holds a timestamp.
                 var processMark = 0L;
-                var markProcess = false;
                 var readsSinceFrame = 0;
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    if (markProcess)
+                    if (processMark != 0)
                     {
                         AddProcessTicks(Stopwatch.GetTimestamp() - processMark);
-                        markProcess = false;
                     }
 
                     if (buffered >= usable)
@@ -742,7 +741,6 @@ namespace VectorNNTPD.StorageService.Listener
                         NoteReadOverlap(clientWriting, readTicks);
 
                         processMark = Stopwatch.GetTimestamp();
-                        markProcess = true;
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {

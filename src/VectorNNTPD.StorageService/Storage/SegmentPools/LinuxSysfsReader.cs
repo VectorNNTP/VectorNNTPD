@@ -64,23 +64,12 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                 return [];
             }
 
-            var results = new List<string>();
-            foreach (var slave in Directory.GetDirectories(slaves))
-            {
-                var dev = StorageRelativePath.CombineUnder(slave, "dev");
-                if (!File.Exists(dev))
-                {
-                    continue;
-                }
-
-                var text = File.ReadAllText(dev).Trim();
-                if (text.Length > 0)
-                {
-                    results.Add(text);
-                }
-            }
-
-            return results;
+            return Directory.GetDirectories(slaves)
+                .Select(static slave => StorageRelativePath.CombineUnder(slave, "dev"))
+                .Where(File.Exists)
+                .Select(static dev => File.ReadAllText(dev).Trim())
+                .Where(static text => text.Length > 0)
+                .ToList();
         }
 
         /// <inheritdoc />

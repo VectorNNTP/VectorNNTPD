@@ -67,16 +67,12 @@ namespace VectorNNTPD.StorageService.Hosting
         {
             var acme = _acmeOptions.Value;
             var tokens = acme.BindAddress is { Length: > 0 } ? acme.BindAddress : ["*"];
-            var addresses = new List<IPAddress>();
-            foreach (var token in tokens)
-            {
-                if (!string.IsNullOrWhiteSpace(token)
-                    && IPAddress.TryParse(token.Trim(), out var address)
-                    && !AcmeCloudflareOptions.IsBindAddressWildcard(token))
-                {
-                    addresses.Add(address);
-                }
-            }
+            var addresses = tokens
+                .Where(static token => !string.IsNullOrWhiteSpace(token)
+                    && !AcmeCloudflareOptions.IsBindAddressWildcard(token)
+                    && IPAddress.TryParse(token.Trim(), out _))
+                .Select(static token => IPAddress.Parse(token.Trim()))
+                .ToList();
 
             var ipv4Configured = string.Join(
                 ", ",

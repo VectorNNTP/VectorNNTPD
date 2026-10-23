@@ -625,46 +625,17 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             };
             for (var i = 0; i < count; i++)
             {
-                SqliteConnection? connection = null;
-                SqliteCommand? lookup = null;
-                SqliteCommand? oldest = null;
-                SqliteCommand? before = null;
-                SqliteCommand? scan = null;
                 try
                 {
-                    connection = new SqliteConnection(builder.ConnectionString);
-                    connection.Open();
-                    Execute(connection, $"PRAGMA busy_timeout={_settings.BusyTimeoutMilliseconds};");
-                    Execute(connection, $"PRAGMA cache_size=-{_budget.ReaderCacheKibibytes};");
-                    Execute(connection, "PRAGMA query_only=ON;");
-                    lookup = Prepare(connection, ArticleIndexSql.Lookup);
-                    AddBlob(lookup, "$hash");
-                    oldest = Prepare(connection, ArticleIndexSql.Oldest);
-                    oldest.Parameters.Add("$limit", SqliteType.Integer);
-                    before = Prepare(connection, ArticleIndexSql.AccessedBefore);
-                    before.Parameters.Add("$threshold", SqliteType.Integer);
-                    before.Parameters.Add("$limit", SqliteType.Integer);
-                    scan = Prepare(connection, ArticleIndexSql.ScanLocations);
-                    _readers[i] = new ReadSlot(i, connection, lookup, oldest, before, scan, new byte[ArticleIndexSettings.HashLength]);
-                    _freeReaders.Push(i);
-                    connection = null;
-                    lookup = null;
-                    oldest = null;
-                    before = null;
-                    scan = null;
+                    OpenAndPublishReader(i, builder);
                 }
                 catch
                 {
                     try
                     {
-                        scan?.Dispose();
-                        before?.Dispose();
-                        oldest?.Dispose();
-                        lookup?.Dispose();
-                        connection?.Dispose();
-                        for (var published = 0; published < i; published++)
+                        for (var prior = 0; prior < i; prior++)
                         {
-                            var slot = _readers[published];
+                            var slot = _readers[prior];
                             slot.Lookup.Dispose();
                             slot.Oldest.Dispose();
                             slot.Before.Dispose();
@@ -685,6 +656,54 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 
                     throw;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Opens one read-only connection and prepared commands, then publishes them into the pool.
+        /// On failure, disposes any locals that were not yet published.
+        /// </summary>
+        private void OpenAndPublishReader(int index, SqliteConnectionStringBuilder builder)
+        {
+            SqliteConnection? connection = null;
+            SqliteCommand? lookup = null;
+            SqliteCommand? oldest = null;
+            SqliteCommand? before = null;
+            SqliteCommand? scan = null;
+            try
+            {
+                connection = new SqliteConnection(builder.ConnectionString);
+                connection.Open();
+                Execute(connection, $"PRAGMA busy_timeout={_settings.BusyTimeoutMilliseconds};");
+                Execute(connection, $"PRAGMA cache_size=-{_budget.ReaderCacheKibibytes};");
+                Execute(connection, "PRAGMA query_only=ON;");
+                lookup = Prepare(connection, ArticleIndexSql.Lookup);
+                AddBlob(lookup, "$hash");
+                oldest = Prepare(connection, ArticleIndexSql.Oldest);
+                oldest.Parameters.Add("$limit", SqliteType.Integer);
+                before = Prepare(connection, ArticleIndexSql.AccessedBefore);
+                before.Parameters.Add("$threshold", SqliteType.Integer);
+                before.Parameters.Add("$limit", SqliteType.Integer);
+                scan = Prepare(connection, ArticleIndexSql.ScanLocations);
+                _readers![index] = new ReadSlot(
+                    index,
+                    connection,
+                    lookup,
+                    oldest,
+                    before,
+                    scan,
+                    new byte[ArticleIndexSettings.HashLength]);
+                _freeReaders!.Push(index);
+                // Successful return leaves ownership with _readers[index]; catch does not run.
+            }
+            catch
+            {
+                scan?.Dispose();
+                before?.Dispose();
+                oldest?.Dispose();
+                lookup?.Dispose();
+                connection?.Dispose();
+                throw;
             }
         }
 

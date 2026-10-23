@@ -74,10 +74,13 @@ namespace VectorNNTPD.StorageService.Logging
                 return;
             }
 
+            // Every configured sink is applied — typed helpers or the binder. Not a filtered subset.
             foreach (var sink in children)
             {
                 if (!TryApply(logger, sink))
+                {
                     ApplyRemainingSink(logger, configuration, sink);
+                }
             }
         }
 

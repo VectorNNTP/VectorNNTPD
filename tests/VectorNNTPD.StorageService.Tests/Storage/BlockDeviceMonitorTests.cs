@@ -425,6 +425,36 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         }
 
         [Fact]
+        public void Windows_reader_replaces_an_invalid_cached_handle_without_null_dereference()
+        {
+            var opens = 0;
+            using var reader = new WindowsDiskPerformanceReader(
+                disk =>
+                {
+                    opens++;
+                    // First open returns an immediately invalid handle; second open succeeds.
+                    if (opens == 1)
+                    {
+                        return (new SafeFileHandle(IntPtr.Zero, ownsHandle: true), @"\\.\PhysicalDrive" + disk, 5);
+                    }
+
+                    return (new SafeFileHandle(new IntPtr(2), ownsHandle: false), @"\\.\PhysicalDrive" + disk, 0);
+                },
+                static (handle, path) =>
+                {
+                    _ = handle;
+                    _ = path;
+                    return (true, new WindowsStorageNative.DiskPerformanceSnapshot(1, 2, 3, 4, 5, 1, 1, 1, 10), null);
+                });
+
+            Assert.False(reader.TryRead("disk:7", out _, out var openError));
+            Assert.Contains("CreateFileW", openError, StringComparison.Ordinal);
+            Assert.True(reader.TryRead("disk:7", out var counters, out var error), error);
+            Assert.Equal(2, opens);
+            Assert.Equal(1ul, counters.ReadBytes);
+        }
+
+        [Fact]
         public void Negative_windows_performance_counters_are_not_zeros()
         {
             var snapshot = new WindowsStorageNative.DiskPerformanceSnapshot(-1, 0, 0, 0, 0, 0, 0, 0, 0);
