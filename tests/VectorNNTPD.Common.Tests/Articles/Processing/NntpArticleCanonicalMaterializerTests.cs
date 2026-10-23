@@ -21,6 +21,50 @@ namespace VectorNNTPD.Common.Tests.Articles.Processing
         private const string OrganizationalTrackerPrefix = "news.usenet.ninja!";
 
         /// <summary>
+        /// Rematerializing CanonicalV1 ArtData with <see cref="CanonicalBodyMode.PreserveCanonicalBody"/>
+        /// must not add another stuffing layer to dot-leading body lines.
+        /// </summary>
+        [Fact]
+        public void Materialize_PreserveCanonicalBody_DoesNotRestuffAlreadyStuffedBody()
+        {
+            var parser = new NntpArticleParser(LocalFqdn);
+            var destuffed = BuildArticle(
+                [
+                    "Path: peer.example",
+                    "Date: Fri, 23 Aug 2024 07:30:10 +0000",
+                    "Message-ID: <preserve-body@example.test>",
+                    "Newsgroups: alt.test",
+                    "From: user@example.test",
+                    "Subject: dots",
+                ],
+                "Hello\r\n.leading\r\n..leading\r\n");
+            var first = ArticleRecordFactory.TryCreate(parser, destuffed, ArticlePathMode.Normalize);
+            Assert.True(first.IsAccepted);
+            var stuffedBody = Encoding.ASCII.GetString(GetBodyBytes(first.Record.ArtData.Span));
+            Assert.Equal("Hello\r\n..leading\r\n...leading\r\n", stuffedBody);
+
+            var parse = parser.Parse(first.Record.ArtData);
+            Assert.True(parse.IsAccepted);
+            var restuffed = NntpArticleCanonicalMaterializer.Materialize(in parse, ArticlePathMode.Traverse);
+            Assert.True(restuffed.IsAccepted);
+            Assert.Equal(
+                "Hello\r\n...leading\r\n....leading\r\n",
+                Encoding.ASCII.GetString(GetBodyBytes(restuffed.ArticleBytes.AsSpan(0, restuffed.CanonicalLength))));
+
+            var preserved = NntpArticleCanonicalMaterializer.Materialize(
+                in parse,
+                ArticlePathMode.Traverse,
+                ArticleResourceLimits.MaxArticleBytes,
+                ArticlePathCanonicalizer.OrganizationalTrackerHost,
+                rentFrom: null,
+                CanonicalBodyMode.PreserveCanonicalBody);
+            Assert.True(preserved.IsAccepted);
+            Assert.Equal(
+                stuffedBody,
+                Encoding.ASCII.GetString(GetBodyBytes(preserved.ArticleBytes.AsSpan(0, preserved.CanonicalLength))));
+        }
+
+        /// <summary>
         /// A missing Path is inserted as the tracker plus the local identity, the Date is rewritten to canonical UTC, and the body is unchanged.
         /// </summary>
         [Fact]

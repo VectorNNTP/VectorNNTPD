@@ -499,8 +499,15 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             });
             var materializeTicks = Time(count, i =>
             {
+                // ArtData is already CanonicalV1; match the worker Path rewrite body mode.
                 var parsed = parser.Parse(articles[i].ArtData);
-                var materialized = NntpArticleCanonicalMaterializer.Materialize(in parsed, ArticlePathMode.Traverse);
+                var materialized = NntpArticleCanonicalMaterializer.Materialize(
+                    in parsed,
+                    ArticlePathMode.Traverse,
+                    ArticleResourceLimits.MaxArticleBytes,
+                    ArticlePathCanonicalizer.OrganizationalTrackerHost,
+                    rentFrom: null,
+                    CanonicalBodyMode.PreserveCanonicalBody);
                 Assert.True(materialized.IsAccepted);
             });
             var hashTicks = Time(count, i =>

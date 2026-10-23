@@ -5,6 +5,49 @@ using VectorNNTPD.Common.Core;
 namespace VectorNNTPD.Common.Articles.Processing
 {
     /// <summary>
+    /// How <see cref="NntpArticleCanonicalMaterializer"/> treats the body of an accepted parse result.
+    /// </summary>
+    /// <remarks>
+    /// Three representations must not be confused:
+    /// <list type="bullet">
+    /// <item>
+    /// <description>
+    /// NNTP transport stuffing (wire): an extra leading <c>.</c> on body lines during multiline transfer.
+    /// Removed by the protocol reader before any materialization.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// Destuffed article content: logical body after transport destuff. First ingest materialization
+    /// uses <see cref="StuffDestuffedBody"/>.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// CanonicalV1 storage body: after one storage stuffing pass (one leading <c>.</c> on each body
+    /// line whose first content byte is <c>.</c>). Queued <c>ArtData</c> and spool bytes use this form.
+    /// Rematerializing Path/Date on that form requires <see cref="PreserveCanonicalBody"/>.
+    /// </description>
+    /// </item>
+    /// </list>
+    /// Choosing the wrong mode silently corrupts dot-leading body lines (under-stuff or double-stuff).
+    /// </remarks>
+    internal enum CanonicalBodyMode
+    {
+        /// <summary>
+        /// Source body is destuffed article content (not CanonicalV1 yet).
+        /// Apply exactly one CanonicalV1 storage stuffing pass.
+        /// </summary>
+        StuffDestuffedBody = 0,
+
+        /// <summary>
+        /// Source body is already CanonicalV1 storage-stuffed (for example queued <c>ArtData</c>).
+        /// Copy the body unchanged. Do not use for destuffed ingress bytes or NNTP wire bytes.
+        /// </summary>
+        PreserveCanonicalBody = 1,
+    }
+
+    /// <summary>
     /// Classifies why canonical Date/Path materialization could not produce a retainable article.
     /// </summary>
     public enum NntpArticleCanonicalFailureCode
@@ -146,9 +189,10 @@ namespace VectorNNTPD.Common.Articles.Processing
     /// </summary>
     /// <remarks>
     /// Rewrites only the selected date-header value and the Path header (or inserts Path).
-    /// Other header bytes are copied exactly. Body lines whose first content byte is <c>.</c> gain one
-    /// leading dot through <see cref="ArticleBodyWireStuffer"/>. yEnc is not decoded.
-    /// The NNTP terminator <c>.CRLF</c> is not stored.
+    /// Other header bytes are copied exactly. By default, body lines whose first content byte is <c>.</c>
+    /// gain one leading dot through <see cref="ArticleBodyWireStuffer"/> when the source body is destuffed.
+    /// <see cref="CanonicalBodyMode.PreserveCanonicalBody"/> copies an already-stuffed CanonicalV1 body unchanged.
+    /// yEnc is not decoded. The NNTP terminator <c>.CRLF</c> is not stored.
     /// </remarks>
     internal static class NntpArticleCanonicalMaterializer
     {
@@ -188,13 +232,20 @@ namespace VectorNNTPD.Common.Articles.Processing
         /// The caller returns it to this same pool after every consumer has finished.
         /// When null, the result owns a new exact-size array.
         /// </param>
+        /// <param name="bodyMode">
+        /// <see cref="CanonicalBodyMode.StuffDestuffedBody"/> (default): source body is destuffed article content;
+        /// apply one CanonicalV1 storage stuffing pass. Preserves historical ingest behaviour.
+        /// <see cref="CanonicalBodyMode.PreserveCanonicalBody"/>: source body is already CanonicalV1;
+        /// copy it unchanged while rewriting Path/Date. Wrong mode silently corrupts dot-leading lines.
+        /// </param>
         /// <returns>A result that owns one exact-size canonical buffer on success, or a rented buffer, or a failure classification.</returns>
         internal static NntpArticleCanonicalMaterializeResult Materialize(
             in NntpArticleParseResult parseResult,
             ArticlePathMode pathMode,
             int maxArticleBytes,
             ReadOnlySpan<byte> organizationalTrackerHost,
-            ArrayPool<byte>? rentFrom = null)
+            ArrayPool<byte>? rentFrom = null,
+            CanonicalBodyMode bodyMode = CanonicalBodyMode.StuffDestuffedBody)
         {
             if (!parseResult.IsAccepted)
             {
@@ -294,7 +345,11 @@ namespace VectorNNTPD.Common.Articles.Processing
             int finalLength;
             try
             {
-                extraDots = ArticleBodyWireStuffer.CountExtraDots(source[bodyStart..]);
+                // Queued CanonicalV1 ArtData is already storage-stuffed. Re-stuffing it would corrupt
+                // every body line that begins with '.' (for example "..leading" becomes "...leading").
+                extraDots = bodyMode == CanonicalBodyMode.PreserveCanonicalBody
+                    ? 0
+                    : ArticleBodyWireStuffer.CountExtraDots(source[bodyStart..]);
                 finalLength = checked(destinationLength + extraDots);
             }
             catch (OverflowException)
@@ -350,7 +405,7 @@ namespace VectorNNTPD.Common.Articles.Processing
                     written += headerTail;
                 }
 
-                if (extraDots == 0)
+                if (extraDots == 0 || bodyMode == CanonicalBodyMode.PreserveCanonicalBody)
                 {
                     source[bodyStart..].CopyTo(dest[written..]);
                     written += source.Length - bodyStart;

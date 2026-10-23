@@ -15,6 +15,86 @@ namespace VectorNNTPD.StorageService.Tests.Storage
     public sealed class SpoolPersistenceIntegrationTests
     {
         [Fact]
+        public async Task Processor_preserves_canonical_dot_stuffed_body_through_path_traverse_and_spool_write()
+        {
+            var root = NewRoot();
+            try
+            {
+                var probe = new StaticFreeSpaceProbe();
+                probe.Set(root, total: 100_000_000_000, available: 80_000_000_000);
+                var catalog = new SegmentPoolCatalog();
+                catalog.Publish([new SegmentPoolDevice("block:a", [root])]);
+                var monitor = new BlockDeviceMonitorService(
+                    catalog,
+                    new RisingCounters(),
+                    NullLogger<BlockDeviceMonitorService>.Instance,
+                    TimeSpan.FromMilliseconds(20),
+                    TimeProvider.System,
+                    probe);
+                await monitor.StartAsync(CancellationToken.None);
+                try
+                {
+                    await WaitAsync(() => monitor.Observations.Space.ContainsKey(root));
+                    var processor = new SpoolArticlePersistenceProcessor(
+                        "cache01.usenet.ninja",
+                        catalog,
+                        monitor,
+                        new SpoolWriteGate(),
+                        new SpoolArticleIdentityGate(),
+                        new SpoolHealth(TimeProvider.System),
+                        new SpoolPressure(),
+                        new SpoolArticlePublisher(new FileSpoolArticleFiles()),
+                        new SpoolPersistenceCounters(),
+                        new StorageServerOptions { SpoolPersistence = new SpoolPersistenceOptions() },
+                        NullLogger.Instance,
+                        TimeProvider.System);
+
+                    // Logical destuffed body (after TAKETHIS unstuff). Normalize → CanonicalV1 stuffed ArtData.
+                    var destuffed =
+                        "Path: peer.example\r\n" +
+                        "Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n" +
+                        "Message-ID: <persist-dots@example.test>\r\n" +
+                        "Newsgroups: alt.test\r\n" +
+                        "From: user@example.test\r\n" +
+                        "Subject: dots\r\n" +
+                        "\r\n" +
+                        "Hello\r\n" +
+                        ".leading\r\n" +
+                        "..leading\r\n" +
+                        "...leading\r\n";
+                    var created = ArticleRecordFactory.TryCreate(
+                        new NntpArticleParser("cache01.usenet.ninja"),
+                        Encoding.ASCII.GetBytes(destuffed),
+                        ArticlePathMode.Normalize);
+                    Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
+                    var queuedBody = BodyOf(created.Record.ArtData.Span);
+                    Assert.Equal("Hello\r\n..leading\r\n...leading\r\n....leading\r\n", queuedBody);
+
+                    var article = new AcceptedArticle(
+                        created.Record.ArtId,
+                        created.Record.ArtHash,
+                        created.Record.ArtSize,
+                        created.Record.ArtData);
+                    Assert.Equal(AcceptedArticleProcessResult.Completed, await processor.ProcessAsync(article, CancellationToken.None));
+
+                    var path = SpoolArticlePath.CombineArticle(root, article.ArtId);
+                    var stored = Encoding.ASCII.GetString(File.ReadAllBytes(path));
+                    Assert.StartsWith("Path: cache01.usenet.ninja!", HeaderLine(stored, "Path"), StringComparison.Ordinal);
+                    Assert.Equal(queuedBody, BodyOf(Encoding.ASCII.GetBytes(stored)));
+                    Assert.DoesNotContain(".....\r\n", stored, StringComparison.Ordinal);
+                }
+                finally
+                {
+                    await monitor.StopAsync(CancellationToken.None);
+                }
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
+        [Fact]
         public async Task Processor_writes_the_rewritten_article_to_the_roomier_spool()
         {
             var rootA = NewRoot();
@@ -471,9 +551,27 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var text = "Path: peer.example\r\nDate: Fri, 23 Aug 2024 07:30:10 +0000\r\nMessage-ID: "
                 + messageId
                 + "\r\nNewsgroups: alt.test\r\nFrom: user@example.test\r\nSubject: vatp\r\n\r\nbody-line\r\n";
-            var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(text));
+            var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(text), ArticlePathMode.Normalize);
             Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
             return new AcceptedArticle(created.Record.ArtId, created.Record.ArtHash, created.Record.ArtSize, created.Record.ArtData);
+        }
+
+        private static string BodyOf(ReadOnlySpan<byte> article)
+        {
+            var text = Encoding.ASCII.GetString(article);
+            var split = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            Assert.True(split >= 0);
+            return text[(split + 4)..];
+        }
+
+        private static string HeaderLine(string article, string name)
+        {
+            var prefix = name + ": ";
+            var start = article.IndexOf(prefix, StringComparison.Ordinal);
+            Assert.True(start >= 0, name);
+            var end = article.IndexOf("\r\n", start, StringComparison.Ordinal);
+            Assert.True(end > start);
+            return article[start..end];
         }
 
         private static async Task WaitAsync(Func<bool> condition)
