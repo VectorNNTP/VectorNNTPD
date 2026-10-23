@@ -7,6 +7,9 @@ using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Listener;
 using VectorNNTPD.StorageService;
+using VectorNNTPD.StorageService.Storage.SegmentPools;
+using VectorNNTPD.StorageService.Storage.SpoolPersistence;
+using VectorNNTPD.StorageService.Storage.SpoolShards;
 
 namespace VectorNNTPD.StorageService.Tests.Listener
 {
@@ -214,6 +217,90 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
+        public async Task TakeThis_dot_bodies_persist_canonical_body_with_storage_path_hop()
+        {
+            // Wire TAKETHIS (transport-stuffed) → queue CanonicalV1 → worker Traverse → spool file.
+            var inbound = Build(
+                "<wire-to-spool-dots@seg.test>",
+                "Hello\r\n.leading\r\n..leading\r\n...leading\r\n");
+            var expectedBody = Body(Encoding.ASCII.GetString(inbound.Record.ArtData.Span));
+            Assert.Equal("Hello\r\n..leading\r\n...leading\r\n....leading\r\n", expectedBody);
+
+            var root = Path.Join(Path.GetTempPath(), "vectornntp-wire-spool-" + Guid.NewGuid().ToString("n"));
+            Directory.CreateDirectory(root);
+            var queue = new AcceptedArticleQueue();
+            AcceptedArticleWorker? worker = null;
+            BlockDeviceMonitorService? monitor = null;
+            try
+            {
+                var probe = new StaticFreeSpaceProbe();
+                probe.Set(root, total: 100_000_000_000, available: 80_000_000_000);
+                var catalog = new SegmentPoolCatalog();
+                catalog.Publish([new SegmentPoolDevice("block:a", [root])]);
+                monitor = new BlockDeviceMonitorService(
+                    catalog,
+                    new RisingCounters(),
+                    NullLogger<BlockDeviceMonitorService>.Instance,
+                    TimeSpan.FromMilliseconds(20),
+                    TimeProvider.System,
+                    probe);
+                await monitor.StartAsync(CancellationToken.None);
+                await WaitUntilAsync(() => monitor.Observations.Space.ContainsKey(root));
+
+                var processor = new SpoolArticlePersistenceProcessor(
+                    CacheFqdn,
+                    catalog,
+                    monitor,
+                    new SpoolWriteGate(),
+                    new SpoolArticleIdentityGate(),
+                    new SpoolHealth(TimeProvider.System),
+                    new SpoolPressure(),
+                    new SpoolArticlePublisher(new FileSpoolArticleFiles()),
+                    new SpoolPersistenceCounters(),
+                    new StorageServerOptions { SpoolPersistence = new SpoolPersistenceOptions() },
+                    NullLogger.Instance,
+                    TimeProvider.System);
+                worker = new AcceptedArticleWorker(
+                    queue,
+                    processor,
+                    NullLogger<AcceptedArticleWorker>.Instance,
+                    new SpoolPersistenceOptions { MinWorkers = 1, MaxWorkers = 1 },
+                    new SpoolPressure(),
+                    new SpoolPersistenceCounters(),
+                    TimeProvider.System);
+                await worker.StartAsync(CancellationToken.None);
+
+                await using var harness = await Harness.StartAsync(queue);
+                Assert.Equal(239, await harness.TakeThisAsync(inbound).WaitAsync(Safety));
+
+                var spoolPath = SpoolArticlePath.CombineArticle(root, inbound.Record.ArtId);
+                await WaitUntilAsync(() => File.Exists(spoolPath));
+                var stored = Encoding.ASCII.GetString(File.ReadAllBytes(spoolPath));
+                Assert.StartsWith($"Path: {CacheFqdn}!", HeaderLine(stored, "Path"), StringComparison.Ordinal);
+                Assert.Equal(expectedBody, Body(stored));
+                Assert.DoesNotContain(".....\r\n", stored, StringComparison.Ordinal);
+            }
+            finally
+            {
+                if (worker is not null)
+                {
+                    queue.Complete();
+                    await worker.StopAsync(CancellationToken.None);
+                }
+
+                if (monitor is not null)
+                {
+                    await monitor.StopAsync(CancellationToken.None);
+                }
+
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        }
+
+        [Fact]
         public async Task Pipelined_second_takeThis_with_large_residue_still_enqueues()
         {
             // After the first terminator, leftover must hold the next command plus article bytes
@@ -289,6 +376,16 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var split = article.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             Assert.True(split >= 0);
             return article[(split + 4)..];
+        }
+
+        private static string HeaderLine(string article, string name)
+        {
+            var prefix = name + ": ";
+            var start = article.IndexOf(prefix, StringComparison.Ordinal);
+            Assert.True(start >= 0, name);
+            var end = article.IndexOf("\r\n", start, StringComparison.Ordinal);
+            Assert.True(end > start);
+            return article[start..end];
         }
 
         private static byte[] EncodeTakeThis(Built built)
@@ -524,6 +621,40 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 _toServer.Writer.TryComplete();
                 _toClient.Writer.TryComplete();
                 return ValueTask.CompletedTask;
+            }
+        }
+
+        private sealed class StaticFreeSpaceProbe : ISpoolFreeSpaceProbe
+        {
+            private readonly Dictionary<string, (long Total, long Available)> _space = new(StringComparer.Ordinal);
+
+            public void Set(string path, long total, long available) => _space[path] = (total, available);
+
+            public bool TryRead(string spoolRoot, out long totalBytes, out long availableBytes)
+            {
+                if (!_space.TryGetValue(spoolRoot, out var sample))
+                {
+                    totalBytes = 0;
+                    availableBytes = 0;
+                    return false;
+                }
+
+                totalBytes = sample.Total;
+                availableBytes = sample.Available;
+                return true;
+            }
+        }
+
+        private sealed class RisingCounters : IBlockDeviceCounterSource
+        {
+            private ulong _value = 1000;
+
+            public bool TryRead(string deviceId, out BlockDeviceCounters counters, out string? error)
+            {
+                _value += 1000;
+                counters = new BlockDeviceCounters(_value, _value, _value, _value, _value, _value, LatencyAvailable: true);
+                error = null;
+                return true;
             }
         }
     }

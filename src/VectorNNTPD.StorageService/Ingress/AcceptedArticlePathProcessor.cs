@@ -118,7 +118,13 @@ namespace VectorNNTPD.StorageService.Ingress
                 return false;
             }
 
-            var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, ArticlePathMode.Traverse);
+            var materialize = NntpArticleCanonicalMaterializer.Materialize(
+                in parse,
+                ArticlePathMode.Traverse,
+                ArticleResourceLimits.MaxArticleBytes,
+                ArticlePathCanonicalizer.OrganizationalTrackerHost,
+                rentFrom: null,
+                CanonicalBodyMode.PreserveCanonicalBody);
             if (!materialize.IsAccepted || materialize.ArticleBytes is null)
             {
                 AcceptedArticleWorkerLogMessages.PathRejected(
@@ -168,12 +174,14 @@ namespace VectorNNTPD.StorageService.Ingress
                 return false;
             }
 
+            // ArtData is already CanonicalV1 from ingest Normalize; only Path (and Date) must change.
             var materialize = NntpArticleCanonicalMaterializer.Materialize(
                 in parse,
                 ArticlePathMode.Traverse,
                 ArticleResourceLimits.MaxArticleBytes,
                 ArticlePathCanonicalizer.OrganizationalTrackerHost,
-                RewritePool);
+                RewritePool,
+                CanonicalBodyMode.PreserveCanonicalBody);
             if (!materialize.IsAccepted || materialize.ArticleBytes is null)
             {
                 AcceptedArticleWorkerLogMessages.PathRejected(

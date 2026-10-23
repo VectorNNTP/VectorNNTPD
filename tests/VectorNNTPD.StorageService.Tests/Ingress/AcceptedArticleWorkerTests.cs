@@ -47,7 +47,8 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
         [Fact]
         public async Task Worker_prepends_the_hop_again_when_it_is_already_present()
         {
-            var inbound = Build("<worker-again@seg.test>", "kept-body\r\n", CacheFqdn);
+            // Queued ArtData already carries this server's hop (e.g. loop/reinject). Normalize keeps it.
+            var inbound = Build("<worker-again@seg.test>", "kept-body\r\n", pathAlreadyHasCacheHop: true);
             var inboundText = Encoding.ASCII.GetString(inbound.Record.ArtData.Span);
             Assert.Equal(1, CountHop(inboundText, CacheFqdn));
             var queue = new AcceptedArticleQueue();
@@ -133,18 +134,14 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
         }
 
         [Fact]
-        public void Path_rewrite_matches_the_canonical_factory_bytes()
+        public void Path_rewrite_preserves_canonical_body_and_prepends_cache_hop()
         {
             var inbound = Build("<rewrite-match@seg.test>", "body-line\r\nsecond\r\n");
             var processor = new AcceptedArticlePathProcessor(CacheFqdn, NullLogger.Instance);
             Assert.True(processor.TryRewrite(ToQueued(inbound), out var rewritten));
-            var created = ArticleRecordFactory.TryCreate(
-                new NntpArticleParser(CacheFqdn),
-                inbound.Record.ArtData,
-                ArticlePathMode.Traverse);
-            Assert.True(created.IsAccepted);
-            Assert.True(created.Record.ArtData.Span.SequenceEqual(rewritten.Span));
-            Assert.Equal(inbound.Record.ArtId, created.Record.ArtId);
+            Assert.Equal(inbound.Record.ArtId, ArticleId.FromMessageId(MessageIdValue(rewritten.Span)));
+            Assert.Equal(Body(Encoding.ASCII.GetString(inbound.Record.ArtData.Span)), Body(Encoding.ASCII.GetString(rewritten.Span)));
+            Assert.StartsWith($"Path: {CacheFqdn}!", HeaderLine(rewritten.Span, "Path"), StringComparison.Ordinal);
 
             var wrong = new AcceptedArticle(
                 ArticleId.FromMessageId("<other@seg.test>"u8),
@@ -152,6 +149,31 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 inbound.Record.ArtSize,
                 inbound.Record.ArtData);
             Assert.False(processor.TryRewrite(wrong, out _));
+        }
+
+        [Fact]
+        public void Path_rewrite_does_not_double_stuff_dot_leading_body_lines()
+        {
+            // Destuffed logical body (post-TAKETHIS unstuff). Normalize produces CanonicalV1 stuffed ArtData.
+            var inbound = Build(
+                "<rewrite-dots@seg.test>",
+                "Hello\r\n.leading\r\n..leading\r\n...leading\r\n");
+            var queuedBody = Body(Encoding.ASCII.GetString(inbound.Record.ArtData.Span));
+            Assert.Equal("Hello\r\n..leading\r\n...leading\r\n....leading\r\n", queuedBody);
+
+            var processor = new AcceptedArticlePathProcessor(CacheFqdn, NullLogger.Instance);
+            Assert.True(processor.TryRewriteRented(ToQueued(inbound), out var rented, out var length));
+            try
+            {
+                var rewritten = rented.AsSpan(0, length);
+                Assert.Equal(queuedBody, Body(Encoding.ASCII.GetString(rewritten)));
+                Assert.StartsWith($"Path: {CacheFqdn}!", HeaderLine(rewritten, "Path"), StringComparison.Ordinal);
+                Assert.DoesNotContain(".....\r\n", Encoding.ASCII.GetString(rewritten), StringComparison.Ordinal);
+            }
+            finally
+            {
+                AcceptedArticlePathProcessor.ReturnRewriteBuffer(rented!);
+            }
         }
 
         [Fact]
@@ -213,11 +235,33 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             return article[(split + 4)..];
         }
 
-        private static Built Build(string messageId, string body, string ingressFqdn = "nntpd01.usenet.ninja")
+        private static string HeaderLine(ReadOnlySpan<byte> article, string name)
         {
-            var parser = new NntpArticleParser(ingressFqdn);
+            var text = Encoding.ASCII.GetString(article);
+            var prefix = name + ": ";
+            var start = text.IndexOf(prefix, StringComparison.Ordinal);
+            Assert.True(start >= 0, name);
+            var end = text.IndexOf("\r\n", start, StringComparison.Ordinal);
+            Assert.True(end > start);
+            return text[start..end];
+        }
+
+        private static ReadOnlySpan<byte> MessageIdValue(ReadOnlySpan<byte> article)
+        {
+            var line = HeaderLine(article, "Message-ID");
+            Assert.StartsWith("Message-ID: ", line, StringComparison.Ordinal);
+            return Encoding.ASCII.GetBytes(line["Message-ID: ".Length..]);
+        }
+
+        private static Built Build(string messageId, string body, bool pathAlreadyHasCacheHop = false)
+        {
+            // Match StorageNntpFeedSession: parser identity is the storage FQDN; ingest uses Normalize.
+            var parser = new NntpArticleParser(CacheFqdn);
+            var path = pathAlreadyHasCacheHop
+                ? CacheFqdn + "!peer.example"
+                : "peer.example";
             var text = new StringBuilder()
-                .Append("Path: peer.example\r\n")
+                .Append("Path: ").Append(path).Append("\r\n")
                 .Append("Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n")
                 .Append("Message-ID: ").Append(messageId).Append("\r\n")
                 .Append("Newsgroups: alt.test\r\n")
@@ -225,7 +269,10 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 .Append("Subject: vatp\r\n")
                 .Append("\r\n")
                 .Append(body);
-            var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(text.ToString()));
+            var created = ArticleRecordFactory.TryCreate(
+                parser,
+                Encoding.ASCII.GetBytes(text.ToString()),
+                ArticlePathMode.Normalize);
             Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
             return new Built(created.Record);
         }
