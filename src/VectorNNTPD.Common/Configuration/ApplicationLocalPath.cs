@@ -10,10 +10,17 @@ namespace VectorNNTPD.Common.Configuration
     /// host content root are never used as an implicit fallback. This method does not create directories.
     /// </para>
     /// <para>
+    /// Use this helper for configured host paths such as ACME state directories and log directories.
+    /// Do not use it to join storage spool/sysfs leaf segments under an arbitrary base; that is the
+    /// StorageService <c>StorageRelativePath</c> contract (validated single segments, optional
+    /// Linux <c>major:minor</c> leaves). The helpers are related only in that both apply lexical
+    /// containment checks; they are not interchangeable.
+    /// </para>
+    /// <para>
     /// Containment is lexical. <see cref="Path.GetFullPath(string, string)"/> normalizes <c>.</c> and <c>..</c>
     /// and does not resolve symlinks, junctions, or other reparse points. A relative path that stays inside
     /// the base after that normalization is accepted even when a directory component later points elsewhere
-    /// on the filesystem.
+    /// on the filesystem. Rooted configured paths stay rooted and are not forced under the application base.
     /// </para>
     /// </remarks>
     internal static class ApplicationLocalPath

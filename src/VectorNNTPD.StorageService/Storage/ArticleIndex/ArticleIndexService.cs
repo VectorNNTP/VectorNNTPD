@@ -152,7 +152,17 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 foreach (var binding in bindings)
                 {
                     var database = new ArticleIndexDatabase(binding.DatabasePath, binding.SpoolDirectory, _settings, budget);
-                    database.Initialize(cancellationToken);
+                    try
+                    {
+                        database.Initialize(cancellationToken);
+                    }
+                    catch
+                    {
+                        // Initialize failed before the slot was published; dispose the shell.
+                        database.Dispose();
+                        throw;
+                    }
+
                     var counters = bindings.Count == 1 ? _counters : new ArticleIndexCounters();
                     _spools.Add(new SpoolSlot(binding, database, counters, new ArticleAccessCoalescer()));
                     _bySpool[binding.SpoolDirectory] = _spools[^1];
