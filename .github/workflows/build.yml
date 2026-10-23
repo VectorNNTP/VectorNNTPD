@@ -231,19 +231,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish BackFiller linux-x64
-        # Same Native AOT invocation as the VectorNNTP release script, plus the
+      - name: Publish production services linux-x64
+        # Same Native AOT invocation as tools/Publish-Release.ps1, plus the
         # x64 platform contract. Publish restores the ILCompiler pack and the
         # StuDev.AotAnywhere Zig toolchain for this runtime identifier.
+        # Both services share one flat artifact directory (identical RabbitMQ JSON).
         run: |
-          dotnet publish src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj \
-            --configuration Release \
-            -p:Platform=x64 \
-            --runtime linux-x64 \
-            --self-contained true \
-            -p:PublishAot=true \
-            -p:SelfContained=true \
-            --output ./.artifacts/linux-x64
+          set -euo pipefail
+          for proj in \
+            src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj \
+            src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj
+          do
+            dotnet publish "$proj" \
+              --configuration Release \
+              -p:Platform=x64 \
+              --runtime linux-x64 \
+              --self-contained true \
+              -p:PublishAot=true \
+              -p:SelfContained=true \
+              --output ./.artifacts/linux-x64
+          done
 
       - name: Add Linux deployment files
         shell: bash
@@ -252,55 +259,71 @@ jobs:
           dir=./.artifacts/linux-x64
           test -f deploy/systemd/vectornntp-backfiller.service
           test -f deploy/systemd/backfiller.env.example
+          test -f deploy/systemd/vectornntp-storageservice.service
+          test -f deploy/systemd/storageservice.env.example
           test -f README.md
           cp deploy/systemd/vectornntp-backfiller.service "$dir/vectornntp-backfiller.service"
           cp deploy/systemd/backfiller.env.example "$dir/backfiller.env.example"
+          cp deploy/systemd/vectornntp-storageservice.service "$dir/vectornntp-storageservice.service"
+          cp deploy/systemd/storageservice.env.example "$dir/storageservice.env.example"
           cp README.md "$dir/README.md"
           test -f "$dir/VectorNNTPD.BackFillerService.json"
+          test -f "$dir/VectorNNTPD.StorageService.json"
           test -f "$dir/VectorNNTPD.RabbitMQ.json"
           test ! -e "$dir/VectorNNTP.RabbitMQ.json"
+          test ! -e "$dir/VectorNNTP.StorageServer.json"
           test ! -e "$dir/appsettings.json"
           test ! -e "$dir/RabbitMq.json"
 
-      - name: Validate linux-x64 Native AOT executable
+      - name: Validate linux-x64 Native AOT executables
         shell: bash
         run: |
           set -euo pipefail
           dir=./.artifacts/linux-x64
-          exe="$dir/VectorNNTPD.BackFillerService"
-          test -f "$exe"
-          test -x "$exe"
+          for exe_name in VectorNNTPD.BackFillerService VectorNNTPD.StorageService; do
+            exe="$dir/$exe_name"
+            test -f "$exe"
+            test -x "$exe"
+            file "$exe"
+            readelf -h "$exe"
+            objdump -f "$exe"
+            file -b "$exe" | grep -q "ELF 64-bit LSB"
+            file -b "$exe" | grep -q "x86-64"
+            readelf -h "$exe" | grep -q "Class:[[:space:]]*ELF64"
+            readelf -h "$exe" | grep -q "Data:[[:space:]]*2's complement, little endian"
+            readelf -h "$exe" | grep -q "Machine:[[:space:]]*Advanced Micro Devices X86-64"
+            readelf -h "$exe" | grep -E -q "Type:[[:space:]]*(EXEC|DYN)"
+            objdump -f "$exe" | grep -q "elf64-x86-64"
+            if ldd "$exe" | grep -E -q 'coreclr|hostfxr'; then
+              echo "Executable depends on the shared CLR: $exe"
+              ldd "$exe"
+              exit 1
+            fi
+          done
           test -f "$dir/vectornntp-backfiller.service"
           test -f "$dir/backfiller.env.example"
+          test -f "$dir/vectornntp-storageservice.service"
+          test -f "$dir/storageservice.env.example"
           test -f "$dir/README.md"
           test -f "$dir/VectorNNTPD.BackFillerService.json"
+          test -f "$dir/VectorNNTPD.StorageService.json"
           test -f "$dir/VectorNNTPD.RabbitMQ.json"
           test ! -e "$dir/VectorNNTP.RabbitMQ.json"
+          test ! -e "$dir/VectorNNTP.StorageServer.json"
           test ! -e "$dir/appsettings.json"
           test ! -e "$dir/RabbitMq.json"
-          file "$exe"
-          readelf -h "$exe"
-          objdump -f "$exe"
-          file -b "$exe" | grep -q "ELF 64-bit LSB"
-          file -b "$exe" | grep -q "x86-64"
-          readelf -h "$exe" | grep -q "Class:[[:space:]]*ELF64"
-          readelf -h "$exe" | grep -q "Data:[[:space:]]*2's complement, little endian"
-          readelf -h "$exe" | grep -q "Machine:[[:space:]]*Advanced Micro Devices X86-64"
-          readelf -h "$exe" | grep -E -q "Type:[[:space:]]*(EXEC|DYN)"
-          objdump -f "$exe" | grep -q "elf64-x86-64"
-          for forbidden in VectorNNTPD.BackFillerService.dll libcoreclr.so libhostfxr.so coreclr.dll hostfxr.dll; do
+          for forbidden in \
+            VectorNNTPD.BackFillerService.dll \
+            VectorNNTPD.StorageService.dll \
+            libcoreclr.so libhostfxr.so coreclr.dll hostfxr.dll
+          do
             if [ -e "$dir/$forbidden" ]; then
               echo "Native AOT output contains $forbidden."
               exit 1
             fi
           done
-          if ldd "$exe" | grep -E -q 'coreclr|hostfxr'; then
-            echo "Executable depends on the shared CLR."
-            ldd "$exe"
-            exit 1
-          fi
 
-      - name: Smoke-test linux-x64 Native AOT startup
+      - name: Smoke-test linux-x64 Native AOT startup (BackFiller)
         shell: bash
         run: |
           set -euo pipefail
@@ -311,28 +334,59 @@ jobs:
           export VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1
           export VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG="$config"
           set +e
-          timeout 30 "$exe" >./.artifacts/linux-x64-smoke-stdout.txt 2>./.artifacts/linux-x64-smoke-stderr.txt
+          timeout 30 "$exe" >./.artifacts/linux-x64-backfiller-smoke-stdout.txt 2>./.artifacts/linux-x64-backfiller-smoke-stderr.txt
           code=$?
           set -e
-          echo "linux-x64 startup smoke exit=$code"
+          echo "linux-x64 BackFiller startup smoke exit=$code"
           echo "----- stdout -----"
-          cat ./.artifacts/linux-x64-smoke-stdout.txt
+          cat ./.artifacts/linux-x64-backfiller-smoke-stdout.txt
           echo "----- stderr -----"
-          cat ./.artifacts/linux-x64-smoke-stderr.txt
+          cat ./.artifacts/linux-x64-backfiller-smoke-stderr.txt
           if [ "$code" -eq 124 ]; then
-            echo "linux-x64 startup smoke timed out."
+            echo "linux-x64 BackFiller startup smoke timed out."
             exit 1
           fi
           if [ "$code" -ne 0 ]; then
-            echo "linux-x64 startup smoke failed."
+            echo "linux-x64 BackFiller startup smoke failed."
             exit 1
           fi
-          grep -q "BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja" ./.artifacts/linux-x64-smoke-stdout.txt
+          grep -q "BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja" ./.artifacts/linux-x64-backfiller-smoke-stdout.txt
+
+      - name: Smoke-test linux-x64 Native AOT startup (StorageService)
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=./.artifacts/linux-x64/VectorNNTPD.StorageService
+          config="$PWD/tests/VectorNNTPD.StorageService.Tests/Fixtures/startup-smoke.json"
+          test -f "$exe"
+          test -f "$config"
+          export VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE=1
+          export VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE_CONFIG="$config"
+          set +e
+          timeout 30 "$exe" >./.artifacts/linux-x64-storageservice-smoke-stdout.txt 2>./.artifacts/linux-x64-storageservice-smoke-stderr.txt
+          code=$?
+          set -e
+          echo "linux-x64 StorageService startup smoke exit=$code"
+          echo "----- stdout -----"
+          cat ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
+          echo "----- stderr -----"
+          cat ./.artifacts/linux-x64-storageservice-smoke-stderr.txt
+          if [ "$code" -eq 124 ]; then
+            echo "linux-x64 StorageService startup smoke timed out."
+            exit 1
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo "linux-x64 StorageService startup smoke failed."
+            exit 1
+          fi
+          grep -q "StorageService startup smoke: configuration serverId=1 fqdn=cache01.usenet.ninja" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
+          grep -q "Application logging initialized" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
+          grep -q "VectorNNTPD.StorageService host starting" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
 
       - name: Upload Linux build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: backfiller-linux-x64-ci-build
+          name: vectornntpd-linux-x64-ci-build
           path: .artifacts/linux-x64/
           if-no-files-found: error
           retention-days: 7
@@ -361,58 +415,76 @@ jobs:
         # VectorNNTPD.slnx is the canonical CI entrypoint for the production and test projects.
         run: dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore
 
-      - name: Publish BackFiller win-x64
+      - name: Publish production services win-x64
         # Native AOT. PublishAot is true only for this runtime identifier, and the
         # ILCompiler pack is restored only when that identifier is present.
         # The solution restore above does not pass a runtime identifier, so this
         # publish restores itself. --no-restore here would publish a self-contained
         # managed app and the RequireNativeAotCompiler target would fail.
+        # Both services share one flat artifact directory (identical RabbitMQ JSON).
         shell: pwsh
         run: |
-          dotnet publish src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj `
-            --configuration Release `
-            -p:Platform=x64 `
-            --runtime win-x64 `
-            --self-contained true `
-            -p:PublishAot=true `
-            -p:SelfContained=true `
-            --output ./.artifacts/win-x64
+          $ErrorActionPreference = 'Stop'
+          foreach ($proj in @(
+            'src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj',
+            'src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj'
+          )) {
+            dotnet publish $proj `
+              --configuration Release `
+              -p:Platform=x64 `
+              --runtime win-x64 `
+              --self-contained true `
+              -p:PublishAot=true `
+              -p:SelfContained=true `
+              --output ./.artifacts/win-x64
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $proj" }
+          }
 
-      - name: Validate win-x64 Native AOT executable
+      - name: Validate win-x64 Native AOT executables
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $dir = './.artifacts/win-x64'
-          $exe = Join-Path $dir 'VectorNNTPD.BackFillerService.exe'
-          if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
-          foreach ($required in @('VectorNNTPD.BackFillerService.json', 'VectorNNTPD.RabbitMQ.json')) {
+          foreach ($exeName in @('VectorNNTPD.BackFillerService.exe', 'VectorNNTPD.StorageService.exe')) {
+            $exe = Join-Path $dir $exeName
+            if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
+            if ($bytes.Length -lt 512 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Expected a Windows PE executable: $exe" }
+            $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
+            if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { throw "Missing PE signature: $exe" }
+            $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            if ($machine -ne 0x8664) { throw "Expected x64 machine 0x8664 and found 0x$('{0:X4}' -f $machine): $exe" }
+            $optional = $peOffset + 24
+            $magic = [System.BitConverter]::ToUInt16($bytes, $optional)
+            if ($magic -ne 0x20B) { throw "Expected PE32+ and found magic 0x$('{0:X4}' -f $magic): $exe" }
+            $clrSize = [System.BitConverter]::ToUInt32($bytes, $optional + 112 + (14 * 8) + 4)
+            if ($clrSize -ne 0) { throw "Executable still has a CLR runtime header, so it is not Native AOT: $exe" }
+          }
+          foreach ($required in @('VectorNNTPD.BackFillerService.json', 'VectorNNTPD.StorageService.json', 'VectorNNTPD.RabbitMQ.json')) {
             $path = Join-Path $dir $required
             if (-not (Test-Path -LiteralPath $path)) { throw "Missing $path" }
           }
-          foreach ($forbidden in @('VectorNNTPD.BackFillerService.dll', 'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so', 'vectornntp-backfiller.service', 'backfiller.env.example', 'appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json')) {
+          foreach ($forbidden in @(
+            'VectorNNTPD.BackFillerService.dll',
+            'VectorNNTPD.StorageService.dll',
+            'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so',
+            'vectornntp-backfiller.service', 'backfiller.env.example',
+            'vectornntp-storageservice.service', 'storageservice.env.example',
+            'appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json', 'VectorNNTP.StorageServer.json',
+            'VectorNNTPD.StorageService.Development.json', 'VectorNNTPD.BackFillerService.Development.json'
+          )) {
             $path = Join-Path $dir $forbidden
             if (Test-Path -LiteralPath $path) { throw "Native AOT output contains $forbidden." }
           }
-          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
-          if ($bytes.Length -lt 512 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Expected a Windows PE executable." }
-          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
-          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { throw "Missing PE signature." }
-          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
-          if ($machine -ne 0x8664) { throw "Expected x64 machine 0x8664 and found 0x$('{0:X4}' -f $machine)." }
-          $optional = $peOffset + 24
-          $magic = [System.BitConverter]::ToUInt16($bytes, $optional)
-          if ($magic -ne 0x20B) { throw "Expected PE32+ and found magic 0x$('{0:X4}' -f $magic)." }
-          $clrSize = [System.BitConverter]::ToUInt32($bytes, $optional + 112 + (14 * 8) + 4)
-          if ($clrSize -ne 0) { throw "Executable still has a CLR runtime header, so it is not Native AOT." }
 
-      - name: Smoke-test win-x64 Native AOT startup
+      - name: Smoke-test win-x64 Native AOT startup (BackFiller)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $exe = Join-Path (Resolve-Path './.artifacts/win-x64') 'VectorNNTPD.BackFillerService.exe'
           $config = (Resolve-Path './tests/VectorNNTPD.BackFillerService.Tests/Fixtures/startup-smoke.json').Path
-          $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-smoke-stdout.txt'
-          $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-smoke-stderr.txt'
+          $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-backfiller-smoke-stdout.txt'
+          $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-backfiller-smoke-stderr.txt'
           $process = [System.Diagnostics.Process]::new()
           $process.StartInfo.FileName = $exe
           $process.StartInfo.WorkingDirectory = Split-Path -Parent $exe
@@ -421,32 +493,76 @@ jobs:
           $process.StartInfo.RedirectStandardError = $true
           $process.StartInfo.Environment['VECTORNNTP_BACKFILLER_STARTUP_SMOKE'] = '1'
           $process.StartInfo.Environment['VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG'] = $config
-          if (-not $process.Start()) { throw 'Failed to start the win-x64 startup smoke process.' }
+          if (-not $process.Start()) { throw 'Failed to start the win-x64 BackFiller startup smoke process.' }
           $stdoutTask = $process.StandardOutput.ReadToEndAsync()
           $stderrTask = $process.StandardError.ReadToEndAsync()
           if (-not $process.WaitForExit(30000)) {
             try { $process.Kill($true) } catch { }
-            throw 'win-x64 startup smoke timed out.'
+            throw 'win-x64 BackFiller startup smoke timed out.'
           }
           $process.WaitForExit()
           $stdout = $stdoutTask.GetAwaiter().GetResult()
           $stderr = $stderrTask.GetAwaiter().GetResult()
           Set-Content -LiteralPath $stdoutPath -Value $stdout
           Set-Content -LiteralPath $stderrPath -Value $stderr
-          Write-Host "win-x64 startup smoke exit=$($process.ExitCode)"
+          Write-Host "win-x64 BackFiller startup smoke exit=$($process.ExitCode)"
           Write-Host '----- stdout -----'
           Write-Host $stdout
           Write-Host '----- stderr -----'
           Write-Host $stderr
-          if ($process.ExitCode -ne 0) { throw 'win-x64 startup smoke failed.' }
+          if ($process.ExitCode -ne 0) { throw 'win-x64 BackFiller startup smoke failed.' }
           if ($stdout -notmatch 'BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01\.usenet\.ninja') {
-            throw 'win-x64 startup smoke did not reach the configuration checkpoint.'
+            throw 'win-x64 BackFiller startup smoke did not reach the configuration checkpoint.'
+          }
+
+      - name: Smoke-test win-x64 Native AOT startup (StorageService)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path (Resolve-Path './.artifacts/win-x64') 'VectorNNTPD.StorageService.exe'
+          $config = (Resolve-Path './tests/VectorNNTPD.StorageService.Tests/Fixtures/startup-smoke.json').Path
+          $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-storageservice-smoke-stdout.txt'
+          $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-storageservice-smoke-stderr.txt'
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo.FileName = $exe
+          $process.StartInfo.WorkingDirectory = Split-Path -Parent $exe
+          $process.StartInfo.UseShellExecute = $false
+          $process.StartInfo.RedirectStandardOutput = $true
+          $process.StartInfo.RedirectStandardError = $true
+          $process.StartInfo.Environment['VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE'] = '1'
+          $process.StartInfo.Environment['VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE_CONFIG'] = $config
+          if (-not $process.Start()) { throw 'Failed to start the win-x64 StorageService startup smoke process.' }
+          $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+          $stderrTask = $process.StandardError.ReadToEndAsync()
+          if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill($true) } catch { }
+            throw 'win-x64 StorageService startup smoke timed out.'
+          }
+          $process.WaitForExit()
+          $stdout = $stdoutTask.GetAwaiter().GetResult()
+          $stderr = $stderrTask.GetAwaiter().GetResult()
+          Set-Content -LiteralPath $stdoutPath -Value $stdout
+          Set-Content -LiteralPath $stderrPath -Value $stderr
+          Write-Host "win-x64 StorageService startup smoke exit=$($process.ExitCode)"
+          Write-Host '----- stdout -----'
+          Write-Host $stdout
+          Write-Host '----- stderr -----'
+          Write-Host $stderr
+          if ($process.ExitCode -ne 0) { throw 'win-x64 StorageService startup smoke failed.' }
+          if ($stdout -notmatch 'StorageService startup smoke: configuration serverId=1 fqdn=cache01\.usenet\.ninja') {
+            throw 'win-x64 StorageService startup smoke did not reach the configuration checkpoint.'
+          }
+          if ($stdout -notmatch 'Application logging initialized') {
+            throw 'win-x64 StorageService startup smoke did not initialize logging.'
+          }
+          if ($stdout -notmatch 'VectorNNTPD\.StorageService host starting') {
+            throw 'win-x64 StorageService startup smoke did not log host starting.'
           }
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: backfiller-win-x64-ci-build
+          name: vectornntpd-win-x64-ci-build
           path: .artifacts/win-x64/
           if-no-files-found: error
           retention-days: 7

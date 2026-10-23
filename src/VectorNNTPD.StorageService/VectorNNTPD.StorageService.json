@@ -1,0 +1,82 @@
+{
+  "StorageServer": {
+    "AcmeStateDir": "certs",
+    "BindAddress": [
+      "198.18.0.66",
+      "2c0f:f030:1442:501:198:18:0:66"
+    ],
+    "BindPort": 0,
+    "BindPortTls": 1191,
+    "GracefulShutdownTimeout": "00:00:30",
+    "Listener": {
+      "IoProgressTimeoutSeconds": 60,
+      "MaxActiveConnections": 1024,
+      "ParserAccumulationMaxBytes": 262144,
+      "TlsHandshakeTimeoutSeconds": 30
+    },
+    "DbDir": "db",
+    "LogDir": "logs",
+    "SegmentPools": {
+      "CriticalPercent": 85,
+      "HighPercent": 79,
+      "LowPercent": 75,
+      "Directories": [
+        "spool/cache"
+      ]
+    },
+    "ServerId": 1,
+    "StopHostOnUnexpectedServiceTermination": true,
+    "Systemd": {
+      "EnableWatchdog": true,
+      "NotifyReadyOnApplicationRunning": true,
+      "NotifyStoppingOnApplicationShutdown": true,
+      "ReportLifecycleStatus": true,
+      "WatchdogIntervalFraction": 0.5
+    }
+  },
+  "Serilog": {
+    "Enrich": [ "FromLogContext" ],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "System": "Warning",
+        "VectorNNTPD.StorageService": "Debug"
+      }
+    },
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
+    "WriteTo": [
+      {
+        "Args": {
+          "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+          "restrictedToMinimumLevel": "Debug"
+        },
+        "Name": "Console"
+      },
+      {
+        "Args": {
+          "blockWhenFull": true,
+          "bufferSize": 50000,
+          "configure": [
+            {
+              "Args": {
+                "buffered": true,
+                "flushToDiskInterval": "00:00:01",
+                "fileSizeLimitBytes": null,
+                "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+                "path": "/logs/pending-.log",
+                "restrictedToMinimumLevel": "Debug",
+                "retainedFileCountLimit": 14,
+                "rollOnFileSizeLimit": false,
+                "rollingInterval": "Day"
+              },
+              "Name": "File"
+            }
+          ]
+        },
+        "Name": "Async"
+      }
+    ]
+  }
+}

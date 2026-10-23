@@ -1,0 +1,77 @@
+[Unit]
+Description=VectorNNTP StorageService
+# Install the flat linux-x64 release directory contents needed for this service
+# at this path. The shared release also contains BackFiller binaries and units.
+# This unit uses only VectorNNTPD.StorageService, VectorNNTPD.StorageService.json,
+# VectorNNTPD.RabbitMQ.json, README.md, vectornntp-storageservice.service, and
+# storageservice.env.example.
+# Copy the unit to /etc/systemd/system/. Create user and group vectornntp,
+# create logs/, certs/, db/, and spool/ owned by that account, and install
+# /etc/vectornntp/storageservice.env before enable.
+Documentation=file:///opt/vectornntp/storageservice/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+# Dedicated non-root service account (create before enabling the unit).
+# Same account as BackFiller is acceptable when both share /opt/vectornntp.
+User=vectornntp
+Group=vectornntp
+
+# The executable directory is the configuration root. The process loads
+# VectorNNTPD.StorageService.json and VectorNNTPD.RabbitMQ.json from that directory,
+# not appsettings.json, RabbitMq.json, or the process working directory.
+# Relative logs (logs/), ACME state (certs/), article index (db/), and spool
+# roots also resolve there.
+WorkingDirectory=/opt/vectornntp/storageservice
+ExecStart=/opt/vectornntp/storageservice/VectorNNTPD.StorageService
+
+# Host GracefulShutdownTimeout follows StorageServer:GracefulShutdownTimeout.
+# The shipped value is 00:00:30. TimeoutStopSec must stay above that setting
+# or systemd SIGKILLs an in-progress drain.
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# systemd reads this file as root before exec. The leading '-' suppresses errors
+# reading the file and still starts the process. Current systemd ignores a missing,
+# unreadable, or invalid file. That does not insert ConnectionStrings__NntpDB.
+# Startup validation still fails when the variable is absent. The file is KEY=VALUE,
+# not a shell script. An unquoted backslash is an escape. The connection string has
+# no VECTOR__ prefix. RabbitMQ, ACME, and Cloudflare secrets come from
+# nntpsharedconfig; this unit does not set them.
+EnvironmentFile=-/etc/vectornntp/storageservice.env
+# DOTNET_ENVIRONMENT selects the optional VectorNNTPD.StorageService.Production.json overlay.
+Environment=DOTNET_ENVIRONMENT=Production
+
+# Watchdog heartbeats run only when EnableWatchdog is true (the shipped default)
+# and this unit sets WatchdogSec, which supplies WATCHDOG_USEC.
+# Leave WatchdogSec unset until readiness has been checked on the target host.
+# Example (enable only after validation):
+# WatchdogSec=30
+# Restart=on-watchdog
+
+# File logging is the shipped destination (StorageServer:LogDir=logs).
+# The shipped VectorNNTPD.StorageService.json also enables the Console sink, so
+# Serilog Information+ lines reach stdout and the journal under this unit.
+# Hardening. StorageService binds TLS and opens outbound RabbitMQ, MySQL, and Cloudflare.
+# ProtectSystem=strict mounts the filesystem read-only. ReadWritePaths re-opens only
+# logs/, certs/, db/, and spool/. It does not grant Unix ownership; those directories
+# must already exist and be writable by the vectornntp account. The executable and
+# JSON stay read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vectornntp/storageservice/logs /opt/vectornntp/storageservice/certs /opt/vectornntp/storageservice/db /opt/vectornntp/storageservice/spool
+
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+{
+  "RabbitMQ": {
+    "ChannelLeaseTimeoutSeconds": 60,
+    "ChannelPoolSize": 512,
+    "ConnectionBlockedTimeoutSeconds": 30,
+    "ConnectionScaleDownIdleSeconds": 300,
+    "DegradedThreshold": 0.75,
+    "EnableSsl": false,
+    "Hosts": [
+      "198.18.0.3"
+    ],
+    "Management": {
+      "BaseUrl": "http://198.18.0.3:15672",
+      "RequestTimeoutSeconds": 5
+    },
+    "MaxConnections": 16,
+    "MaximumShutdownDrainTimeoutSeconds": 30,
+    "MaxPendingLeaseWaiters": 1024,
+    "MinConnections": 4,
+    "MinimumConnectionLifetimeSeconds": 300,
+    "NetworkRecoveryIntervalSeconds": 5,
+    "PoolReconnectBaseDelayMs": 250,
+    "PoolReconnectMaxDelayMs": 30000,
+    "Port": 5672,
+    "PublishConfirmTimeoutSeconds": 10,
+    "RequestedChannelMax": 2047,
+    "RequestedHeartbeatSeconds": 60,
+    "RpcTimeoutSeconds": 30,
+    "ScaleDownCooldownSeconds": 30,
+    "SocketTimeoutSeconds": 30,
+    "UnhealthyThreshold": 5,
+    "VirtualHost": "/",
+    "WorkRequestMaxPayloadBytes": 1024,
+    "ArticleWorkDeliveryLimit": 10
+  }
+}
