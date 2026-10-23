@@ -82,7 +82,9 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 
                     var opened = _open(disk);
                     OpenCount++;
-                    if (opened.Handle.IsInvalid)
+                    // IsInvalid alone is not portable for test stubs: IntPtr.Zero is stdin on
+                    // Linux. Production opens set Win32Error when CreateFileW fails.
+                    if (opened.Handle.IsInvalid || opened.Win32Error != 0)
                     {
                         opened.Handle.Dispose();
                         error = WindowsStorageNative.FormatWin32Failure("CreateFileW", opened.DevicePath, opened.Win32Error, "IOCTL_DISK_PERFORMANCE");

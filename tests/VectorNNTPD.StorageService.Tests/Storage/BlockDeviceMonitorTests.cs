@@ -433,9 +433,11 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 {
                     opens++;
                     // First open returns an immediately invalid handle; second open succeeds.
+                    // Use -1 (INVALID_HANDLE_VALUE / Unix invalid fd). IntPtr.Zero is stdin on
+                    // Linux and is not IsInvalid there, so Zero would falsely succeed on CI.
                     if (opens == 1)
                     {
-                        return (new SafeFileHandle(IntPtr.Zero, ownsHandle: true), @"\\.\PhysicalDrive" + disk, 5);
+                        return (new SafeFileHandle(new IntPtr(-1), ownsHandle: true), @"\\.\PhysicalDrive" + disk, 5);
                     }
 
                     return (new SafeFileHandle(new IntPtr(2), ownsHandle: false), @"\\.\PhysicalDrive" + disk, 0);
@@ -452,6 +454,25 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             Assert.True(reader.TryRead("disk:7", out var counters, out var error), error);
             Assert.Equal(2, opens);
             Assert.Equal(1ul, counters.ReadBytes);
+        }
+
+        [Fact]
+        public void Invalid_safe_file_handle_sentinel_is_invalid_on_this_platform()
+        {
+            // -1 is INVALID_HANDLE_VALUE / Unix-invalid and must fail IsInvalid on every CI OS.
+            using var invalid = new SafeFileHandle(new IntPtr(-1), ownsHandle: true);
+            Assert.True(invalid.IsInvalid);
+
+            // IntPtr.Zero is invalid on Windows but is stdin (valid) on Unix — the prior Linux CI failure.
+            using var zero = new SafeFileHandle(IntPtr.Zero, ownsHandle: true);
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.True(zero.IsInvalid);
+            }
+            else
+            {
+                Assert.False(zero.IsInvalid);
+            }
         }
 
         [Fact]

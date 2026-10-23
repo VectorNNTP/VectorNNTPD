@@ -8,9 +8,17 @@ namespace VectorNNTPD.StorageService.Listener
     /// Current-thread CPU time. Elapsed waits do not increase this. Windows only; other platforms return zeros.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Uses Win32 OS thread identity and the current-thread pseudo-handle. Managed thread ids are not
     /// interchangeable with <c>GetCurrentThreadId</c>, and a <see cref="System.Diagnostics.ProcessThread"/>
     /// handle is not equivalent to <c>GetCurrentThread</c>.
+    /// </para>
+    /// <para>
+    /// There is no supported managed .NET API for the calling thread's kernel and user time in 100 ns
+    /// units. <see cref="System.Diagnostics.Process.TotalProcessorTime"/> is process-wide.
+    /// <see cref="Environment.CurrentManagedThreadId"/> is not an OS thread id and must not be used for
+    /// same-thread attribution after <c>await</c>. Non-Windows hosts return zeros; Win32 is never called.
+    /// </para>
     /// </remarks>
     internal static partial class ThreadCpuTimes
     {
@@ -29,6 +37,7 @@ namespace VectorNNTPD.StorageService.Listener
         [SupportedOSPlatform("windows")]
         private static (long Kernel, long User) CaptureWindows()
         {
+            // codeql[cs/call-to-unmanaged-code] Per-thread kernel/user CPU requires GetThreadTimes on GetCurrentThread; Process.TotalProcessorTime is process-wide and ProcessThread handles are not the current-thread pseudo-handle.
             if (!GetThreadTimes(GetCurrentThread(), out _, out _, out var kernel, out var user))
             {
                 return (0, 0);
@@ -42,7 +51,11 @@ namespace VectorNNTPD.StorageService.Listener
 
         /// <summary>Calls Win32 <c>GetCurrentThreadId</c>.</summary>
         [SupportedOSPlatform("windows")]
-        private static int CurrentThreadIdWindows() => GetCurrentThreadId();
+        private static int CurrentThreadIdWindows()
+        {
+            // codeql[cs/call-to-unmanaged-code] Same-thread CPU attribution after await requires the OS thread id from GetCurrentThreadId; Environment.CurrentManagedThreadId is not an OS thread id.
+            return GetCurrentThreadId();
+        }
 
         /// <summary>Returns the calling thread's OS thread id.</summary>
         [LibraryImport("kernel32.dll")]
