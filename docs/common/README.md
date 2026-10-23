@@ -10,7 +10,7 @@ The library owns reusable implementations. It does not own application topology,
 - Cloudflare DNS API client and A/AAAA reconciliation (`VectorNNTPD.Common.Cloudflare`)
 - Authoritative DNS queries for DNS-01: NS discovery and UDP/TCP TXT lookup (`VectorNNTPD.Common.Dns`)
 - Bind-address expansion and eligibility (`VectorNNTPD.Common.Networking`)
-- Options types those hosts adapt into (`VectorNNTPD.Common.Configuration`), including `ApplicationFqdn`, `ServerIdRules`, `VectorEnvironment`, `ApplicationLocalPath`, and `ApplicationJsonConfiguration`. Relative paths must stay inside the application base after `Path.GetFullPath` normalization. Rooted paths stay rooted. The check does not follow symlinks or junctions. The JSON helper removes Generic Host `appsettings` sources and registers `{entry assembly}.json`. The RabbitMQ filename is an explicit argument. BackFiller passes `VectorNNTPD.RabbitMQ.json`.
+- Options types those hosts adapt into (`VectorNNTPD.Common.Configuration`), including `ApplicationFqdn`, `ServerIdRules`, `VectorEnvironment`, `ApplicationLocalPath`, and `ApplicationJsonConfiguration`. Relative paths must stay inside the application base after `Path.GetFullPath` normalization. Rooted paths stay rooted. The check does not follow symlinks or junctions. StorageService keeps a separate `StorageRelativePath` helper for joining validated leaf segments under spool/sysfs bases; that is not a substitute for `ApplicationLocalPath`. See [configuration.md](configuration.md#application-local-and-storage-relative-paths). The JSON helper removes Generic Host `appsettings` sources and registers `{entry assembly}.json`. The RabbitMQ filename is an explicit argument. BackFiller passes `VectorNNTPD.RabbitMQ.json`.
 - NntpDB connection options and MySQL session (`VectorNNTPD.Common.NntpDb`)
 - Article content primitives: parser, `ArticleRecord`, `ArticleId`, classification, yEnc validation, and OverviewDB protobuf codec (`VectorNNTPD.Common.Articles`)
 - Vector Article Transfer Protocol framing (`VectorNNTPD.Common.Transport.ArticleTransfer`)
@@ -28,6 +28,7 @@ RabbitMQ exchange, queue, and binding declaration stays with the application. Ar
 | [vatp.md](vatp.md) | `docs/vatp.md` |
 | [architecture.md](architecture.md) | Common-owned passages in `docs/architecture.md` |
 | [configuration.md](configuration.md) | Common-owned passages in `docs/configuration.md` |
+| [systemd-host-abstraction.md](systemd-host-abstraction.md) | Design proposal only (not implemented); compares Storage and BackFiller systemd stacks |
 
 Paths inside the copied articles point at `src/VectorNNTPD.Common` and `tests/VectorNNTPD.Common.Tests`. References to NNTPD or StorageServer projects name those repositories; they are not projects in BackFiller.
 

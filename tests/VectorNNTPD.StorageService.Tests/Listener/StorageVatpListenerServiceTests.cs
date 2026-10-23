@@ -87,6 +87,33 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
+        public async Task Bind_failure_disposes_the_partial_socket_and_leaves_the_listener_stopped()
+        {
+            var port = StorageServerTestOptions.GetFreeTcpPort();
+            using var blocker = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            blocker.ExclusiveAddressUse = true;
+            blocker.Bind(new IPEndPoint(IPAddress.Loopback, port));
+            blocker.Listen(1);
+
+            var runtime = CreateRuntime(port);
+            var readiness = new AcmeCertificateReadiness();
+            readiness.MarkReady();
+            await using var service = new StorageVatpListenerService(
+                runtime,
+                TestListenerCertificates.CreatePublishedProvider(),
+                NullStorageArticleOpenBoundary.Instance,
+                readiness,
+                NullLogger<StorageVatpListenerService>.Instance);
+
+            var ex = await Assert.ThrowsAnyAsync<Exception>(() => service.StartAsync(CancellationToken.None));
+            Assert.True(
+                ex is SocketException or InvalidOperationException,
+                "Expected bind failure or no-endpoints failure, got " + ex.GetType().Name);
+            Assert.Equal(StorageVatpListenerState.Stopped, service.State);
+            Assert.Empty(service.LocalEndPoints);
+        }
+
+        [Fact]
         public async Task Existing_connection_keeps_certificate_lease_after_rotation()
         {
             var port = StorageServerTestOptions.GetFreeTcpPort();

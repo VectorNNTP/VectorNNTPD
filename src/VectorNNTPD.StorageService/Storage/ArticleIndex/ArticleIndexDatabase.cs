@@ -94,22 +94,17 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 Cache = SqliteCacheMode.Private,
                 Pooling = false,
             };
-            var connection = new SqliteConnection(builder.ConnectionString);
-            try
-            {
-                connection.Open();
-                ApplyWriterPragmas(connection, pageSizeFirst: true);
-                Migrate(connection);
-                ApplyWriterPragmas(connection, pageSizeFirst: false);
-                PrepareWriter(connection);
-                _writer = connection;
-                OpenReaders();
-            }
-            catch
-            {
-                connection.Dispose();
-                throw;
-            }
+            using var ownership = new DisposableOwnership<SqliteConnection>(
+                new SqliteConnection(builder.ConnectionString));
+            var connection = ownership.Resource;
+            connection.Open();
+            ApplyWriterPragmas(connection, pageSizeFirst: true);
+            Migrate(connection);
+            ApplyWriterPragmas(connection, pageSizeFirst: false);
+            PrepareWriter(connection);
+            // Readers open before Transfer so a reader-pool failure still disposes the writer.
+            OpenReaders();
+            _writer = ownership.Transfer();
         }
 
         /// <summary>

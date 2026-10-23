@@ -322,27 +322,21 @@ namespace VectorNNTPD.StorageService.Listener
         private static Socket CreateBoundListenSocket(ListenBinding binding)
         {
             var endpoint = binding.EndPoint;
-            var socket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
-            {
-                NoDelay = true,
-            };
+            using var ownership = new DisposableOwnership<Socket>(
+                new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
+                {
+                    NoDelay = true,
+                });
+            var socket = ownership.Resource;
 
             if (endpoint.AddressFamily == AddressFamily.InterNetworkV6)
             {
                 socket.DualMode = binding.DualMode;
             }
 
-            try
-            {
-                socket.Bind(endpoint);
-                socket.Listen(512);
-                return socket;
-            }
-            catch
-            {
-                socket.Dispose();
-                throw;
-            }
+            socket.Bind(endpoint);
+            socket.Listen(512);
+            return ownership.Transfer();
         }
 
         private bool IsImplicitWildcard(IPEndPoint endpoint)

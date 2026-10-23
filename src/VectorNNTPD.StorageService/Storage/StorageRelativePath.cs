@@ -2,12 +2,26 @@ namespace VectorNNTPD.StorageService.Storage
 {
 
     /// <summary>
-    /// Builds paths under a caller-chosen base using validated relative segments and
+    /// Builds storage paths under a caller-chosen base using validated relative segments and
     /// <see cref="Path.Join(string, string)"/> (which does not drop the base for a rooted later argument).
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// This helper is not interchangeable with Common <c>ApplicationLocalPath</c>.
+    /// <c>ApplicationLocalPath</c> resolves a configured path (relative or absolute) against the
+    /// application binary directory. This type joins one or more validated leaf segments beneath an
+    /// already-chosen base such as a spool root, log directory, or sysfs node.
+    /// </para>
+    /// <para>
     /// Callers that intend <c>base/leaf</c> must pass a single relative segment (no roots, separators, or
     /// <c>.</c>/<c>..</c>). After joining, the fully qualified result must stay under the base directory.
+    /// Containment is lexical via <see cref="Path.GetFullPath(string)"/>: it normalizes <c>.</c> and
+    /// <c>..</c> and does not resolve symlinks, junctions, or other reparse points.
+    /// </para>
+    /// <para>
+    /// <see cref="CombineUnderCheckedSegment"/> additionally permits characters that are illegal as Win32
+    /// file names (Linux <c>major:minor</c> device ids) after the caller has constrained the alphabet.
+    /// </para>
     /// </remarks>
     internal static class StorageRelativePath
     {

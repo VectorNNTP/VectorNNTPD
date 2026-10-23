@@ -84,3 +84,36 @@ A connection string rejected by `MySqlConnectionStringBuilder`, an authenticatio
 | Explicit IP | That address, if it is assigned and eligible |
 
 Eligible addresses may be public or private. They must not be multicast, unspecified, loopback, or link-local. An empty resolved set fails startup. Explicit addresses that are syntactically valid but not assigned to a local NIC are rejected.
+
+## Application-local and storage-relative paths
+
+Two helpers deal with filesystem paths. They look related but are not interchangeable.
+
+### `ApplicationLocalPath` (Common)
+
+`VectorNNTPD.Common.Configuration.ApplicationLocalPath` resolves a **configured** path against the application binary directory (`AppContext.BaseDirectory`, or an explicit base passed by tests).
+
+| Input | Result |
+|-------|--------|
+| Relative path | Fully qualified path under the application base, or rejected when lexical canonicalization leaves that base |
+| Rooted path | Stays rooted; not forced under the application base |
+
+Use it for host options such as `AcmeStateDir`, `LogDir`, and StorageServer `DbDir` / spool roots when the operator supplies a configured location. The process working directory and IDE content root are never implicit fallbacks. Containment is lexical (`Path.GetFullPath`); it does not follow symlinks, junctions, or other reparse points.
+
+### `StorageRelativePath` (StorageService)
+
+`VectorNNTPD.StorageService.Storage.StorageRelativePath` joins **validated leaf segments** under a base the caller already chose (spool directory, log directory, sysfs node, and so on). Each segment must be a single relative name: no roots, no directory separators, and no `.` / `..`. After `Path.Join`, the fully qualified result must stay under the base. `CombineUnderCheckedSegment` additionally allows characters illegal as Win32 file names (Linux `major:minor` device ids) after the caller has constrained the alphabet.
+
+Use it when building `base/leaf` paths for article-index files, write probes, and Linux sysfs nodes. Do not use it to resolve operator-configured paths against the binary directory.
+
+### Why they stay separate
+
+| Concern | `ApplicationLocalPath` | `StorageRelativePath` |
+|---------|------------------------|------------------------|
+| Typical input | One configured string (relative or absolute) | One or more leaf segments under a known base |
+| Base | Application binary directory | Caller-supplied directory |
+| Rooted input | Allowed (stays rooted) | Rejected as a segment |
+| Linux `major:minor` leaves | Not applicable | Supported via `CombineUnderCheckedSegment` |
+| Symlink / reparse safety | Lexical only | Lexical only |
+
+Neither helper claims filesystem-level containment against concurrent renames or symlink swaps after the check.

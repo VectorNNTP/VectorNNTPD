@@ -45,6 +45,30 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         }
 
         [Fact]
+        public void Initialize_failure_disposes_cleanly_without_publishing_a_writer()
+        {
+            var spool = ArticleIndexTestSupport.NewDirectory();
+            var root = ArticleIndexTestSupport.NewDirectory();
+            var missingParent = Path.Join(root, "missing", "article-index.sqlite");
+            try
+            {
+                using var database = new ArticleIndexDatabase(
+                    missingParent,
+                    spool,
+                    new ArticleIndexSettings(),
+                    ArticleIndexCacheBudget.ForSpoolCount(1));
+                Assert.ThrowsAny<Exception>(() => database.Initialize(CancellationToken.None));
+                // Idempotent second dispose; `using` still runs if this call throws.
+                database.Dispose();
+            }
+            finally
+            {
+                ArticleIndexTestSupport.Delete(spool);
+                ArticleIndexTestSupport.Delete(root);
+            }
+        }
+
+        [Fact]
         public async Task Unknown_schema_version_fails_startup_without_publishing_membership()
         {
             var root = ArticleIndexTestSupport.NewDirectory();

@@ -277,7 +277,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         [Fact]
         public async Task Concurrent_workers_report_cpu_sink_throughput()
         {
-            const int count = 384;
+            // Sized for Linux CI under Coverlet: 384×750 KiB at ~5 art/s (observed concurrent
+            // rate on ubuntu-latest) exceeds the 60s worker-completion wait. Keep 1/2/4/8 workers
+            // and 750 KiB payloads; shrink the batch so each pool still finishes with margin.
+            const int count = 64;
             const int bodyBytes = 750 * 1024;
             var articles = new AcceptedArticle[count];
             for (var i = 0; i < count; i++)
@@ -286,7 +289,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             }
 
             var warmup = CreatePipeline(files: null, roots: null);
-            for (var i = 0; i < 16; i++)
+            for (var i = 0; i < 8; i++)
             {
                 Assert.Equal(
                     AcceptedArticleProcessResult.Completed,
@@ -363,7 +366,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 MinWorkers = workers,
                 MaxWorkers = workers,
                 MaxInFlightPerSpool = 2,
-                ControlIntervalMilliseconds = 1,
+                // Min==Max and ScaleDwell is long, so the control loop never scales. Use the
+                // production interval: a 1 ms spin steals CPU from workers on covered CI runners.
+                ControlIntervalMilliseconds = SpoolPersistenceOptions.DefaultControlIntervalMilliseconds,
                 ScaleDwellMilliseconds = 60_000,
             };
             var worker = new AcceptedArticleWorker(
