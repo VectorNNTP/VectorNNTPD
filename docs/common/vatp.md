@@ -193,17 +193,15 @@ and requires removal after terminalization before reuse.
 
 NNTPD retrieval already opens many OPEN streams on one pooled TLS connection, up to
 `MaxStreamsPerConnection` (64). BackFiller schedules their DATA frames one at a time on
-a ready ring. StorageServer accepts concurrent STORE streams on one connection the same
-way, and writes RESULT after the article is enqueued. `ArticlePlacementClient` keeps one TLS connection per target and sends at most
-`Nntpd:ArticleIngestion:MaxOutstandingStoresPerConnection` STOREs on it (default 2, allowed 1 or 2).
-One writer emits complete frames. A lost RESULT after END is acknowledgement-not-observed and is not
-retried. The spool writer still does not call placement. Retrieval OPEN multiplexing is unchanged.
+a ready ring. StorageService article *ingestion* is NNTP RFC 4644 `TAKETHIS` (not VATP STORE);
+the Common advertisement field `vatpPort` still names the TLS feed listen port for placement.
+Retrieval OPEN multiplexing is unchanged. VATP STORE multiplexing language that formerly
+described StorageServer ingestion no longer applies to this host.
 
 ## Not implemented yet (later phases)
 
 - Numeric ARTICLE/HEAD/BODY/STAT (article-number / current-article forms)
 - OverviewDB article-number resolution
-- Storage VATP consumers
 - Outbound VATP server-to-server transfers
 
 ## NNTP message-id retrieval (Phase 3B)

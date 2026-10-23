@@ -14,7 +14,7 @@ namespace VectorNNTPD.StorageService.Storage
     /// Uses the shared <see cref="RabbitMqService"/> connection; does not own TCP lifecycle.
     /// Heartbeat publication must not block clean shutdown.
     /// The periodic advertisement is the readiness signal. It starts only after this service starts,
-    /// which is after the VATP listener is accepting. Stop publishes one transient Draining
+    /// which is after the NNTP feed listener is accepting. Stop publishes one transient Draining
     /// announcement after the loop has stopped and before the channel is disposed. A failed Draining
     /// publication is logged and does not block shutdown past <see cref="LifecycleAnnouncementTimeout"/>.
     /// </remarks>

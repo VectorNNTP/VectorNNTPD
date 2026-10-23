@@ -18,11 +18,11 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
     /// Startup creates <c>DbDir</c> when it is missing and fails if that directory cannot be used.
     /// It does not substitute a spool directory. Membership is loaded from the open databases,
     /// and only then does <see cref="StartAsync"/> return. Later application services, including the
-    /// accepted-article worker and the VATP listener, start after that.
+    /// accepted-article worker and the NNTP feed listener, start after that.
     /// Startup does not walk article files or compare them with index rows.
     /// </para>
     /// <para>
-    /// VATP RESULT is still sent when an article is queued, before the spool write and before this index.
+    /// TAKETHIS 239 is still sent when an article is queued, before the spool write and before this index.
     /// A committed index row is durable across process and power loss because each writer uses WAL and
     /// <c>synchronous=FULL</c>. An access update that is only queued is not durable until its batch commits.
     /// Eviction queries skip a row whose queued access time is newer than the committed time.

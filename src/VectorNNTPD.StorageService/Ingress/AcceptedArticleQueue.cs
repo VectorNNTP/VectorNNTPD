@@ -15,7 +15,7 @@ namespace VectorNNTPD.StorageService.Ingress
     /// </para>
     /// <para>
     /// The default budget is one gibibyte. At 768,000-byte articles that is about 1,398 articles.
-    /// VATP RESULT is sent only after a true enqueue. A false enqueue is the overload signal
+    /// TAKETHIS 239 is sent only after a true enqueue. A false enqueue is the overload signal
     /// and is not a durable-storage acknowledgement.
     /// </para>
     /// </remarks>

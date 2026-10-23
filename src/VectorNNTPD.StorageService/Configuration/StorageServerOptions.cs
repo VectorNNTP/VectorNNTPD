@@ -112,7 +112,7 @@ namespace VectorNNTPD.StorageService.Configuration
         public int BindPort { get; set; }
 
         /// <summary>
-        /// Gets or sets the TLS TCP port used by the VATP listener.
+        /// Gets or sets the TLS TCP port used by the NNTP feed listener.
         /// </summary>
         /// <remarks>
         /// Required. Range 1–65535. StorageServer is TLS-only; there is no cleartext fallback.

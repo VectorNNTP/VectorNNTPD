@@ -41,7 +41,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
             await Assert.ThrowsAsync<SocketException>(() => listener.StartAsync(CancellationToken.None));
             Assert.Equal(0, published);
-            Assert.Equal(StorageVatpListenerState.Stopped, listener.State);
+            Assert.Equal(StorageNntpListenerState.Stopped, listener.State);
             await harness.Service.StopAsync(CancellationToken.None);
 
             Assert.Equal(before, Ids(harness.Client));
@@ -73,7 +73,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
         {
             var harness = CreateHarness(HealthyAddresses);
             var publisher = new FakeApplicationService(
-                "StorageVatpListener",
+                "StorageNntpListener",
                 onStart: cancellationToken => harness.Service.PublishAfterListenerBoundAsync(cancellationToken));
             var later = new FakeApplicationService(
                 "later",
@@ -96,7 +96,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
         {
             var harness = CreateHarness(HealthyAddresses);
             var listener = new FakeApplicationService(
-                "StorageVatpListener",
+                "StorageNntpListener",
                 onStart: cancellationToken => harness.Service.PublishAfterListenerBoundAsync(cancellationToken));
             var manager = new ApplicationServiceManager(
                 [new CloudflareDnsReconciliationApplicationService(harness.Service), listener],
@@ -139,7 +139,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             await intruder.Service.StopAsync(CancellationToken.None);
 
             Assert.Equal(0, published);
-            Assert.Equal(StorageVatpListenerState.Running, ownerListener.State);
+            Assert.Equal(StorageNntpListenerState.Running, ownerListener.State);
             Assert.Equal(owned, Ids(client));
 
             await ownerListener.StopAsync(CancellationToken.None);
@@ -293,7 +293,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 Proxied = false,
             };
 
-        private static StorageVatpListenerService CreateListener(int port, Func<CancellationToken, Task> publish)
+        private static StorageNntpListenerService CreateListener(int port, Func<CancellationToken, Task> publish)
         {
             var identity = StorageServerTestOptions.CreateValid();
             identity.BindAddress = ["127.0.0.1"];
@@ -302,12 +302,11 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             var runtime = StorageServerRuntimeOptionsFactory.Create(identity, acme);
             var readiness = new AcmeCertificateReadiness();
             readiness.MarkReady();
-            return new StorageVatpListenerService(
+            return new StorageNntpListenerService(
                 runtime,
                 TestListenerCertificates.CreatePublishedProvider(),
-                NullStorageArticleOpenBoundary.Instance,
                 readiness,
-                NullLogger<StorageVatpListenerService>.Instance,
+                NullLogger<StorageNntpListenerService>.Instance,
                 publishAfterBind: publish);
         }
 

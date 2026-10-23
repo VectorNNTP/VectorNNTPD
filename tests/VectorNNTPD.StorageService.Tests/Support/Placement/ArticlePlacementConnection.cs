@@ -1,50 +1,48 @@
-using System.Buffers;
+using System.Diagnostics;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using VectorNNTPD.Common.Articles;
-using VectorNNTPD.Common.Transport.ArticleTransfer;
-using VectorNNTPD.StorageService.Tests.Support.Placement;
 using VectorNNTPD.StorageService;
 
 namespace VectorNNTPD.StorageService.Tests.Support.Placement
 {
-
     /// <summary>
-    /// One TLS connection to one placement target. One writer. At most
-    /// <see cref="MaxOutstanding"/> STORE streams.
+    /// One TLS NNTP STREAMING connection to one placement target.
+    /// At most <see cref="MaxOutstanding"/> pipelined TAKETHIS operations.
     /// </summary>
     internal sealed class ArticlePlacementConnection : IAsyncDisposable
     {
+        private static readonly byte[] ModeStream = "MODE STREAM\r\n"u8.ToArray();
+        private static readonly byte[] Quit = "QUIT\r\n"u8.ToArray();
+        private static readonly byte[] TakeThisPrefix = "TAKETHIS "u8.ToArray();
+        private static readonly byte[] Crlf = "\r\n"u8.ToArray();
+        private static readonly byte[] Terminator = ".\r\n"u8.ToArray();
+
         private readonly string _fqdn;
         private readonly int _port;
         private readonly TcpClient _tcp;
         private readonly SslStream _ssl;
         private readonly ILogger _logger;
-        private readonly ArticleTransferLimits _limits;
         private readonly TimeSpan _ioTimeout;
         private readonly SemaphoreSlim _slots;
         private readonly SemaphoreSlim _write = new(1, 1);
-        private readonly object _tableGate = new();
-        private readonly Dictionary<uint, StoreOperation> _operations = [];
+        private readonly object _pendingGate = new();
+        private readonly Queue<PendingTakeThis> _pending = new();
         private readonly CancellationTokenSource _lifetime = new();
-        private readonly FrameBuffer _frames = new();
+        private readonly byte[] _readBuffer = new byte[64 * 1024];
+        private readonly List<byte> _lineBuffer = [];
         private Task? _reader;
         private int _dead;
         private int _disposed;
         private int _active;
         private int _peakActive;
-        private uint _nextStreamId = 1;
-        private uint _maxFramePayload;
         private long _slotWaitTicks;
-        private long _creditWaitTicks;
-        private long _resultTicks;
-        private long _resultCount;
-        private long _resultMaxTicks;
-        private long _dataFramesWritten;
-        private int _storesAwaitingInitialCredit;
-        private readonly object _readTimeoutGate = new();
-        private CancellationTokenSource? _activeReadTimeout;
+        private long _responseWaitTicks;
+        private long _responseCount;
+        private long _responseMaxTicks;
+        private long _articleBytesWritten;
 
         private ArticlePlacementConnection(
             string fqdn,
@@ -52,45 +50,36 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             TcpClient tcp,
             SslStream ssl,
             ILogger logger,
-            ArticleTransferLimits limits,
             TimeSpan ioTimeout,
-            int maxOutstanding,
-            uint maxFramePayload)
+            int maxOutstanding)
         {
             _fqdn = fqdn;
             _port = port;
             _tcp = tcp;
             _ssl = ssl;
             _logger = logger;
-            _limits = limits;
             _ioTimeout = ioTimeout;
             MaxOutstanding = maxOutstanding;
-            _maxFramePayload = maxFramePayload;
             _slots = new SemaphoreSlim(maxOutstanding, maxOutstanding);
         }
 
         public int MaxOutstanding { get; }
 
-        /// <summary>Gets the highest number of STORE operations that were in flight together.</summary>
         internal int PeakActive => Volatile.Read(ref _peakActive);
 
-        /// <summary>Gets ticks spent waiting for a free STORE slot.</summary>
         internal long SlotWaitTicks => Volatile.Read(ref _slotWaitTicks);
 
-        /// <summary>Gets ticks spent waiting for WINDOW credit.</summary>
-        internal long CreditWaitTicks => Volatile.Read(ref _creditWaitTicks);
+        /// <summary>Ticks spent waiting for a TAKETHIS status after the article was written.</summary>
+        internal long CreditWaitTicks => Volatile.Read(ref _responseWaitTicks);
 
-        /// <summary>Gets how many RESULT waits were recorded.</summary>
-        internal long ResultCount => Volatile.Read(ref _resultCount);
+        internal long ResultCount => Volatile.Read(ref _responseCount);
 
-        /// <summary>Gets the total ticks spent waiting for RESULT after END.</summary>
-        internal long ResultTicks => Volatile.Read(ref _resultTicks);
+        internal long ResultTicks => Volatile.Read(ref _responseWaitTicks);
 
-        /// <summary>Gets the longest RESULT wait in ticks.</summary>
-        internal long ResultMaxTicks => Volatile.Read(ref _resultMaxTicks);
+        internal long ResultMaxTicks => Volatile.Read(ref _responseMaxTicks);
 
-        /// <summary>Gets DATA frames this connection has written. Credit is zero until the server sends WINDOW.</summary>
-        internal long DataFramesWritten => Volatile.Read(ref _dataFramesWritten);
+        /// <summary>Article payload octets written (destuffed size, not including stuffing or framing).</summary>
+        internal long DataFramesWritten => Volatile.Read(ref _articleBytesWritten);
 
         public bool IsDead => Volatile.Read(ref _dead) != 0;
 
@@ -101,8 +90,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             int port,
             string connectHost,
             ILogger logger,
-            VatpClientOptions options,
-            ArticleTransferLimits limits,
+            StorageFeedClientOptions options,
             int maxOutstanding,
             RemoteCertificateValidationCallback? certificateValidation,
             CancellationToken cancellationToken)
@@ -139,10 +127,11 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 tcp.Dispose();
                 throw;
             }
+
             SslStream ssl;
             try
             {
-                ssl = await VatpTlsClient.AuthenticateAsClientAsync(
+                ssl = await StorageTlsClient.AuthenticateAsClientAsync(
                         tcp.GetStream(),
                         fqdn,
                         options.TlsHandshakeTimeout,
@@ -150,137 +139,186 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                         cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch
             {
-                throw new TimeoutException("timeout");
+                tcp.Dispose();
+                throw;
             }
+
             var connection = new ArticlePlacementConnection(
                 fqdn,
                 port,
                 tcp,
                 ssl,
                 logger,
-                limits,
                 options.IoTimeout,
-                maxOutstanding,
-                limits.DefaultMaxFramePayload);
+                maxOutstanding);
             try
             {
-                await connection.ExchangeHelloAsync(cancellationToken).ConfigureAwait(false);
-                connection._reader = Task.Run(connection.ReadLoopAsync);
-                ArticlePlacementTransportLogMessages.Established(logger, fqdn, port, maxOutstanding);
-                return connection;
+                await connection.HandshakeAsync(cancellationToken).ConfigureAwait(false);
             }
             catch
             {
                 await connection.DisposeAsync().ConfigureAwait(false);
                 throw;
             }
+
+            ArticlePlacementTransportLogMessages.Established(logger, fqdn, port, maxOutstanding);
+            return connection;
         }
 
         public async Task<ArticlePlacementResult> PlaceAsync(
             ArticleRecord record,
-            ArticleCanonicalTransferMeta meta,
             CancellationToken cancellationToken)
         {
-            if (IsDead || Volatile.Read(ref _disposed) != 0)
+            if (IsDead)
             {
                 return new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed");
             }
 
-            var slotWait = System.Diagnostics.Stopwatch.GetTimestamp();
+            if (!ArticlePlacementMessageId.TryCopy(in record, out var messageId))
+            {
+                return new ArticlePlacementResult(ArticlePlacementKind.RejectedInvalid, "message-id");
+            }
+
+            var slotStarted = Stopwatch.GetTimestamp();
             try
             {
                 await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                Interlocked.Add(ref _slotWaitTicks, System.Diagnostics.Stopwatch.GetTimestamp() - slotWait);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
             }
-            catch (ObjectDisposedException)
-            {
-                return new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
-            }
 
-            StoreOperation? operation = null;
+            Interlocked.Add(ref _slotWaitTicks, Stopwatch.GetTimestamp() - slotStarted);
+            var active = Interlocked.Increment(ref _active);
+            UpdatePeak(active);
+
+            var pending = new PendingTakeThis();
+            var responseStarted = Stopwatch.GetTimestamp();
+            var articleWritten = false;
             try
             {
-                operation = Begin(record);
-                var now = Interlocked.Increment(ref _active);
-                int previousPeak;
-                do
+                await _write.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
                 {
-                    previousPeak = Volatile.Read(ref _peakActive);
-                    if (now <= previousPeak)
+                    lock (_pendingGate)
                     {
-                        break;
+                        _pending.Enqueue(pending);
                     }
-                }
-                while (Interlocked.CompareExchange(ref _peakActive, now, previousPeak) != previousPeak);
 
-                return await SendAsync(operation, record, meta, cancellationToken).ConfigureAwait(false);
+                    // ArtData is storage-stuffed; TAKETHIS needs the logical article with transfer stuffing only.
+                    var logical = UnstuffCanonicalArticle(record.ArtData);
+                    await WriteTakeThisAsync(messageId, logical, cancellationToken).ConfigureAwait(false);
+                    articleWritten = true;
+                    Interlocked.Add(ref _articleBytesWritten, record.ArtSize);
+                }
+                finally
+                {
+                    _write.Release();
+                }
+
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+                linked.CancelAfter(_ioTimeout);
+                var result = await pending.Completion.Task.WaitAsync(linked.Token).ConfigureAwait(false);
+                NoteResponse(Stopwatch.GetTimestamp() - responseStarted);
+                if (result.Succeeded)
+                {
+                    ArticlePlacementTransportLogMessages.TakeThisCompleted(_logger, _fqdn, _port, result.Kind.ToString());
+                }
+                else
+                {
+                    ArticlePlacementTransportLogMessages.TakeThisRejected(
+                        _logger, _fqdn, _port, result.Kind.ToString(), result.Failure);
+                }
+
+                return result;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                MarkDead();
+                FailPending(pending, articleWritten
+                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
+                    : new ArticlePlacementResult(ArticlePlacementKind.Cancelled));
+                return articleWritten
+                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
+                    : new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
+            }
+            catch (OperationCanceledException)
+            {
+                MarkDead();
+                var ambiguous = articleWritten
+                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
+                    : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "timeout");
+                FailPending(pending, ambiguous);
+                if (articleWritten)
+                {
+                    ArticlePlacementTransportLogMessages.TakeThisAmbiguous(_logger, _fqdn, _port);
+                }
+
+                return ambiguous;
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+            {
+                MarkDead();
+                var failure = articleWritten
+                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
+                    : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, ex.GetType().Name);
+                FailPending(pending, failure);
+                return failure;
             }
             finally
             {
-                if (operation is not null)
-                {
-                    Interlocked.Decrement(ref _active);
-                    lock (_tableGate)
-                    {
-                        _operations.Remove(operation.StreamId);
-                    }
-
-                    operation.Dispose();
-                }
-
-                try
-                {
-                    _slots.Release();
-                }
-                catch (ObjectDisposedException ex)
-                {
-                    ExpectedException.Ignore(ex);
-                }
+                Interlocked.Decrement(ref _active);
+                _slots.Release();
             }
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (Interlocked.Exchange(ref _disposed, 1) == 1)
             {
                 return;
             }
 
-            var outstanding = ActiveStores;
             MarkDead();
             try
             {
-                await _lifetime.CancelAsync().ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException ex)
-            {
-                ExpectedException.Ignore(ex);
-            }
-
-            try
-            {
-                if (_reader is not null)
+                await _write.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
                 {
-                    await _reader.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    await _ssl.WriteAsync(Quit, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+                {
+                    ExpectedException.Ignore(ex);
+                }
+                finally
+                {
+                    _write.Release();
                 }
             }
-            catch (TimeoutException ex)
-            {
-                ExpectedException.Ignore(ex);
-            }
-            catch (OperationCanceledException ex)
+            catch (Exception ex) when (ex is ObjectDisposedException or IOException)
             {
                 ExpectedException.Ignore(ex);
             }
 
-            FaultOutstanding(shutdown: true);
-            ArticlePlacementTransportLogMessages.Closed(_logger, _fqdn, _port, outstanding);
+            await _lifetime.CancelAsync().ConfigureAwait(false);
+            if (_reader is not null)
+            {
+                try
+                {
+                    await _reader.ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+                {
+                    ExpectedException.Ignore(ex);
+                }
+            }
+
+            CompleteAllPending(new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed"));
+            ArticlePlacementTransportLogMessages.Closed(_logger, _fqdn, _port, ActiveStores);
             await _ssl.DisposeAsync().ConfigureAwait(false);
             _tcp.Dispose();
             _slots.Dispose();
@@ -288,625 +326,240 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             _lifetime.Dispose();
         }
 
-        private StoreOperation Begin(ArticleRecord record)
+        private async Task HandshakeAsync(CancellationToken cancellationToken)
         {
-            lock (_tableGate)
+            var greeting = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (greeting.Code / 100 != 2)
             {
-                if (_nextStreamId == 0)
-                {
-                    MarkDead();
-                    throw new IOException("stream-id-space");
-                }
-
-                var streamId = _nextStreamId++;
-                var operation = new StoreOperation(streamId, record.ArtId, _limits);
-                _operations.Add(streamId, operation);
-                return operation;
+                throw new IOException("nntp-greeting");
             }
+
+            await _ssl.WriteAsync(ModeStream, cancellationToken).ConfigureAwait(false);
+            var mode = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+            if (mode.Code != 203)
+            {
+                throw new IOException("mode-stream");
+            }
+
+            _reader = Task.Run(() => ReadLoopAsync(_lifetime.Token), CancellationToken.None);
         }
 
-        private async Task<ArticlePlacementResult> SendAsync(
-            StoreOperation operation,
-            ArticleRecord record,
-            ArticleCanonicalTransferMeta meta,
-            CancellationToken cancellationToken)
-        {
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-            try
-            {
-                var idBytes = new byte[ArticleId.Length];
-                record.ArtId.CopyTo(idBytes);
-                await WriteFrameAsync(VatpFrameEncoder.EncodeStore(operation.StreamId, idBytes), linked.Token)
-                    .ConfigureAwait(false);
-                operation.Started = true;
-                var metaBytes = VatpMetaCodec.Encode(in meta);
-                operation.AwaitingInitialCredit = 1;
-                Interlocked.Increment(ref _storesAwaitingInitialCredit);
-                await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(operation.StreamId, metaBytes), linked.Token)
-                    .ConfigureAwait(false);
-                DisarmReadTimeout();
-
-                var artData = record.ArtData;
-                var offset = 0;
-                while (offset < record.ArtSize)
-                {
-                    linked.Token.ThrowIfCancellationRequested();
-                    int length;
-                    lock (operation.Gate)
-                    {
-                        length = ArticleTransferReadyRing.ComputeDataPayloadLength(
-                            record.ArtSize - offset,
-                            operation.Window.Credit,
-                            _maxFramePayload);
-                        if (length > 0 && !operation.Window.TryConsume(length))
-                        {
-                            length = 0;
-                        }
-                    }
-
-                    if (length <= 0)
-                    {
-                        var creditWait = System.Diagnostics.Stopwatch.GetTimestamp();
-                        await operation.Credit.WaitAsync(linked.Token).ConfigureAwait(false);
-                        Interlocked.Add(ref _creditWaitTicks, System.Diagnostics.Stopwatch.GetTimestamp() - creditWait);
-                        if (operation.IsCompleted)
-                        {
-                            return operation.Result;
-                        }
-
-                        continue;
-                    }
-
-                    var fin = offset + length == record.ArtSize;
-                    await WriteFrameAsync(
-                            VatpFrameEncoder.EncodeData(operation.StreamId, artData.Slice(offset, length), fin),
-                            linked.Token)
-                        .ConfigureAwait(false);
-                    Interlocked.Increment(ref _dataFramesWritten);
-                    offset += length;
-                }
-
-                await WriteFrameAsync(VatpFrameEncoder.EncodeEnd(operation.StreamId), linked.Token).ConfigureAwait(false);
-                operation.EndWritten = true;
-                var resultWait = System.Diagnostics.Stopwatch.GetTimestamp();
-                var result = await operation.Completion.Task.WaitAsync(_ioTimeout, linked.Token).ConfigureAwait(false);
-                NoteResultWait(System.Diagnostics.Stopwatch.GetTimestamp() - resultWait);
-                LogOutcome(operation, result);
-                return result;
-            }
-            catch (TimeoutException)
-            {
-                var result = operation.EndWritten
-                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
-                    : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "timeout");
-                Finish(operation, result);
-                LogOutcome(operation, result);
-                return result;
-            }
-            catch (OperationCanceledException) when (operation.IsCompleted)
-            {
-                LogOutcome(operation, operation.Result);
-                return operation.Result;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                if (operation.EndWritten)
-                {
-                    var ambiguous = new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved);
-                    Finish(operation, ambiguous);
-                    LogOutcome(operation, ambiguous);
-                    return ambiguous;
-                }
-
-                await TryWriteCancelAsync(operation).ConfigureAwait(false);
-                var cancelled = new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
-                Finish(operation, cancelled);
-                LogOutcome(operation, cancelled);
-                return cancelled;
-            }
-            catch (OperationCanceledException)
-            {
-                var result = _disposed != 0
-                    ? operation.EndWritten
-                        ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
-                        : new ArticlePlacementResult(ArticlePlacementKind.Cancelled)
-                    : operation.EndWritten
-                        ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
-                        : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed");
-                Finish(operation, result);
-                LogOutcome(operation, result);
-                return result;
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
-            {
-                MarkDead();
-                var result = operation.EndWritten
-                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
-                    : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, ex.GetType().Name);
-                Finish(operation, result);
-                LogOutcome(operation, result);
-                return result;
-            }
-        }
-
-        private async Task ExchangeHelloAsync(CancellationToken cancellationToken)
-        {
-            await WriteFrameAsync(VatpFrameEncoder.EncodeHello(_maxFramePayload), cancellationToken).ConfigureAwait(false);
-            var frame = await ReadFrameAsync(cancellationToken).ConfigureAwait(false);
-            if (frame is null
-                || frame.Value.Header.Type != VatpFrameType.Hello
-                || !VatpHello.TryDecode(frame.Value.Payload, out var hello, out _))
-            {
-                throw new IOException("hello");
-            }
-
-            _maxFramePayload = Math.Min(hello.MaxFramePayload, VatpProtocol.DefaultMaxFramePayload);
-        }
-
-        private async Task ReadLoopAsync()
+        private async Task ReadLoopAsync(CancellationToken cancellationToken)
         {
             try
             {
-                while (!IsDead && Volatile.Read(ref _disposed) == 0)
+                while (!cancellationToken.IsCancellationRequested && !IsDead)
                 {
-                    var frame = await ReadFrameAsync(_lifetime.Token).ConfigureAwait(false);
-                    if (frame is null)
+                    var status = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+                    PendingTakeThis? next;
+                    lock (_pendingGate)
+                    {
+                        next = _pending.Count > 0 ? _pending.Dequeue() : null;
+                    }
+
+                    if (next is null)
                     {
                         MarkDead();
-                        FaultOutstanding(shutdown: false);
                         return;
                     }
 
-                    Dispatch(frame.Value);
+                    next.Completion.TrySetResult(ArticlePlacementResult.FromNntpStatus(status.Code));
+                    if (status.Code == 400)
+                    {
+                        MarkDead();
+                        CompleteAllPending(new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "temporary-failure"));
+                        return;
+                    }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                FaultOutstanding(shutdown: Volatile.Read(ref _disposed) != 0);
+                CompleteAllPending(new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed"));
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException or TimeoutException)
             {
                 MarkDead();
-                ArticlePlacementTransportLogMessages.ConnectionFailed(_logger, _fqdn, _port, ex.GetType().Name);
-                FaultOutstanding(shutdown: false);
+                CompleteAllPending(new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved));
             }
         }
 
-        private void Dispatch(VatpParsedFrame frame)
+        private async Task WriteTakeThisAsync(
+            byte[] messageId,
+            ReadOnlyMemory<byte> article,
+            CancellationToken cancellationToken)
         {
-            if (frame.Header.Type == VatpFrameType.Hello)
-            {
-                return;
-            }
+            var commandLength = TakeThisPrefix.Length + messageId.Length + Crlf.Length;
+            var command = new byte[commandLength];
+            TakeThisPrefix.CopyTo(command);
+            messageId.CopyTo(command.AsSpan(TakeThisPrefix.Length));
+            Crlf.CopyTo(command.AsSpan(TakeThisPrefix.Length + messageId.Length));
+            await _ssl.WriteAsync(command, cancellationToken).ConfigureAwait(false);
+            await WriteStuffedArticleAsync(article, cancellationToken).ConfigureAwait(false);
+            await _ssl.WriteAsync(Terminator, cancellationToken).ConfigureAwait(false);
+        }
 
-            if (frame.Header.StreamId == VatpProtocol.ConnectionStreamId)
+        private async Task WriteStuffedArticleAsync(ReadOnlyMemory<byte> articleMemory, CancellationToken cancellationToken)
+        {
+            var offset = 0;
+            var atLineStart = true;
+            while (offset < articleMemory.Length)
             {
-                MarkDead();
-                FaultOutstanding(shutdown: false);
-                return;
-            }
+                var article = articleMemory.Span;
+                if (atLineStart && article[offset] == (byte)'.')
+                {
+                    await _ssl.WriteAsync(new byte[] { (byte)'.' }, cancellationToken).ConfigureAwait(false);
+                    article = articleMemory.Span;
+                }
 
-            StoreOperation? operation;
-            lock (_tableGate)
-            {
-                _operations.TryGetValue(frame.Header.StreamId, out operation);
-            }
-
-            if (operation is null)
-            {
-                return;
-            }
-
-            switch (frame.Header.Type)
-            {
-                case VatpFrameType.Window:
-                    if (!VatpControlPayload.TryDecodeWindow(Copy(frame.Payload), out var add))
+                var start = offset;
+                var end = offset;
+                while (end < article.Length)
+                {
+                    var b = article[end++];
+                    if (b == (byte)'\n')
                     {
-                        Finish(operation, new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "window"));
+                        atLineStart = true;
                         break;
                     }
 
-                    var gainedInitialCredit = false;
-                    lock (operation.Gate)
-                    {
-                        gainedInitialCredit = operation.AwaitingInitialCredit == 1 && add > 0;
-                        _ = operation.Window.Add(add);
-                    }
-
-                    if (gainedInitialCredit && Interlocked.Exchange(ref operation.AwaitingInitialCredit, 0) == 1)
-                    {
-                        Interlocked.Decrement(ref _storesAwaitingInitialCredit);
-                    }
-
-                    try
-                    {
-                        operation.Credit.Release();
-                    }
-                    catch (ObjectDisposedException ex)
-                    {
-                        ExpectedException.Ignore(ex);
-                    }
-
-                    break;
-                case VatpFrameType.Result:
-                    if (!VatpResultPayload.TryDecode(frame.Payload, out var outcome, out _))
-                    {
-                        Finish(operation, new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "result"));
-                        break;
-                    }
-
-                    Finish(operation, ArticlePlacementResult.FromOutcomeByte(outcome));
-                    break;
-                case VatpFrameType.Fail:
-                    if (!VatpControlPayload.TryDecodeFail(Copy(frame.Payload), out var error, out _))
-                    {
-                        Finish(operation, new ArticlePlacementResult(
-                            operation.EndWritten
-                                ? ArticlePlacementKind.AcknowledgementNotObserved
-                                : ArticlePlacementKind.TransportFailure,
-                            "fail"));
-                        break;
-                    }
-
-                    Finish(operation, error == VatpErrorCode.Cancelled
-                        ? new ArticlePlacementResult(ArticlePlacementKind.Cancelled)
-                        : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, error.ToString()));
-                    break;
-                default:
-                    Finish(operation, new ArticlePlacementResult(
-                        ArticlePlacementKind.TransportFailure,
-                        frame.Header.Type.ToString()));
-                    break;
-            }
-        }
-
-        private void FaultOutstanding(bool shutdown)
-        {
-            StoreOperation[] operations;
-            lock (_tableGate)
-            {
-                operations = _operations.Values.ToArray();
-            }
-
-            foreach (var operation in operations)
-            {
-                var result = operation.EndWritten
-                    ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
-                    : shutdown
-                        ? new ArticlePlacementResult(ArticlePlacementKind.Cancelled)
-                        : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed");
-                Finish(operation, result);
-            }
-        }
-
-        private async Task TryWriteCancelAsync(StoreOperation operation)
-        {
-            if (IsDead)
-            {
-                return;
-            }
-
-            try
-            {
-                await WriteFrameAsync(VatpFrameEncoder.EncodeCancel(operation.StreamId), CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException or OperationCanceledException)
-            {
-                ExpectedException.Ignore(ex);
-            }
-        }
-
-        private async Task WriteFrameAsync(VatpFrameEncoder.EncodedFrame frame, CancellationToken cancellationToken)
-        {
-            await _write.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                try
-                {
-                    if (!frame.Header.IsEmpty)
-                    {
-                        await _ssl.WriteAsync(frame.Header, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (!frame.Payload.IsEmpty)
-                    {
-                        await _ssl.WriteAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-                catch
-                {
-                    MarkDead();
-                    throw;
-                }
-            }
-            finally
-            {
-                try
-                {
-                    _write.Release();
-                }
-                catch (ObjectDisposedException ex)
-                {
-                    ExpectedException.Ignore(ex);
-                }
-            }
-        }
-
-        private void NoteResultWait(long ticks)
-        {
-            Interlocked.Increment(ref _resultCount);
-            Interlocked.Add(ref _resultTicks, ticks);
-            long previous;
-            do
-            {
-                previous = Volatile.Read(ref _resultMaxTicks);
-                if (ticks <= previous)
-                {
-                    return;
-                }
-            }
-            while (Interlocked.CompareExchange(ref _resultMaxTicks, ticks, previous) != previous);
-        }
-
-        private async Task<VatpParsedFrame?> ReadFrameAsync(CancellationToken cancellationToken)
-        {
-            while (true)
-            {
-                if (_frames.TryTake(_maxFramePayload, out var frame))
-                {
-                    return frame;
+                    atLineStart = false;
                 }
 
-                var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                lock (_readTimeoutGate)
-                {
-                    _activeReadTimeout = timeout;
-                    if (Volatile.Read(ref _storesAwaitingInitialCredit) == 0)
-                    {
-                        timeout.CancelAfter(_ioTimeout);
-                    }
-                }
-
-                int read;
-                try
-                {
-                    read = await _frames.ReadFromAsync(_ssl, timeout.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
-                {
-                    throw new TimeoutException("placement-io");
-                }
-                finally
-                {
-                    lock (_readTimeoutGate)
-                    {
-                        if (ReferenceEquals(_activeReadTimeout, timeout))
-                        {
-                            _activeReadTimeout = null;
-                        }
-                    }
-
-                    timeout.Dispose();
-                }
-
-                if (read == 0)
-                {
-                    return null;
-                }
-            }
-        }
-
-        /// <summary>Completes one STORE and drops its initial-credit wait from the read-timeout count.</summary>
-        private void Finish(StoreOperation operation, ArticlePlacementResult result)
-        {
-            if (operation.TryFinish(result))
-            {
-                Interlocked.Decrement(ref _storesAwaitingInitialCredit);
+                var chunk = article[start..end].ToArray();
+                await _ssl.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
+                offset = end;
             }
         }
 
         /// <summary>
-        /// Disarms the outstanding read while at least one STORE is waiting for its first WINDOW.
-        /// The next read arms the timeout again once that count returns to zero.
+        /// Drops one leading body stuffing dot from canonical ArtData so TAKETHIS can apply transfer stuffing once.
         /// </summary>
-        private void DisarmReadTimeout()
+        private static byte[] UnstuffCanonicalArticle(ReadOnlyMemory<byte> artData)
         {
-            lock (_readTimeoutGate)
+            var span = artData.Span;
+            var separator = span.IndexOf("\r\n\r\n"u8);
+            if (separator < 0)
             {
-                if (Volatile.Read(ref _storesAwaitingInitialCredit) == 0)
+                return artData.ToArray();
+            }
+
+            var bodyStart = separator + 4;
+            using var ms = new MemoryStream(artData.Length);
+            ms.Write(span[..bodyStart]);
+            var atLineStart = true;
+            for (var i = bodyStart; i < span.Length; i++)
+            {
+                var b = span[i];
+                if (atLineStart && b == (byte)'.' && i + 1 < span.Length)
                 {
-                    return;
+                    // Drop one storage stuffing dot; transfer stuffing is applied by WriteStuffedArticleAsync.
+                    atLineStart = false;
+                    continue;
                 }
 
-                var timeout = _activeReadTimeout;
-                if (timeout is null)
+                ms.WriteByte(b);
+                atLineStart = b == (byte)'\n';
+            }
+
+            return ms.ToArray();
+        }
+
+        private async Task<(int Code, string Line)> ReadStatusLineAsync(CancellationToken cancellationToken)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_ioTimeout);
+            while (true)
+            {
+                for (var i = 0; i < _lineBuffer.Count - 1; i++)
                 {
-                    return;
+                    if (_lineBuffer[i] == (byte)'\r' && _lineBuffer[i + 1] == (byte)'\n')
+                    {
+                        var lineBytes = _lineBuffer.GetRange(0, i).ToArray();
+                        _lineBuffer.RemoveRange(0, i + 2);
+                        return ParseStatus(lineBytes);
+                    }
                 }
 
-                try
+                var read = await _ssl.ReadAsync(_readBuffer, timeout.Token).ConfigureAwait(false);
+                if (read == 0)
                 {
-                    timeout.CancelAfter(Timeout.InfiniteTimeSpan);
+                    throw new EndOfStreamException("nntp-closed");
                 }
-                catch (ObjectDisposedException ex)
+
+                for (var i = 0; i < read; i++)
                 {
-                    ExpectedException.Ignore(ex);
+                    _lineBuffer.Add(_readBuffer[i]);
                 }
             }
         }
 
-        private void LogOutcome(StoreOperation operation, ArticlePlacementResult result)
+        private static (int Code, string Line) ParseStatus(byte[] lineBytes)
         {
-            if (result.Kind == ArticlePlacementKind.AcknowledgementNotObserved)
+            var line = Encoding.ASCII.GetString(lineBytes);
+            if (line.Length < 3
+                || !char.IsDigit(line[0])
+                || !char.IsDigit(line[1])
+                || !char.IsDigit(line[2]))
             {
-                ArticlePlacementTransportLogMessages.StoreAmbiguous(_logger, _fqdn, _port, operation.StreamId);
-                return;
+                throw new IOException("nntp-status");
             }
 
-            if (result.Succeeded)
-            {
-                ArticlePlacementTransportLogMessages.StoreCompleted(
-                    _logger, _fqdn, _port, operation.StreamId, result.Kind.ToString());
-                return;
-            }
-
-            ArticlePlacementTransportLogMessages.StoreRejected(
-                _logger, _fqdn, _port, operation.StreamId, result.Kind.ToString(), result.Failure);
+            var code = ((line[0] - '0') * 100) + ((line[1] - '0') * 10) + (line[2] - '0');
+            return (code, line);
         }
 
-        private void MarkDead() => Volatile.Write(ref _dead, 1);
-
-        private static byte[] Copy(ReadOnlySequence<byte> payload)
+        private void FailPending(PendingTakeThis pending, ArticlePlacementResult result)
         {
-            var bytes = new byte[payload.Length];
-            payload.CopyTo(bytes);
-            return bytes;
+            pending.Completion.TrySetResult(result);
+            lock (_pendingGate)
+            {
+                // Leave orphaned slots; reader or dispose clears the queue.
+            }
         }
 
-        private sealed class StoreOperation : IDisposable
+        private void CompleteAllPending(ArticlePlacementResult result)
         {
-            private int _completed;
-
-            public StoreOperation(uint streamId, ArticleId articleId, ArticleTransferLimits limits)
+            lock (_pendingGate)
             {
-                StreamId = streamId;
-                ArticleId = articleId;
-                Window = new ArticleTransferWindow(0, limits.MaxStreamCreditBytes);
-                Credit = new SemaphoreSlim(0);
-                Completion = new TaskCompletionSource<ArticlePlacementResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-
-            public uint StreamId { get; }
-
-            public ArticleId ArticleId { get; }
-
-            public object Gate { get; } = new();
-
-            public ArticleTransferWindow Window;
-
-            public SemaphoreSlim Credit { get; }
-
-            public TaskCompletionSource<ArticlePlacementResult> Completion { get; }
-
-            public bool Started { get; set; }
-
-            private volatile bool _endWritten;
-
-            public bool EndWritten
-            {
-                get => _endWritten;
-                set => _endWritten = value;
-            }
-
-            public bool IsCompleted => Volatile.Read(ref _completed) != 0;
-
-            public ArticlePlacementResult Result { get; private set; }
-
-            /// <summary>1 after META until the first WINDOW or a terminal result, then 0.</summary>
-            public int AwaitingInitialCredit;
-
-            /// <summary>
-            /// Completes the operation once.
-            /// Returns <see langword="true"/> when this call clears a pending initial-credit wait.
-            /// </summary>
-            public bool TryFinish(ArticlePlacementResult result)
-            {
-                var releasedCreditWait = Interlocked.Exchange(ref AwaitingInitialCredit, 0) == 1;
-                if (Interlocked.Exchange(ref _completed, 1) != 0)
+                while (_pending.Count > 0)
                 {
-                    return releasedCreditWait;
+                    _pending.Dequeue().Completion.TrySetResult(result);
                 }
-
-                Result = result;
-                Completion.TrySetResult(result);
-                try
-                {
-                    Credit.Release();
-                }
-                catch (ObjectDisposedException ex)
-                {
-                    ExpectedException.Ignore(ex);
-                }
-
-                return releasedCreditWait;
             }
-
-            public void Dispose() => Credit.Dispose();
         }
 
-        /// <summary>Accumulates socket bytes and yields one parsed frame at a time.</summary>
-        private sealed class FrameBuffer
+        private void MarkDead() => Interlocked.Exchange(ref _dead, 1);
+
+        private void UpdatePeak(int active)
         {
-            private byte[] _buffer = new byte[64 * 1024];
-            private int _start;
-            private int _end;
-
-            public bool TryTake(uint maxFramePayload, out VatpParsedFrame frame)
+            while (true)
             {
-                frame = default;
-                if (_end <= _start)
-                {
-                    return false;
-                }
-
-                var parsed = VatpFrameParser.ParseOneFrame(
-                    new ReadOnlySequence<byte>(_buffer, _start, _end - _start),
-                    maxFramePayload);
-                if (parsed.Status == VatpFrameParseStatus.Invalid)
-                {
-                    throw new IOException(parsed.Error.ToString());
-                }
-
-                if (parsed.Status != VatpFrameParseStatus.Success || parsed.Frame is not { } parsedFrame)
-                {
-                    return false;
-                }
-
-                var payload = new byte[parsedFrame.Payload.Length];
-                parsedFrame.Payload.CopyTo(payload);
-                frame = new VatpParsedFrame(parsedFrame.Header, new ReadOnlySequence<byte>(payload));
-                _start += checked((int)parsed.ConsumedBytes);
-                if (_start == _end)
-                {
-                    _start = 0;
-                    _end = 0;
-                }
-
-                return true;
-            }
-
-            public async ValueTask<int> ReadFromAsync(Stream stream, CancellationToken cancellationToken)
-            {
-                Compact();
-                if (_end == _buffer.Length)
-                {
-                    Array.Resize(ref _buffer, _buffer.Length * 2);
-                }
-
-                var read = await stream.ReadAsync(_buffer.AsMemory(_end), cancellationToken).ConfigureAwait(false);
-                _end += read;
-                return read;
-            }
-
-            private void Compact()
-            {
-                if (_start == 0)
+                var peak = Volatile.Read(ref _peakActive);
+                if (active <= peak || Interlocked.CompareExchange(ref _peakActive, active, peak) == peak)
                 {
                     return;
                 }
+            }
+        }
 
-                if (_start == _end)
+        private void NoteResponse(long ticks)
+        {
+            Interlocked.Increment(ref _responseCount);
+            Interlocked.Add(ref _responseWaitTicks, ticks);
+            while (true)
+            {
+                var max = Volatile.Read(ref _responseMaxTicks);
+                if (ticks <= max || Interlocked.CompareExchange(ref _responseMaxTicks, ticks, max) == max)
                 {
-                    _start = 0;
-                    _end = 0;
                     return;
                 }
-
-                Buffer.BlockCopy(_buffer, _start, _buffer, 0, _end - _start);
-                _end -= _start;
-                _start = 0;
             }
+        }
+
+        private sealed class PendingTakeThis
+        {
+            public TaskCompletionSource<ArticlePlacementResult> Completion { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
     }
 }

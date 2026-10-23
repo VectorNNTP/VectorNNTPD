@@ -3,11 +3,10 @@ using System.Security.Authentication;
 
 namespace VectorNNTPD.StorageService.Tests.Support.Placement
 {
-
     /// <summary>
-    /// Shared outbound TLS client options and handshake for VATP cache connections.
+    /// Shared outbound TLS client options and handshake for StorageServer feed connections.
     /// </summary>
-    internal static class VatpTlsClient
+    internal static class StorageTlsClient
     {
         internal static SslClientAuthenticationOptions CreateClientOptions(
             string host,

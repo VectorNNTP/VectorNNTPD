@@ -22,7 +22,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
         /// Relative path <c>{n0}/{n1}/{n2}/{64 lowercase hex}</c>.
         /// The three directory nibbles are the first three characters of the canonical lowercase hex digest.
         /// </summary>
-        /// <param name="articleId">Canonical VATP article identity.</param>
+        /// <param name="articleId">Canonical article identity.</param>
         /// <returns>A relative path with no parent segments.</returns>
         internal static string RelativePath(ArticleId articleId)
         {
@@ -38,7 +38,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolShards
         /// The normalized root prefix is cached for the life of the process.
         /// </summary>
         /// <param name="spoolRoot">Absolute spool directory.</param>
-        /// <param name="articleId">Canonical VATP article identity.</param>
+        /// <param name="articleId">Canonical article identity.</param>
         /// <returns>The absolute article path, using the platform directory separator.</returns>
         internal static string CombineArticle(string spoolRoot, ArticleId articleId)
         {

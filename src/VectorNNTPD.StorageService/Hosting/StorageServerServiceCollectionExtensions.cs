@@ -35,7 +35,7 @@ namespace VectorNNTPD.StorageService.Hosting
         /// </summary>
         /// <remarks>
         /// Application service start order:
-        /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → segment-pool validation → spool shard initialization → article index → block-device monitor → accepted-article worker → VATP listener → AdvertisementPublisher.
+        /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → segment-pool validation → spool shard initialization → article index → block-device monitor → accepted-article worker → NNTP feed listener → AdvertisementPublisher.
         /// Shutdown is that order reversed, so advertisement stops before the listener, and the listener completes the queue before the worker stops.
         /// Topology, queues, and consumers are not registered here. NntpDB does not migrate schema.
         /// </remarks>
@@ -138,8 +138,6 @@ namespace VectorNNTPD.StorageService.Hosting
             builder.Services.TryAddSingleton<SpoolArticlePublisher>();
             builder.Services.TryAddSingleton<IAcceptedArticleProcessor, SpoolArticlePersistenceProcessor>();
             builder.Services.TryAddSingleton<AcceptedArticleWorker>();
-            builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, RejectingStorageArticleOpenBoundary>();
-
             builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
                 new DelegateRabbitMqConnectionNameProvider(() =>
                     RabbitMqRuntimeOptions.GetDefaultConnectionName(
@@ -204,19 +202,33 @@ namespace VectorNNTPD.StorageService.Hosting
             {
                 var listener = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.Listener;
                 var dns = provider.GetRequiredService<CloudflareDnsReconciliationService>();
-                return new StorageVatpListenerService(
+                var index = provider.GetService<IArticleIndex>();
+                Func<Common.Articles.ArticleId, bool>? articlePresent = index is null
+                    ? null
+                    : id =>
+                    {
+                        try
+                        {
+                            return index.IsReady && index.Contains(id);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            return false;
+                        }
+                    };
+                return new StorageNntpListenerService(
                     provider.GetRequiredService<StorageServerRuntimeOptionsSource>(),
                     provider.GetRequiredService<Common.Networking.Certificates.ITlsCertificateContextProvider>(),
-                    provider.GetRequiredService<IStorageArticleOpenBoundary>(),
                     provider.GetRequiredService<IAcmeCertificateReadiness>(),
-                    provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),
+                    provider.GetRequiredService<ILogger<StorageNntpListenerService>>(),
                     provider.GetRequiredService<IAcceptedArticleQueue>(),
                     new StoreAssemblyAdmission(listener.MaxActiveConnections),
+                    articlePresent: articlePresent,
                     publishAfterBind: dns.PublishAfterListenerBoundAsync);
             });
             builder.Services.TryAddEnumerable(
-                ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>
-                    provider.GetRequiredService<StorageVatpListenerService>()));
+                ServiceDescriptor.Singleton<IApplicationService, StorageNntpListenerService>(static provider =>
+                    provider.GetRequiredService<StorageNntpListenerService>()));
             builder.Services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IApplicationService, StorageServerAdvertisementPublisherService>(static sp =>
                     sp.GetRequiredService<StorageServerAdvertisementPublisherService>()));

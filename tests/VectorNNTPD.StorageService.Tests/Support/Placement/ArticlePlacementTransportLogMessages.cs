@@ -2,8 +2,7 @@ using Microsoft.Extensions.Logging;
 
 namespace VectorNNTPD.StorageService.Tests.Support.Placement
 {
-
-    /// <summary>Source-generated logs for the long-lived placement connection. Not per DATA frame.</summary>
+    /// <summary>Source-generated logs for the long-lived placement connection.</summary>
     internal static partial class ArticlePlacementTransportLogMessages
     {
         [LoggerMessage(
@@ -39,20 +38,20 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
         [LoggerMessage(
             EventId = 2645,
             Level = LogLevel.Debug,
-            Message = "Placement STORE completed fqdn={Fqdn} vatpPort={VatpPort} streamId={StreamId} outcome={Outcome}")]
-        public static partial void StoreCompleted(ILogger logger, string Fqdn, int VatpPort, uint StreamId, string Outcome);
+            Message = "Placement TAKETHIS completed fqdn={Fqdn} vatpPort={VatpPort} outcome={Outcome}")]
+        public static partial void TakeThisCompleted(ILogger logger, string Fqdn, int VatpPort, string Outcome);
 
         [LoggerMessage(
             EventId = 2646,
             Level = LogLevel.Warning,
-            Message = "Placement STORE rejected fqdn={Fqdn} vatpPort={VatpPort} streamId={StreamId} outcome={Outcome} failure={Failure}")]
-        public static partial void StoreRejected(ILogger logger, string Fqdn, int VatpPort, uint StreamId, string Outcome, string? Failure);
+            Message = "Placement TAKETHIS rejected fqdn={Fqdn} vatpPort={VatpPort} outcome={Outcome} failure={Failure}")]
+        public static partial void TakeThisRejected(ILogger logger, string Fqdn, int VatpPort, string Outcome, string? Failure);
 
         [LoggerMessage(
             EventId = 2647,
             Level = LogLevel.Warning,
-            Message = "Placement STORE acknowledgement not observed fqdn={Fqdn} vatpPort={VatpPort} streamId={StreamId}")]
-        public static partial void StoreAmbiguous(ILogger logger, string Fqdn, int VatpPort, uint StreamId);
+            Message = "Placement TAKETHIS acknowledgement not observed fqdn={Fqdn} vatpPort={VatpPort}")]
+        public static partial void TakeThisAmbiguous(ILogger logger, string Fqdn, int VatpPort);
 
         [LoggerMessage(
             EventId = 2648,

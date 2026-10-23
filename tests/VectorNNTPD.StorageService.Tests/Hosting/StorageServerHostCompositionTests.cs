@@ -68,10 +68,10 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             Assert.IsType<ArticleIndexService>(application[7]);
             Assert.IsType<BlockDeviceMonitorService>(application[8]);
             Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[9]);
-            Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[10]);
+            Assert.Same(host.Services.GetRequiredService<StorageNntpListenerService>(), application[10]);
             Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
             Assert.Equal(1, application.Count(static service => service is AcceptedArticleWorker));
-            Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
+            Assert.IsType<StorageNntpListenerService>(host.Services.GetRequiredService<StorageNntpListenerService>());
             Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
             Assert.IsType<AcceptedArticleQueue>(host.Services.GetRequiredService<IAcceptedArticleQueue>());
             Assert.NotNull(host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>());
@@ -145,8 +145,8 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             Assert.NotEqual(ApplicationState.Running, lifecycle.State);
             Assert.Equal(ApplicationState.Stopped, lifecycle.State);
 
-            var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Equal(StorageVatpListenerState.Created, listener.State);
+            var listener = host.Services.GetRequiredService<StorageNntpListenerService>();
+            Assert.Equal(StorageNntpListenerState.Created, listener.State);
             Assert.Equal(0, host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>().PublishedCount);
 
             var application = host.Services.GetServices<IApplicationService>().ToArray();
@@ -165,7 +165,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
 
             var lifecycle = host.Services.GetRequiredService<ApplicationLifecycle>();
             Assert.Equal(ApplicationState.Stopped, lifecycle.State);
-            Assert.Equal(StorageVatpListenerState.Created, host.Services.GetRequiredService<StorageVatpListenerService>().State);
+            Assert.Equal(StorageNntpListenerState.Created, host.Services.GetRequiredService<StorageNntpListenerService>().State);
             Assert.Equal(0, host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>().PublishedCount);
             var application = host.Services.GetServices<IApplicationService>().ToArray();
             Assert.Null(application.OfType<AcceptedArticleWorker>().Single().Execution);
@@ -194,10 +194,10 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 Assert.IsType<ArticleIndexService>(application[7]);
                 Assert.IsType<BlockDeviceMonitorService>(application[8]);
                 Assert.IsType<AcceptedArticleWorker>(application[9]);
-                var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
+                var listener = host.Services.GetRequiredService<StorageNntpListenerService>();
                 Assert.Same(listener, application[10]);
                 Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
-                Assert.Equal(StorageVatpListenerState.Running, listener.State);
+                Assert.Equal(StorageNntpListenerState.Running, listener.State);
                 Assert.True(host.Services.GetRequiredService<IArticleIndex>().IsReady);
                 Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
                 Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());
