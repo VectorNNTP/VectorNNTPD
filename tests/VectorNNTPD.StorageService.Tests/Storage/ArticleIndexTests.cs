@@ -52,13 +52,13 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var missingParent = Path.Join(root, "missing", "article-index.sqlite");
             try
             {
-                var database = new ArticleIndexDatabase(
+                using var database = new ArticleIndexDatabase(
                     missingParent,
                     spool,
                     new ArticleIndexSettings(),
                     ArticleIndexCacheBudget.ForSpoolCount(1));
                 Assert.ThrowsAny<Exception>(() => database.Initialize(CancellationToken.None));
-                database.Dispose();
+                // Idempotent second dispose; `using` still runs if this call throws.
                 database.Dispose();
             }
             finally
