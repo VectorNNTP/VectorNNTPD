@@ -16,7 +16,7 @@ namespace VectorNNTPD.StorageService.Listener
 {
     /// <summary>
     /// Process-wide NNTP TLS listener: binds configured endpoints, authenticates TLS, and serves
-    /// RFC 4644 STREAMING feed sessions (<c>CHECK</c>/<c>TAKETHIS</c>). Does not own article storage.
+    /// Storage sessions (<c>ARTICLE</c>/<c>TAKETHIS</c>/<c>QUIT</c>). Does not own article storage.
     /// </summary>
     public sealed class StorageNntpListenerService : IApplicationService, IAsyncDisposable
     {
@@ -27,7 +27,11 @@ namespace VectorNNTPD.StorageService.Listener
         private readonly ILogger<StorageNntpListenerService> _logger;
         private readonly IAcceptedArticleQueue? _acceptedArticles;
         private readonly StoreAssemblyAdmission? _assemblyAdmission;
+        private readonly Func<bool>? _allowsArticleAdmission;
         private readonly Func<ArticleId, bool>? _articlePresent;
+        private readonly Func<ArticleId, string?>? _resolveRetrievableArticle;
+        private readonly Func<ArticleId, CancellationToken, ValueTask>? _afterArticleDelivered;
+        private readonly Func<ArticleId, IDisposable>? _acquireArticleReadLease;
 
         /// <summary>
         /// Publishes DNS after at least one socket is bound. Null skips publication.
@@ -58,8 +62,23 @@ namespace VectorNNTPD.StorageService.Listener
             ILogger<StorageNntpListenerService> logger,
             IAcceptedArticleQueue? acceptedArticles = null,
             StoreAssemblyAdmission? assemblyAdmission = null,
-            Func<ArticleId, bool>? articlePresent = null)
-            : this(runtime, certificates, CreateReadyGate(), logger, acceptedArticles, assemblyAdmission, articlePresent)
+            Func<bool>? allowsArticleAdmission = null,
+            Func<ArticleId, bool>? articlePresent = null,
+            Func<ArticleId, string?>? resolveRetrievableArticle = null,
+            Func<ArticleId, CancellationToken, ValueTask>? afterArticleDelivered = null,
+            Func<ArticleId, IDisposable>? acquireArticleReadLease = null)
+            : this(
+                runtime,
+                certificates,
+                CreateReadyGate(),
+                logger,
+                acceptedArticles,
+                assemblyAdmission,
+                allowsArticleAdmission,
+                articlePresent,
+                resolveRetrievableArticle: resolveRetrievableArticle,
+                afterArticleDelivered: afterArticleDelivered,
+                acquireArticleReadLease: acquireArticleReadLease)
         {
         }
 
@@ -71,8 +90,12 @@ namespace VectorNNTPD.StorageService.Listener
             ILogger<StorageNntpListenerService> logger,
             IAcceptedArticleQueue? acceptedArticles = null,
             StoreAssemblyAdmission? assemblyAdmission = null,
+            Func<bool>? allowsArticleAdmission = null,
             Func<ArticleId, bool>? articlePresent = null,
-            Func<CancellationToken, Task>? publishAfterBind = null)
+            Func<CancellationToken, Task>? publishAfterBind = null,
+            Func<ArticleId, string?>? resolveRetrievableArticle = null,
+            Func<ArticleId, CancellationToken, ValueTask>? afterArticleDelivered = null,
+            Func<ArticleId, IDisposable>? acquireArticleReadLease = null)
         {
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(certificates);
@@ -84,7 +107,11 @@ namespace VectorNNTPD.StorageService.Listener
             _logger = logger;
             _acceptedArticles = acceptedArticles;
             _assemblyAdmission = assemblyAdmission;
+            _allowsArticleAdmission = allowsArticleAdmission;
             _articlePresent = articlePresent;
+            _resolveRetrievableArticle = resolveRetrievableArticle;
+            _afterArticleDelivered = afterArticleDelivered;
+            _acquireArticleReadLease = acquireArticleReadLease;
             _publishAfterBind = publishAfterBind;
         }
 
@@ -99,8 +126,12 @@ namespace VectorNNTPD.StorageService.Listener
             ILogger<StorageNntpListenerService> logger,
             IAcceptedArticleQueue? acceptedArticles,
             StoreAssemblyAdmission? assemblyAdmission,
+            Func<bool>? allowsArticleAdmission = null,
             Func<ArticleId, bool>? articlePresent = null,
-            Func<CancellationToken, Task>? publishAfterBind = null)
+            Func<CancellationToken, Task>? publishAfterBind = null,
+            Func<ArticleId, string?>? resolveRetrievableArticle = null,
+            Func<ArticleId, CancellationToken, ValueTask>? afterArticleDelivered = null,
+            Func<ArticleId, IDisposable>? acquireArticleReadLease = null)
         {
             ArgumentNullException.ThrowIfNull(runtimeSource);
             ArgumentNullException.ThrowIfNull(certificates);
@@ -112,7 +143,11 @@ namespace VectorNNTPD.StorageService.Listener
             _logger = logger;
             _acceptedArticles = acceptedArticles;
             _assemblyAdmission = assemblyAdmission;
+            _allowsArticleAdmission = allowsArticleAdmission;
             _articlePresent = articlePresent;
+            _resolveRetrievableArticle = resolveRetrievableArticle;
+            _afterArticleDelivered = afterArticleDelivered;
+            _acquireArticleReadLease = acquireArticleReadLease;
             _publishAfterBind = publishAfterBind;
         }
 
@@ -265,6 +300,9 @@ namespace VectorNNTPD.StorageService.Listener
                 }
             }
 
+            // Finish in-flight TAKETHIS (including TryCommit) before completing the queue so a
+            // reservation cannot race Complete. ApplicationServiceManager then stops the worker,
+            // which drains every accepted article before the article index stops.
             await DrainConnectionsAsync().ConfigureAwait(false);
             _acceptedArticles?.Complete();
             await DisposeBoundResourcesAsync().ConfigureAwait(false);
@@ -438,7 +476,11 @@ namespace VectorNNTPD.StorageService.Listener
                     Runtime.Fqdn,
                     acceptedArticles: _acceptedArticles,
                     assemblyAdmission: _assemblyAdmission,
-                    articlePresent: _articlePresent);
+                    allowsArticleAdmission: _allowsArticleAdmission,
+                    articlePresent: _articlePresent,
+                    resolveRetrievableArticle: _resolveRetrievableArticle,
+                    afterArticleDelivered: _afterArticleDelivered,
+                    acquireArticleReadLease: _acquireArticleReadLease);
                 await session.RunAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)

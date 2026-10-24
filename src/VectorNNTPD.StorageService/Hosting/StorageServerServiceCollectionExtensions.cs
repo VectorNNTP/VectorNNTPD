@@ -128,7 +128,6 @@ namespace VectorNNTPD.StorageService.Hosting
                 new AcceptedArticleQueue(
                     provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.SpoolPersistence.MaxQueuedBytes,
                     provider.GetRequiredService<TimeProvider>()));
-            builder.Services.TryAddSingleton<SpoolPressure>();
             builder.Services.TryAddSingleton(static provider => new SpoolHealth(provider.GetRequiredService<TimeProvider>()));
             builder.Services.TryAddSingleton<SpoolWriteGate>();
             builder.Services.TryAddSingleton<SpoolArticleIdentityGate>();
@@ -155,9 +154,17 @@ namespace VectorNNTPD.StorageService.Hosting
             builder.Services.TryAddSingleton<ISpoolShardDirectorySystem, FileSpoolShardDirectorySystem>();
             builder.Services.TryAddSingleton<SegmentPoolValidationService>();
             builder.Services.TryAddSingleton<SpoolShardInitializationService>();
+            builder.Services.TryAddSingleton<ArticleReadLeaseRegistry>();
+            builder.Services.TryAddSingleton<SpoolLfuEviction>();
             builder.Services.TryAddSingleton<ArticleIndexService>();
             builder.Services.TryAddSingleton<IArticleIndex>(static provider => provider.GetRequiredService<ArticleIndexService>());
             builder.Services.TryAddSingleton<BlockDeviceMonitorService>();
+            builder.Services.TryAddSingleton<SpoolCapacityWaitSignal>();
+            builder.Services.TryAddSingleton(static provider =>
+                new SpoolPressure(provider.GetRequiredService<SpoolCapacityWaitSignal>()));
+            builder.Services.TryAddSingleton<SpoolCapacityRegistry>();
+            builder.Services.TryAddSingleton<SegmentPoolCapacityGate>();
+            builder.Services.TryAddSingleton<SpoolEvictionMonitorService>();
 
             builder.Services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
             builder.Services.TryAddSingleton<NntpDbService>();
@@ -167,7 +174,7 @@ namespace VectorNNTPD.StorageService.Hosting
 
             // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME →
             // segment-pool validation → spool shard initialization → article index → block-device monitor →
-            // accepted-article worker → Listener → AdvertisementPublisher.
+            // per-spool eviction monitors → accepted-article worker → Listener → AdvertisementPublisher.
             // Validation and shard initialization throw before the worker, listener, or advertisement publisher start.
             // ApplicationServiceManager stops in reverse, so advertisement stops first and the worker stops after the listener completes the queue.
             builder.Services.TryAddEnumerable(
@@ -196,6 +203,9 @@ namespace VectorNNTPD.StorageService.Hosting
                 ServiceDescriptor.Singleton<IApplicationService, BlockDeviceMonitorService>(static provider =>
                     provider.GetRequiredService<BlockDeviceMonitorService>()));
             builder.Services.TryAddEnumerable(
+                ServiceDescriptor.Singleton<IApplicationService, SpoolEvictionMonitorService>(static provider =>
+                    provider.GetRequiredService<SpoolEvictionMonitorService>()));
+            builder.Services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IApplicationService, AcceptedArticleWorker>(static provider =>
                     provider.GetRequiredService<AcceptedArticleWorker>()));
             builder.Services.AddSingleton(static provider =>
@@ -203,6 +213,11 @@ namespace VectorNNTPD.StorageService.Hosting
                 var listener = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.Listener;
                 var dns = provider.GetRequiredService<CloudflareDnsReconciliationService>();
                 var index = provider.GetService<IArticleIndex>();
+                var readLeases = provider.GetService<ArticleReadLeaseRegistry>();
+                Func<Common.Articles.ArticleId, IDisposable>? acquireArticleReadLease = readLeases is null
+                    ? null
+                    : readLeases.Acquire;
+                var time = provider.GetService<TimeProvider>() ?? TimeProvider.System;
                 Func<Common.Articles.ArticleId, bool>? articlePresent = index is null
                     ? null
                     : id =>
@@ -216,15 +231,59 @@ namespace VectorNNTPD.StorageService.Hosting
                             return false;
                         }
                     };
+                Func<Common.Articles.ArticleId, string?>? resolveRetrievableArticle = index is null
+                    ? null
+                    : id =>
+                    {
+                        try
+                        {
+                            if (!index.IsReady || !index.TryGetRetrievableArticle(id, out var path))
+                            {
+                                return null;
+                            }
+
+                            return path;
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            return null;
+                        }
+                    };
+                Func<Common.Articles.ArticleId, CancellationToken, ValueTask>? afterArticleDelivered = index is null
+                    ? null
+                    : async (id, cancellationToken) =>
+                    {
+                        if (!index.TryGetIndexedRecord(id, out var record))
+                        {
+                            return;
+                        }
+
+                        await index.TouchAsync(
+                                id,
+                                record.SpoolDirectory,
+                                time.GetUtcNow().ToUnixTimeMilliseconds(),
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    };
+                var capacityGate = provider.GetRequiredService<SegmentPoolCapacityGate>();
                 return new StorageNntpListenerService(
                     provider.GetRequiredService<StorageServerRuntimeOptionsSource>(),
                     provider.GetRequiredService<Common.Networking.Certificates.ITlsCertificateContextProvider>(),
                     provider.GetRequiredService<IAcmeCertificateReadiness>(),
                     provider.GetRequiredService<ILogger<StorageNntpListenerService>>(),
                     provider.GetRequiredService<IAcceptedArticleQueue>(),
-                    new StoreAssemblyAdmission(listener.MaxActiveConnections),
+                    new StoreAssemblyAdmission(
+                        StoreAssemblyAdmission.LimitFor(
+                            listener.MaxActiveConnections,
+                            provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.SpoolPersistence
+                                ?.MaxQueuedBytes
+                            ?? SpoolPersistenceOptions.DefaultMaxQueuedBytes)),
+                    allowsArticleAdmission: capacityGate.AllowsAdmission,
                     articlePresent: articlePresent,
-                    publishAfterBind: dns.PublishAfterListenerBoundAsync);
+                    publishAfterBind: dns.PublishAfterListenerBoundAsync,
+                    resolveRetrievableArticle: resolveRetrievableArticle,
+                    afterArticleDelivered: afterArticleDelivered,
+                    acquireArticleReadLease: acquireArticleReadLease);
             });
             builder.Services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IApplicationService, StorageNntpListenerService>(static provider =>

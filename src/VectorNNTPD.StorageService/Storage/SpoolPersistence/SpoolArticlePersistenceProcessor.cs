@@ -33,6 +33,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
         private readonly IArticleIndex? _index;
         private IReadOnlyList<SegmentPoolDevice>? _rootSource;
         private string[] _roots = [];
+        private long _lastDeferredLogAt;
 
         /// <summary>Initializes the host processor.</summary>
         /// <param name="runtime">Published server FQDN used as the Path hop.</param>
@@ -176,9 +177,24 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                 var receivedAt = _time.GetUtcNow().ToUnixTimeMilliseconds();
                 try
                 {
-                    var indexed = await _index.InsertStoredAsync(article.ArtId, outcome.Spool, receivedAt, cancellationToken)
+                    var indexed = await _index.InsertStoredAsync(
+                            article.ArtId,
+                            outcome.Spool,
+                            receivedAt,
+                            cancellationToken,
+                            article.ArtSize)
                         .ConfigureAwait(false);
-                    return indexed.Committed ? outcome.Result : AcceptedArticleProcessResult.Failed;
+                    if (!indexed.Committed)
+                    {
+                        return AcceptedArticleProcessResult.Failed;
+                    }
+
+                    if (indexed.Inserted)
+                    {
+                        await _index.EvictUntilBelowHighAsync(outcome.Spool, cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return outcome.Result;
                 }
                 catch (OperationCanceledException)
                 {
@@ -270,16 +286,22 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                             }
                         }
 
-                        if (!_gate.TryReserve(observed, rewritten.Length, out var chosen))
+                        var criticalPercent = (_options.Value.SegmentPools ?? new SegmentPoolsOptions()).CriticalPercent;
+                        if (!_gate.TryReserve(observed, rewritten.Length, criticalPercent, out var chosen))
                         {
                             _pressure.SetSaturated(true);
                             _counters.NoteDeferred();
-                            if (_logger.IsEnabled(LogLevel.Warning))
-                            {
-                                SpoolPersistenceLogMessages.Deferred(_logger, article.ArtId.ToLowerHexString());
-                            }
-
+                            LogDeferredThrottled(article.ArtId);
                             return PersistenceOutcome.Done(AcceptedArticleProcessResult.WaitingForCapacity);
+                        }
+
+                        if (_logger.IsEnabled(LogLevel.Debug))
+                        {
+                            SpoolPersistenceLogMessages.SpoolSelected(
+                                _logger,
+                                article.ArtId.ToLowerHexString(),
+                                chosen.SpoolRoot,
+                                chosen.DeviceId);
                         }
 
                         _pressure.SetSaturated(false);
@@ -297,7 +319,7 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                         }
                         finally
                         {
-                            _gate.Exit(chosen.SpoolRoot);
+                            _gate.Exit(chosen);
                         }
                     }
                 }
@@ -412,6 +434,29 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
                         published.Detail ?? string.Empty);
                     return AcceptedArticleProcessResult.WaitingForCapacity;
             }
+        }
+
+        /// <summary>Logs at most one deferred warning every five seconds to avoid retry log floods.</summary>
+        private void LogDeferredThrottled(ArticleId articleId)
+        {
+            if (!_logger.IsEnabled(LogLevel.Warning))
+            {
+                return;
+            }
+
+            var now = _time.GetTimestamp();
+            var previous = Volatile.Read(ref _lastDeferredLogAt);
+            if (previous != 0 && _time.GetElapsedTime(previous, now) < TimeSpan.FromSeconds(5))
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _lastDeferredLogAt, now, previous) != previous)
+            {
+                return;
+            }
+
+            SpoolPersistenceLogMessages.Deferred(_logger, articleId.ToLowerHexString());
         }
     }
 

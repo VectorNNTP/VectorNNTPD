@@ -24,8 +24,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var clock = new FakeTimeProvider();
             clock.SetUtcNow(new DateTimeOffset(2026, 10, 13, 7, 0, 0, TimeSpan.Zero));
             var expected = clock.GetUtcNow().ToUnixTimeMilliseconds();
-            var monitor = Monitor(catalog, spool);
-            await monitor.StartAsync(CancellationToken.None);
+            var monitor = Monitor(catalog, spool, clock);
             var index = await ArticleIndexTestSupport.StartAsync(database, catalog);
             try
             {
@@ -74,7 +73,6 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             }
             finally
             {
-                await monitor.StopAsync(CancellationToken.None);
                 await ArticleIndexTestSupport.StopAsync(index);
                 ArticleIndexTestSupport.Delete(spool);
                 ArticleIndexTestSupport.Delete(database);
@@ -155,8 +153,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var clock = new FakeTimeProvider();
             clock.SetUtcNow(new DateTimeOffset(2026, 10, 13, 8, 0, 0, TimeSpan.Zero));
             var expected = clock.GetUtcNow().ToUnixTimeMilliseconds();
-            var monitor = Monitor(catalog, spool);
-            await monitor.StartAsync(CancellationToken.None);
+            var monitor = Monitor(catalog, spool, clock);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var indexWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var index = await ArticleIndexTestSupport.StartAsync(database, catalog, new ArticleIndexSettings
@@ -185,7 +182,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var secondTask = processor.ProcessAsync(second, CancellationToken.None).AsTask();
                 await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.False(secondTask.IsCompleted);
-                clock.Advance(TimeSpan.FromMinutes(5));
+                clock.Advance(TimeSpan.FromSeconds(2));
+                InvokeSample(monitor);
                 release.TrySetResult();
                 Assert.Equal(AcceptedArticleProcessResult.Completed, await firstTask.WaitAsync(TimeSpan.FromSeconds(5)));
                 Assert.Equal(AcceptedArticleProcessResult.Completed, await secondTask.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -209,7 +207,6 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             finally
             {
                 release.TrySetResult();
-                await monitor.StopAsync(CancellationToken.None);
                 await ArticleIndexTestSupport.StopAsync(index);
                 ArticleIndexTestSupport.Delete(spool);
                 ArticleIndexTestSupport.Delete(database);
@@ -226,8 +223,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             clock.SetUtcNow(new DateTimeOffset(2026, 10, 13, 9, 0, 0, TimeSpan.Zero));
             var expected = clock.GetUtcNow().ToUnixTimeMilliseconds();
             var leftCatalog = Catalog(left);
-            var monitor = Monitor(leftCatalog, left);
-            await monitor.StartAsync(CancellationToken.None);
+            var monitor = Monitor(leftCatalog, left, clock);
             var index = await ArticleIndexTestSupport.StartAsync(database, leftCatalog);
             try
             {
@@ -236,18 +232,17 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var article = Build("<pinned@example.test>", "left-body");
                 Assert.Equal(AcceptedArticleProcessResult.Completed, await processor.ProcessAsync(article, CancellationToken.None));
                 await ArticleIndexTestSupport.StopAsync(index);
-                await monitor.StopAsync(CancellationToken.None);
 
                 var both = new SegmentPoolCatalog();
                 both.Publish([new SegmentPoolDevice("block:test", [right, left])]);
                 var probe = new StaticFreeSpaceProbe();
                 probe.Set(left, total: 100_000_000_000, available: 80_000_000_000);
                 probe.Set(right, total: 100_000_000_000, available: 90_000_000_000);
-                monitor = Monitor(both, probe);
-                await monitor.StartAsync(CancellationToken.None);
+                monitor = Monitor(both, probe, clock);
                 await WaitForSpaceAsync(monitor, left);
                 await WaitForSpaceAsync(monitor, right);
                 clock.Advance(TimeSpan.FromHours(1));
+                InvokeSample(monitor);
                 index = await ArticleIndexTestSupport.StartAsync(database, both);
                 var again = Processor(both, monitor, index, clock);
                 var repeat = Build("<pinned@example.test>", "still-on-left");
@@ -265,7 +260,6 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             }
             finally
             {
-                await monitor.StopAsync(CancellationToken.None);
                 await ArticleIndexTestSupport.StopAsync(index);
                 ArticleIndexTestSupport.Delete(left);
                 ArticleIndexTestSupport.Delete(right);
@@ -280,20 +274,26 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             return catalog;
         }
 
-        private static BlockDeviceMonitorService Monitor(SegmentPoolCatalog catalog, StaticFreeSpaceProbe probe) =>
+        private static BlockDeviceMonitorService Monitor(
+            SegmentPoolCatalog catalog,
+            StaticFreeSpaceProbe probe,
+            TimeProvider? time = null) =>
             new(
                 catalog,
                 new RisingCounters(),
                 NullLogger<BlockDeviceMonitorService>.Instance,
                 TimeSpan.FromHours(1),
-                TimeProvider.System,
+                time ?? TimeProvider.System,
                 probe);
 
-        private static BlockDeviceMonitorService Monitor(SegmentPoolCatalog catalog, string spool)
+        private static BlockDeviceMonitorService Monitor(
+            SegmentPoolCatalog catalog,
+            string spool,
+            TimeProvider? time = null)
         {
             var probe = new StaticFreeSpaceProbe();
             probe.Set(spool, total: 100_000_000_000, available: 80_000_000_000);
-            return Monitor(catalog, probe);
+            return Monitor(catalog, probe, time);
         }
 
         private static SpoolArticlePersistenceProcessor Processor(

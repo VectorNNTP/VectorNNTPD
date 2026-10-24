@@ -280,6 +280,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 var shardIndex = Array.FindIndex(ordered, static service => service is SpoolShardInitializationService);
                 var indexIndex = Array.FindIndex(ordered, static service => service is ArticleIndexService);
                 var monitorIndex = Array.FindIndex(ordered, static service => service is BlockDeviceMonitorService);
+                var evictionIndex = Array.FindIndex(ordered, static service => service is SpoolEvictionMonitorService);
                 var workerIndex = Array.FindIndex(ordered, static service => service is VectorNNTPD.StorageService.Ingress.AcceptedArticleWorker);
                 Assert.True(databaseIndex >= 0 && databaseIndex < sharedIndex);
                 Assert.True(sharedIndex < rabbitIndex);
@@ -288,7 +289,8 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 Assert.True(validationIndex < shardIndex);
                 Assert.True(shardIndex < indexIndex);
                 Assert.True(indexIndex < monitorIndex);
-                Assert.True(monitorIndex < workerIndex);
+                Assert.True(monitorIndex < evictionIndex);
+                Assert.True(evictionIndex < workerIndex);
                 Assert.True(workerIndex < listenerIndex);
                 Assert.Equal(1, ordered.Count(static service => service is VectorNNTPD.StorageService.Ingress.AcceptedArticleWorker));
                 Assert.True(listenerIndex < publisherIndex);

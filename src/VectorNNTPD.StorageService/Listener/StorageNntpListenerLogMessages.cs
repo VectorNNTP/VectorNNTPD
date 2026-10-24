@@ -154,5 +154,17 @@ namespace VectorNNTPD.StorageService.Listener
             Level = LogLevel.Debug,
             Message = "Storage NNTP STORE waiting for queue capacity streamId={StreamId} bytes={Bytes}")]
         public static partial void StoreAdmissionWaiting(ILogger logger, uint StreamId, int Bytes);
+
+        [LoggerMessage(
+            EventId = 5509,
+            Level = LogLevel.Warning,
+            Message = "Storage NNTP ARTICLE retrieval failed artId={ArtId} failure={Failure}")]
+        public static partial void ArticleRetrievalFailed(ILogger logger, string ArtId, string Failure);
+
+        [LoggerMessage(
+            EventId = 5510,
+            Level = LogLevel.Debug,
+            Message = "Storage NNTP ARTICLE touch failed artId={ArtId} failure={Failure}")]
+        public static partial void ArticleTouchFailed(ILogger logger, string ArtId, string Failure);
     }
 }

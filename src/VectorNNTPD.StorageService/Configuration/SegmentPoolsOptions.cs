@@ -4,25 +4,27 @@ namespace VectorNNTPD.StorageService.Configuration
 {
 
     /// <summary>
-    /// Dedicated segment-pool directories and used-space thresholds for a future eviction loop.
-    /// <see cref="LowPercent"/>, <see cref="HighPercent"/>, and <see cref="CriticalPercent"/> do not
-    /// admit or reject article writes. Advertisements are not changed by these thresholds.
+    /// Dedicated segment-pool directories and filesystem used-space thresholds for capacity policy.
+    /// Each configured directory has an independent High→Low eviction monitor.
+    /// <see cref="CriticalPercent"/> excludes a spool from placement (and blocks TAKETHIS when no
+    /// eligible spool remains). Advertisements are not changed by these thresholds.
     /// </summary>
     public sealed class SegmentPoolsOptions
     {
         /// <summary>
-        /// Highest used-space percent reserved for a future eviction loop.
-        /// It does not make a spool ineligible for a new write and does not change the RabbitMQ advertisement.
+        /// Occupancy percent above which a spool is ineligible for new placement (strict greater-than).
+        /// Equal to this value remains eligible. Global TAKETHIS admission requires at least one
+        /// valid, fresh, eligible spool. Does not change RabbitMQ advertisements.
         /// </summary>
         public int CriticalPercent { get; set; } = 85;
 
         /// <summary>
-        /// Occupancy percent at or above which a future eviction loop would start. Not enforced in this phase.
+        /// Occupancy percent at or above which that spool's independent LFU eviction monitor starts.
         /// </summary>
         public int HighPercent { get; set; } = 79;
 
         /// <summary>
-        /// Occupancy percent at which a future eviction loop would stop. Not enforced in this phase.
+        /// Occupancy percent at or below which that spool's independent LFU eviction monitor stops.
         /// </summary>
         public int LowPercent { get; set; } = 75;
 

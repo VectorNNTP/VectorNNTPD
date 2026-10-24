@@ -20,9 +20,15 @@ namespace VectorNNTPD.StorageService.Ingress
     /// </para>
     /// <para>
     /// Each worker holds at most one dequeued article. A waiting-for-capacity result keeps that
-    /// article off the queue and retries after <see cref="SpoolPersistenceOptions.IneligibleRetryMilliseconds"/>.
-    /// Shutdown cancels in-flight publishes. An article already dequeued and not yet published is
-    /// logged and dropped. TAKETHIS 239 was sent at enqueue and is not repeated here.
+    /// article off the queue (still bounded by worker count) and retries when
+    /// <see cref="SpoolCapacityWaitSignal"/> fires or after
+    /// <see cref="SpoolPersistenceOptions.IneligibleRetryMilliseconds"/>, whichever comes first.
+    /// </para>
+    /// <para>
+    /// Graceful <see cref="StopAsync"/> completes the queue (if the listener has not already), then waits
+    /// for every queued and in-flight article to finish Path rewrite, spool publish, and index update.
+    /// Host cancellation of <see cref="StopAsync"/> is only a drain deadline: it does not abandon work
+    /// until that deadline fires. Forced process kill after TAKETHIS 239 may still lose accepted articles.
     /// </para>
     /// </remarks>
     internal sealed class AcceptedArticleWorker : IApplicationService
@@ -32,6 +38,7 @@ namespace VectorNNTPD.StorageService.Ingress
         private readonly ILogger<AcceptedArticleWorker> _logger;
         private readonly SpoolPersistenceOptions _options;
         private readonly SpoolPressure? _pressure;
+        private readonly SpoolCapacityWaitSignal? _capacityWait;
         private readonly SpoolPersistenceCounters? _counters;
         private readonly TimeProvider _time;
         private readonly CancellationTokenSource _runCts = new();
@@ -45,6 +52,7 @@ namespace VectorNNTPD.StorageService.Ingress
         private long _scaleArmedAt;
         private int _scaleDirection;
         private long _lastSummaryAt;
+        private int _drainFailures;
 
         /// <summary>Initializes the host worker from validated options.</summary>
         /// <param name="queue">Accepted-article queue.</param>
@@ -54,6 +62,7 @@ namespace VectorNNTPD.StorageService.Ingress
         /// <param name="pressure">Saturation signal. A null signal never reports saturation.</param>
         /// <param name="counters">Optional fault counter.</param>
         /// <param name="time">Clock for dwell and retry delays.</param>
+        /// <param name="capacityWait">Wakes capacity-blocked workers on fresh samples or reclaim.</param>
         public AcceptedArticleWorker(
             IAcceptedArticleQueue queue,
             IAcceptedArticleProcessor processor,
@@ -61,7 +70,8 @@ namespace VectorNNTPD.StorageService.Ingress
             IOptions<StorageServerOptions> options,
             SpoolPressure pressure,
             SpoolPersistenceCounters counters,
-            TimeProvider time)
+            TimeProvider time,
+            SpoolCapacityWaitSignal capacityWait)
             : this(
                 queue,
                 processor,
@@ -69,7 +79,8 @@ namespace VectorNNTPD.StorageService.Ingress
                 options.Value.SpoolPersistence ?? new SpoolPersistenceOptions(),
                 pressure,
                 counters,
-                time)
+                time,
+                capacityWait)
         {
             ArgumentNullException.ThrowIfNull(options);
         }
@@ -82,6 +93,7 @@ namespace VectorNNTPD.StorageService.Ingress
         /// <param name="pressure">Saturation signal.</param>
         /// <param name="counters">Fault counter.</param>
         /// <param name="time">Clock. Null uses <see cref="TimeProvider.System"/>.</param>
+        /// <param name="capacityWait">Optional capacity-recovery wake signal.</param>
         internal AcceptedArticleWorker(
             IAcceptedArticleQueue queue,
             IAcceptedArticleProcessor processor,
@@ -89,7 +101,8 @@ namespace VectorNNTPD.StorageService.Ingress
             SpoolPersistenceOptions? options = null,
             SpoolPressure? pressure = null,
             SpoolPersistenceCounters? counters = null,
-            TimeProvider? time = null)
+            TimeProvider? time = null,
+            SpoolCapacityWaitSignal? capacityWait = null)
         {
             ArgumentNullException.ThrowIfNull(queue);
             ArgumentNullException.ThrowIfNull(processor);
@@ -99,6 +112,7 @@ namespace VectorNNTPD.StorageService.Ingress
             _logger = logger;
             _options = options ?? new SpoolPersistenceOptions();
             _pressure = pressure;
+            _capacityWait = capacityWait;
             _counters = counters;
             _time = time ?? TimeProvider.System;
         }
@@ -136,24 +150,88 @@ namespace VectorNNTPD.StorageService.Ingress
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Completes the accepted-article queue when the listener has not already done so, waits until
+        /// every worker has finished queued and in-flight articles (without cancelling persistence),
+        /// then cancels the run token so the control loop can exit (including when it is parked on a
+        /// <see cref="TimeProvider"/> delay). Host cancellation of <paramref name="cancellationToken"/>
+        /// is only the drain deadline.
+        /// </remarks>
         public async Task StopAsync(CancellationToken cancellationToken)
         {
-            await _runCts.CancelAsync().ConfigureAwait(false);
+            if (!_queue.IsCompleted)
+            {
+                _queue.Complete();
+            }
+
             Wake();
             var execution = _execution;
             if (execution is null)
             {
+                ThrowIfDrainFailed();
                 return;
             }
 
             try
             {
+                await WaitForWorkersToDrainAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await _runCts.CancelAsync().ConfigureAwait(false);
+                Wake();
+                try
+                {
+                    await execution.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+                {
+                    ExpectedException.Ignore(ex);
+                }
+
+                throw new InvalidOperationException(
+                    "Accepted-article drain did not finish before the graceful shutdown budget elapsed.");
+            }
+
+            await _runCts.CancelAsync().ConfigureAwait(false);
+            Wake();
+            try
+            {
                 await execution.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                ExpectedException.Ignore(ex);
+                throw new InvalidOperationException(
+                    "Accepted-article worker control loop did not exit before the graceful shutdown budget elapsed.");
             }
+
+            ThrowIfDrainFailed();
+        }
+
+        /// <summary>
+        /// Waits until the completed queue is empty and no worker is still processing.
+        /// Uses the host clock so a test <see cref="TimeProvider"/> cannot stall the drain.
+        /// </summary>
+        private async Task WaitForWorkersToDrainAsync(CancellationToken cancellationToken)
+        {
+            while (_queue.QueuedCount > 0 || Volatile.Read(ref _active) > 0)
+            {
+                Wake();
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>Fails stop when any accepted article was abandoned or reported <see cref="AcceptedArticleProcessResult.Failed"/>.</summary>
+        private void ThrowIfDrainFailed()
+        {
+            var failures = Volatile.Read(ref _drainFailures);
+            if (failures == 0)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"Accepted-article drain finished with {failures} failed or abandoned article(s).");
         }
 
         /// <summary>
@@ -353,32 +431,40 @@ namespace VectorNNTPD.StorageService.Ingress
 
                     try
                     {
+                        // Capture before ProcessAsync so a Notify during the attempt completes this wait.
+                        var capacityWait = _capacityWait?.CaptureWait() ?? Task.CompletedTask;
                         var status = await _processor.ProcessAsync(article, cancellationToken).ConfigureAwait(false);
                         if (status == AcceptedArticleProcessResult.WaitingForCapacity)
                         {
                             held = article;
-                            await Task.Delay(
-                                    TimeSpan.FromMilliseconds(_options.IneligibleRetryMilliseconds),
-                                    _time,
-                                    cancellationToken)
-                                .ConfigureAwait(false);
+                            await WaitForCapacityRetryAsync(capacityWait, cancellationToken).ConfigureAwait(false);
                             continue;
                         }
 
+                        if (status == AcceptedArticleProcessResult.Failed)
+                        {
+                            Interlocked.Increment(ref _drainFailures);
+                        }
+
+                        _queue.ReleaseProcessed(article.ArtSize);
                         held = null;
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         LogDropped(article);
+                        Interlocked.Increment(ref _drainFailures);
+                        _queue.ReleaseProcessed(article.ArtSize);
                         held = null;
                         break;
                     }
                     catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
+                        Interlocked.Increment(ref _drainFailures);
                         AcceptedArticleWorkerLogMessages.ProcessingFailed(
                             _logger,
                             ex,
                             article.ArtId.ToLowerHexString());
+                        _queue.ReleaseProcessed(article.ArtSize);
                         held = null;
                     }
                 }
@@ -386,13 +472,17 @@ namespace VectorNNTPD.StorageService.Ingress
             catch (Exception ex) when (ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
             {
                 _counters?.NoteWorkerFault();
+                Interlocked.Increment(ref _drainFailures);
                 AcceptedArticleWorkerLogMessages.ProcessingFailed(_logger, ex, "worker");
             }
             finally
             {
-                if (held is { } leftover && cancellationToken.IsCancellationRequested)
+                if (held is { } leftover)
                 {
+                    // Queue already completed; abandoning a held article violates the drain contract.
                     LogDropped(leftover);
+                    Interlocked.Increment(ref _drainFailures);
+                    _queue.ReleaseProcessed(leftover.ArtSize);
                 }
 
                 if (!retired)
@@ -400,6 +490,26 @@ namespace VectorNNTPD.StorageService.Ingress
                     ReleaseActiveOnce();
                 }
             }
+        }
+
+        /// <summary>
+        /// Waits for a capacity-recovery notify or the configured poll interval.
+        /// Does not allocate a per-article retry task beyond this worker's stack frame.
+        /// </summary>
+        private async Task WaitForCapacityRetryAsync(Task capacityWait, CancellationToken cancellationToken)
+        {
+            if (capacityWait.IsCompleted)
+            {
+                // Notify raced during ProcessAsync; retry immediately without waiting the poll interval.
+                return;
+            }
+
+            var delay = Task.Delay(
+                TimeSpan.FromMilliseconds(_options.IneligibleRetryMilliseconds),
+                _time,
+                cancellationToken);
+            var completed = await Task.WhenAny(capacityWait, delay).ConfigureAwait(false);
+            await completed.ConfigureAwait(false);
         }
 
         /// <summary>Waits for an article or for a scale-down wake. A wake does not drop a queued article.</summary>

@@ -57,7 +57,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 host.Services.GetRequiredService<IRabbitMqService>());
 
             var application = host.Services.GetServices<IApplicationService>().ToArray();
-            Assert.Equal(12, application.Length);
+            Assert.Equal(13, application.Length);
             Assert.IsType<NntpDbService>(application[0]);
             Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
@@ -67,9 +67,10 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
             Assert.IsType<SpoolShardInitializationService>(application[6]);
             Assert.IsType<ArticleIndexService>(application[7]);
             Assert.IsType<BlockDeviceMonitorService>(application[8]);
-            Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[9]);
-            Assert.Same(host.Services.GetRequiredService<StorageNntpListenerService>(), application[10]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
+            Assert.IsType<SpoolEvictionMonitorService>(application[9]);
+            Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[10]);
+            Assert.Same(host.Services.GetRequiredService<StorageNntpListenerService>(), application[11]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[12]);
             Assert.Equal(1, application.Count(static service => service is AcceptedArticleWorker));
             Assert.IsType<StorageNntpListenerService>(host.Services.GetRequiredService<StorageNntpListenerService>());
             Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
@@ -193,10 +194,11 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 Assert.IsType<SpoolShardInitializationService>(application[6]);
                 Assert.IsType<ArticleIndexService>(application[7]);
                 Assert.IsType<BlockDeviceMonitorService>(application[8]);
-                Assert.IsType<AcceptedArticleWorker>(application[9]);
+                Assert.IsType<SpoolEvictionMonitorService>(application[9]);
+                Assert.IsType<AcceptedArticleWorker>(application[10]);
                 var listener = host.Services.GetRequiredService<StorageNntpListenerService>();
-                Assert.Same(listener, application[10]);
-                Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
+                Assert.Same(listener, application[11]);
+                Assert.IsType<StorageServerAdvertisementPublisherService>(application[12]);
                 Assert.Equal(StorageNntpListenerState.Running, listener.State);
                 Assert.True(host.Services.GetRequiredService<IArticleIndex>().IsReady);
                 Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);

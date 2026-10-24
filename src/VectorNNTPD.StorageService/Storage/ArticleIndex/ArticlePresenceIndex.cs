@@ -20,8 +20,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
     /// of every shard.
     /// </para>
     /// <para>
-    /// The set does not delete. Eviction must not clear a hash until a later change removes the
-    /// durable row and the file together.
+    /// Eviction removes a hash only after the spool file and the durable index row are deleted together.
     /// </para>
     /// </remarks>
     internal sealed class ArticlePresenceIndex
@@ -125,6 +124,22 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             }
 
             Interlocked.Increment(ref _count);
+            return true;
+        }
+
+        /// <summary>Removes a published hash after eviction deleted its row and file.</summary>
+        /// <param name="articleId">Canonical article identity.</param>
+        /// <returns><see langword="true"/> when the hash was present.</returns>
+        internal bool Remove(ArticleId articleId)
+        {
+            Span<byte> hash = stackalloc byte[ArticleIndexSettings.HashLength];
+            articleId.CopyTo(hash);
+            if (!_shards[ShardIndex(hash)].Remove(hash))
+            {
+                return false;
+            }
+
+            Interlocked.Decrement(ref _count);
             return true;
         }
 
@@ -242,6 +257,23 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         throw new InvalidOperationException("Article membership insert failed in a shard that had free slots.");
                     }
 
+                    return true;
+                }
+            }
+
+            /// <summary>Removes one hash by rebuilding the shard table without it.</summary>
+            /// <param name="hash">32-byte hash.</param>
+            /// <returns><see langword="false"/> when the hash was absent.</returns>
+            internal bool Remove(ReadOnlySpan<byte> hash)
+            {
+                lock (_gate)
+                {
+                    if (!_table.TryRemove(hash, out var rebuilt))
+                    {
+                        return false;
+                    }
+
+                    Volatile.Write(ref _table, rebuilt);
                     return true;
                 }
             }
@@ -391,10 +423,52 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 return false;
             }
 
+            /// <summary>Removes one hash by rebuilding a table that omits it.</summary>
+            /// <param name="hash">32-byte hash.</param>
+            /// <param name="rebuilt">Replacement table when the method returns <see langword="true"/>.</param>
+            /// <returns><see langword="false"/> when the hash was absent.</returns>
+            internal bool TryRemove(ReadOnlySpan<byte> hash, out Table rebuilt)
+            {
+                rebuilt = this;
+                if (!Contains(hash))
+                {
+                    return false;
+                }
+
+                if (Count <= 1)
+                {
+                    rebuilt = Create(Math.Max(16, Capacity));
+                    return true;
+                }
+
+                var next = Create(Capacity);
+                for (var index = 0; index < Capacity; index++)
+                {
+                    if (!IsOccupied(index))
+                    {
+                        continue;
+                    }
+
+                    var candidate = _keys.AsSpan(index * ArticleIndexSettings.HashLength, ArticleIndexSettings.HashLength);
+                    if (candidate.SequenceEqual(hash))
+                    {
+                        continue;
+                    }
+
+                    if (!next.TryAdd(candidate))
+                    {
+                        throw new InvalidOperationException("Article membership rebuild failed after eviction.");
+                    }
+                }
+
+                rebuilt = next;
+                return true;
+            }
+
             /// <summary>Reads one occupancy bit with acquire semantics.</summary>
             /// <param name="index">Slot index.</param>
             /// <returns><see langword="true"/> when the slot holds a hash.</returns>
-            private bool IsOccupied(int index)
+            internal bool IsOccupied(int index)
             {
                 var word = Volatile.Read(ref _occupied[index >> 6]);
                 return (word & (1UL << (index & 63))) != 0;

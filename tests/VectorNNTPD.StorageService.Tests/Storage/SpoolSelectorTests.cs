@@ -2,116 +2,71 @@ using VectorNNTPD.StorageService.Storage.SpoolPersistence;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
 {
-
     public sealed class SpoolSelectorTests
     {
         private const long Tebibyte = 1L << 40;
         private const long ArticleBytes = 768_000;
+        private const int CriticalPercent = 85;
 
         [Fact]
-        public void More_free_space_wins_when_performance_is_comparable()
+        public void Greatest_available_bytes_wins()
         {
-            var crowded = Candidate("spool-b", available: 8 * Tebibyte, active: 10);
-            var roomy = Candidate("spool-a", available: 12 * Tebibyte, active: 12);
-            var selected = Select(crowded, roomy);
-
-            Assert.Equal("spool-a", selected?.SpoolRoot);
-            Assert.False(selected?.Busy);
+            var crowded = Candidate("spool-b", available: 8 * Tebibyte);
+            var roomy = Candidate("spool-a", available: 12 * Tebibyte);
+            Assert.Equal("spool-a", Select(crowded, roomy)?.SpoolRoot);
         }
 
         [Fact]
-        public void Comparable_capacity_prefers_the_less_loaded_spool()
+        public void Available_bytes_beats_used_percent_on_different_volume_sizes()
         {
-            var busy = Candidate("spool-busy", available: 10 * Tebibyte, active: 95, writeLatency: 40);
-            var light = Candidate("spool-light", available: 10 * Tebibyte + (1L << 20), active: 5, writeLatency: 1);
-            Assert.Equal("spool-light", Select(busy, light)?.SpoolRoot);
-            Assert.Equal("spool-light", Select(light, busy)?.SpoolRoot);
+            // 50% of 100 TiB still has more bytes free than 10% of 10 TiB.
+            var largeHalfFull = Candidate("large", total: 100 * Tebibyte, available: 50 * Tebibyte);
+            var smallAlmostEmpty = Candidate("small", total: 10 * Tebibyte, available: 9 * Tebibyte);
+            Assert.Equal("large", Select(largeHalfFull, smallAlmostEmpty)?.SpoolRoot);
         }
 
         [Fact]
-        public void A_busy_spool_with_materially_more_free_space_wins()
+        public void Above_critical_is_excluded()
         {
-            var busy = Candidate("spool-busy", available: 20 * Tebibyte, active: 95, writeLatency: 40);
-            var light = Candidate("spool-light", available: 10 * Tebibyte, active: 5, writeLatency: 1);
-            Assert.True(SpoolSelector.IsBusy(busy));
-            Assert.Equal("spool-busy", Select(busy, light)?.SpoolRoot);
-            Assert.True(Select(busy, light)?.Busy);
-        }
-
-        [Fact]
-        public void Heavily_loaded_spools_are_still_selected()
-        {
-            var left = Candidate("left", available: 4 * Tebibyte, active: 99, writeLatency: 80, currentQueue: 40);
-            var right = Candidate("right", available: 9 * Tebibyte, active: 96, writeLatency: 50, currentQueue: 20);
-            var selected = Select(left, right);
-            Assert.Equal("right", selected?.SpoolRoot);
-            Assert.True(selected?.Busy);
-        }
-
-        [Fact]
-        public void Used_space_percent_does_not_reject_a_writable_spool()
-        {
-            var critical = Candidate("critical", total: 100, available: 15);
-            var high = Candidate("high", total: 100, available: 21);
-            var low = Candidate("low", total: 100, available: 25);
-
+            var criticalExact = Candidate("exact", total: 100, available: 15); // 85%
+            var overCritical = Candidate("over", total: 100, available: 14); // 86%
+            var healthy = Candidate("ok", total: 100, available: 40);
             Assert.Equal(85, SpoolSelector.UsedPercent(100, 15));
-            Assert.Equal(79, SpoolSelector.UsedPercent(100, 21));
-            Assert.Equal(75, SpoolSelector.UsedPercent(100, 25));
-            Assert.True(SpoolSelector.IsEligible(critical, 1));
-            Assert.True(SpoolSelector.IsEligible(high, 1));
-            Assert.True(SpoolSelector.IsEligible(low, 1));
-            Assert.NotNull(SpoolSelector.Select([critical, high, low], 1));
+            Assert.True(SpoolSelector.IsEligible(criticalExact, 1, CriticalPercent));
+            Assert.False(SpoolSelector.IsEligible(overCritical, 1, CriticalPercent));
+            Assert.Equal("ok", SpoolSelector.Select([overCritical, criticalExact, healthy], 1, CriticalPercent)?.SpoolRoot);
         }
 
         [Fact]
-        public void A_near_full_spool_with_room_for_the_article_is_not_rejected()
+        public void Unknown_space_is_ineligible()
         {
-            var near = Candidate("near", total: 100, available: 16);
-            Assert.Equal(84, SpoolSelector.UsedPercent(100, 16));
-            Assert.True(SpoolSelector.IsEligible(near, 16));
-            Assert.False(SpoolSelector.IsEligible(near, 17));
-            Assert.Equal("near", SpoolSelector.Select([near], 16)?.SpoolRoot);
-        }
-
-        [Fact]
-        public void Missing_or_stale_measurements_stay_selectable()
-        {
-            var unknownSpace = Candidate("unknown-space", spaceKnown: false, available: 0);
-            Assert.True(SpoolSelector.IsEligible(unknownSpace, ArticleBytes));
-            Assert.Equal("unknown-space", SpoolSelector.Select([unknownSpace], ArticleBytes)?.SpoolRoot);
-
-            var staleDevice = Candidate("stale-device", available: 10 * Tebibyte, deviceFresh: false, active: null, writeLatency: null);
-            Assert.True(SpoolSelector.IsEligible(staleDevice, ArticleBytes));
-            Assert.False(SpoolSelector.IsBusy(staleDevice));
-            Assert.Equal("stale-device", SpoolSelector.Select([staleDevice], ArticleBytes)?.SpoolRoot);
+            var unknown = Candidate("unknown-space", spaceKnown: false, available: 0);
+            Assert.False(SpoolSelector.IsEligible(unknown, ArticleBytes, CriticalPercent));
+            Assert.Null(SpoolSelector.Select([unknown], ArticleBytes, CriticalPercent));
 
             var known = Candidate("known", available: 10 * Tebibyte);
-            Assert.Equal("known", Select(unknownSpace, known)?.SpoolRoot);
+            Assert.Equal("known", Select(unknown, known)?.SpoolRoot);
         }
 
         [Fact]
-        public void A_stale_device_sample_does_not_count_as_idle_or_busy()
+        public void A_near_full_spool_with_room_for_the_article_is_selected_when_under_critical()
         {
-            var staleRoomy = Candidate("stale", available: 20 * Tebibyte, deviceFresh: false, active: null);
-            var freshTight = Candidate("fresh", available: 10 * Tebibyte, active: 4);
-            Assert.Equal("stale", Select(freshTight, staleRoomy)?.SpoolRoot);
-
-            var staleTied = Candidate("stale-tied", available: 10 * Tebibyte, deviceFresh: false);
-            var freshTied = Candidate("fresh-tied", available: 10 * Tebibyte, active: 4);
-            Assert.Equal("fresh-tied", Select(staleTied, freshTied)?.SpoolRoot);
-            Assert.False(SpoolSelector.IsBusy(staleTied));
+            var near = Candidate("near", total: 100, available: 16); // 84%
+            Assert.Equal(84, SpoolSelector.UsedPercent(100, 16));
+            Assert.True(SpoolSelector.IsEligible(near, 16, CriticalPercent));
+            Assert.False(SpoolSelector.IsEligible(near, 17, CriticalPercent));
+            Assert.Equal("near", SpoolSelector.Select([near], 16, CriticalPercent)?.SpoolRoot);
         }
 
         [Fact]
-        public void In_flight_writes_break_a_free_space_tie_and_the_cap_skips_a_spool()
+        public void In_flight_writes_break_an_available_bytes_tie()
         {
             var busy = Candidate("busy", available: 10 * Tebibyte, inFlight: 2);
-            var idle = Candidate("idle", available: 10 * Tebibyte + (1L << 20), inFlight: 0);
+            var idle = Candidate("idle", available: 10 * Tebibyte, inFlight: 0);
             Assert.Equal("idle", Select(busy, idle)?.SpoolRoot);
 
             var capped = Candidate("capped", available: 30 * Tebibyte, inFlight: 2, inFlightLimit: 2);
-            Assert.False(SpoolSelector.IsEligible(capped, ArticleBytes));
+            Assert.False(SpoolSelector.IsEligible(capped, ArticleBytes, CriticalPercent));
             Assert.Equal("idle", Select(capped, idle)?.SpoolRoot);
         }
 
@@ -121,9 +76,42 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var gate = new SpoolWriteGate();
             var left = Candidate("spool-a", available: 10 * Tebibyte);
             var right = Candidate("spool-b", available: 10 * Tebibyte);
-            Assert.True(gate.TryReserve([left, right], ArticleBytes, out var first));
-            Assert.True(gate.TryReserve([left, right], ArticleBytes, out var second));
+            Assert.True(gate.TryReserve([left, right], ArticleBytes, CriticalPercent, out var first));
+            Assert.True(gate.TryReserve([left, right], ArticleBytes, CriticalPercent, out var second));
             Assert.NotEqual(first.SpoolRoot, second.SpoolRoot);
+        }
+
+        [Fact]
+        public void Pending_bytes_on_shared_device_reduce_projected_capacity()
+        {
+            var gate = new SpoolWriteGate();
+            var left = Candidate("spool-a", deviceId: "disk-1", total: 2_000_000, available: 1_000_000);
+            var right = Candidate("spool-b", deviceId: "disk-1", total: 2_000_000, available: 1_000_000);
+            Assert.True(gate.TryReserve([left, right], 400_000, CriticalPercent, out var first));
+            Assert.True(gate.TryReserve([left, right], 400_000, CriticalPercent, out var second));
+            Assert.NotEqual(first.SpoolRoot, second.SpoolRoot);
+            // Raw samples still show 1_000_000 free, but shared-device pending (800_000) blocks a third 400_000 write.
+            Assert.False(gate.TryReserve([left, right], 400_000, CriticalPercent, out _));
+            gate.Exit(first);
+            Assert.True(gate.TryReserve([left, right], 400_000, CriticalPercent, out _));
+        }
+
+        [Fact]
+        public void Concurrent_same_spool_reservations_release_exact_pending_bytes()
+        {
+            var gate = new SpoolWriteGate();
+            var spool = Candidate("spool-a", deviceId: "disk-1", total: 10_000_000, available: 5_000_000);
+            Assert.True(gate.TryReserve([spool], 100_000, CriticalPercent, out var small));
+            Assert.True(gate.TryReserve([spool], 700_000, CriticalPercent, out var large));
+            Assert.Equal(800_000, gate.PendingBytes("disk-1"));
+            // Releasing the first (smaller) lease must not pop the larger pending amount.
+            gate.Exit(small);
+            Assert.Equal(700_000, gate.PendingBytes("disk-1"));
+            gate.Exit(large);
+            Assert.Equal(0, gate.PendingBytes("disk-1"));
+            // Double-exit is a no-op on pending (in-flight already zero).
+            gate.Exit(large);
+            Assert.Equal(0, gate.PendingBytes("disk-1"));
         }
 
         [Fact]
@@ -140,21 +128,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var blocked = Candidate("down", available: 10 * Tebibyte, acceptsWrites: false);
             var tooSmall = Candidate("full", total: 100, available: 10);
-            Assert.False(SpoolSelector.IsEligible(blocked, ArticleBytes));
-            Assert.False(SpoolSelector.IsEligible(tooSmall, ArticleBytes));
-            Assert.Null(SpoolSelector.Select([blocked, tooSmall], ArticleBytes));
-        }
-
-        [Fact]
-        public void A_lightly_loaded_near_full_spool_beats_a_busier_one_when_capacity_is_comparable()
-        {
-            var busy = Candidate("a-busy", total: 100, available: 50, active: 90);
-            var near = Candidate("z-near", total: 100, available: 16, active: 30);
-            Assert.Equal(84, SpoolSelector.UsedPercent(100, 16));
-            Assert.True(SpoolSelector.IsEligible(near, 1));
-            Assert.True(SpoolSelector.IsBusy(busy));
-            Assert.False(SpoolSelector.IsBusy(near));
-            Assert.Equal("z-near", SpoolSelector.Select([busy, near], 1)?.SpoolRoot);
+            Assert.False(SpoolSelector.IsEligible(blocked, ArticleBytes, CriticalPercent));
+            Assert.False(SpoolSelector.IsEligible(tooSmall, ArticleBytes, CriticalPercent));
+            Assert.Null(SpoolSelector.Select([blocked, tooSmall], ArticleBytes, CriticalPercent));
         }
 
         [Fact]
@@ -167,44 +143,26 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         }
 
         [Fact]
-        public void Null_latency_is_not_treated_as_zero()
+        public void Equal_available_bytes_prefer_lower_write_latency_then_path()
         {
-            var unmeasured = Candidate("z-unmeasured", available: 10 * Tebibyte, writeLatency: null);
+            var slow = Candidate("z-slow", available: 10 * Tebibyte, writeLatency: 40);
             var fast = Candidate("a-fast", available: 10 * Tebibyte, writeLatency: 1);
-            Assert.False(SpoolSelector.IsBusy(unmeasured));
-            Assert.Equal("a-fast", Select(unmeasured, fast)?.SpoolRoot);
-        }
+            Assert.Equal("a-fast", Select(slow, fast)?.SpoolRoot);
 
-        [Fact]
-        public void Equal_write_latencies_fall_through_to_path_order()
-        {
             var left = Candidate("a-spool", available: 10 * Tebibyte, writeLatency: 12.5);
             var right = Candidate("b-spool", available: 10 * Tebibyte, writeLatency: 12.5);
-            Assert.True(SpoolSelector.Compare(left, right) < 0);
-            Assert.True(SpoolSelector.Compare(right, left) > 0);
-            Assert.Equal(0, SpoolSelector.Compare(left, right) + SpoolSelector.Compare(right, left));
             Assert.Equal("a-spool", Select(left, right)?.SpoolRoot);
             Assert.Equal("a-spool", Select(right, left)?.SpoolRoot);
         }
 
-        [Fact]
-        public void Different_write_latencies_prefer_the_faster_spool()
-        {
-            var slow = Candidate("z-slow", available: 10 * Tebibyte, active: 1, writeLatency: 40);
-            var fast = Candidate("a-fast", available: 10 * Tebibyte, active: 1, writeLatency: 1);
-            Assert.True(SpoolSelector.Compare(fast, slow) < 0);
-            Assert.True(SpoolSelector.Compare(slow, fast) > 0);
-            Assert.Equal("a-fast", Select(slow, fast)?.SpoolRoot);
-            Assert.Equal("a-fast", Select(fast, slow)?.SpoolRoot);
-        }
-
         private static SpoolSelection? Select(params SpoolCandidate[] candidates) =>
-            SpoolSelector.Select(candidates, ArticleBytes);
+            SpoolSelector.Select(candidates, ArticleBytes, CriticalPercent);
 
         private static SpoolCandidate Candidate(
             string path,
             long available,
             long total = 40 * Tebibyte,
+            string? deviceId = null,
             double? active = 1,
             double? writeLatency = 1,
             long? currentQueue = null,
@@ -215,7 +173,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             int inFlightLimit = 2) =>
             new(
                 path,
-                "device:" + path,
+                deviceId ?? ("device:" + path),
                 total,
                 available,
                 spaceKnown,

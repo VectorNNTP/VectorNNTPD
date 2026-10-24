@@ -432,7 +432,8 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             try
             {
                 var probe = new StaticFreeSpaceProbe();
-                probe.Set(root, total: 1_000_000, available: 100_000);
+                // 80% used: above High (79) but at or below Critical (85), so placement remains eligible.
+                probe.Set(root, total: 1_000_000, available: 200_000);
                 var monitor = MonitorFor(root, probe);
                 InvokeSample(monitor);
                 var pressure = new SpoolPressure();
@@ -456,8 +457,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             try
             {
                 var probe = new StaticFreeSpaceProbe();
+                // rootA has more free bytes but will fail writes; rootB must stay ≤ Critical to be selectable.
                 probe.Set(rootA, total: 40L << 30, available: 20L << 30);
-                probe.Set(rootB, total: 40L << 30, available: 5L << 30);
+                probe.Set(rootB, total: 40L << 30, available: 10L << 30);
                 var catalog = new SegmentPoolCatalog();
                 catalog.Publish(
                 [

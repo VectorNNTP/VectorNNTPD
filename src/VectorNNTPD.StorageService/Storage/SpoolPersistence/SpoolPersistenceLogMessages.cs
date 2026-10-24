@@ -66,5 +66,12 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
         /// <param name="reservedBytes">Bytes reserved for admitted bodies that are not queued yet.</param>
         [LoggerMessage(EventId = 5707, Level = LogLevel.Information, Message = "Spool persistence stored={Stored} storedBytes={StoredBytes} deferred={Deferred} activeWorkers={Active} queued={Queued} queuedBytes={QueuedBytes} reservedBytes={ReservedBytes}")]
         public static partial void Summary(ILogger logger, long stored, long storedBytes, long deferred, int active, int queued, long queuedBytes, long reservedBytes);
+
+        /// <summary>Logs the spool chosen for an article by greatest available capacity.</summary>
+        [LoggerMessage(
+            EventId = 5708,
+            Level = LogLevel.Debug,
+            Message = "Spool selected for article articleId={ArticleId} spool={Spool} device={DeviceId}")]
+        public static partial void SpoolSelected(ILogger logger, string articleId, string spool, string deviceId);
     }
 }

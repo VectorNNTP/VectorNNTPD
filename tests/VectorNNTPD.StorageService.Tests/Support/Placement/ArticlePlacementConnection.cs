@@ -9,12 +9,11 @@ using VectorNNTPD.StorageService;
 namespace VectorNNTPD.StorageService.Tests.Support.Placement
 {
     /// <summary>
-    /// One TLS NNTP STREAMING connection to one placement target.
-    /// At most <see cref="MaxOutstanding"/> pipelined TAKETHIS operations.
+    /// One TLS NNTP connection to one placement target for pipelined <c>TAKETHIS</c>.
+    /// At most <see cref="MaxOutstanding"/> outstanding operations.
     /// </summary>
     internal sealed class ArticlePlacementConnection : IAsyncDisposable
     {
-        private static readonly byte[] ModeStream = "MODE STREAM\r\n"u8.ToArray();
         private static readonly byte[] Quit = "QUIT\r\n"u8.ToArray();
         private static readonly byte[] TakeThisPrefix = "TAKETHIS "u8.ToArray();
         private static readonly byte[] Crlf = "\r\n"u8.ToArray();
@@ -334,13 +333,6 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
                 throw new IOException("nntp-greeting");
             }
 
-            await _ssl.WriteAsync(ModeStream, cancellationToken).ConfigureAwait(false);
-            var mode = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
-            if (mode.Code != 203)
-            {
-                throw new IOException("mode-stream");
-            }
-
             _reader = Task.Run(() => ReadLoopAsync(_lifetime.Token), CancellationToken.None);
         }
 
@@ -400,35 +392,46 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
 
         private async Task WriteStuffedArticleAsync(ReadOnlyMemory<byte> articleMemory, CancellationToken cancellationToken)
         {
-            var offset = 0;
-            var atLineStart = true;
-            while (offset < articleMemory.Length)
+            // Stuff into a contiguous buffer and write in large SSL records. Per-line WriteAsync on
+            // SslStream while a concurrent read loop runs can stall for large articles (IoProgress timeout → 400).
+            var stuffed = StuffArticleForTransfer(articleMemory.Span);
+            const int writeChunk = 64 * 1024;
+            for (var offset = 0; offset < stuffed.Length; offset += writeChunk)
             {
-                var article = articleMemory.Span;
-                if (atLineStart && article[offset] == (byte)'.')
-                {
-                    await _ssl.WriteAsync(new byte[] { (byte)'.' }, cancellationToken).ConfigureAwait(false);
-                    article = articleMemory.Span;
-                }
-
-                var start = offset;
-                var end = offset;
-                while (end < article.Length)
-                {
-                    var b = article[end++];
-                    if (b == (byte)'\n')
-                    {
-                        atLineStart = true;
-                        break;
-                    }
-
-                    atLineStart = false;
-                }
-
-                var chunk = article[start..end].ToArray();
-                await _ssl.WriteAsync(chunk, cancellationToken).ConfigureAwait(false);
-                offset = end;
+                var length = Math.Min(writeChunk, stuffed.Length - offset);
+                await _ssl.WriteAsync(stuffed.AsMemory(offset, length), cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        private static byte[] StuffArticleForTransfer(ReadOnlySpan<byte> article)
+        {
+            var stuffedLength = article.Length;
+            var atLineStart = true;
+            for (var i = 0; i < article.Length; i++)
+            {
+                if (atLineStart && article[i] == (byte)'.')
+                {
+                    stuffedLength++;
+                }
+
+                atLineStart = article[i] == (byte)'\n';
+            }
+
+            var stuffed = new byte[stuffedLength];
+            var w = 0;
+            atLineStart = true;
+            for (var i = 0; i < article.Length; i++)
+            {
+                if (atLineStart && article[i] == (byte)'.')
+                {
+                    stuffed[w++] = (byte)'.';
+                }
+
+                stuffed[w++] = article[i];
+                atLineStart = article[i] == (byte)'\n';
+            }
+
+            return stuffed;
         }
 
         /// <summary>
@@ -444,24 +447,41 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             }
 
             var bodyStart = separator + 4;
-            using var ms = new MemoryStream(artData.Length);
-            ms.Write(span[..bodyStart]);
+            var header = span[..bodyStart];
+            var body = span[bodyStart..];
+            var unstuffedBodyLength = body.Length;
             var atLineStart = true;
-            for (var i = bodyStart; i < span.Length; i++)
+            for (var i = 0; i < body.Length; i++)
             {
-                var b = span[i];
-                if (atLineStart && b == (byte)'.' && i + 1 < span.Length)
+                if (atLineStart && body[i] == (byte)'.' && i + 1 < body.Length)
+                {
+                    unstuffedBodyLength--;
+                    atLineStart = false;
+                    continue;
+                }
+
+                atLineStart = body[i] == (byte)'\n';
+            }
+
+            var result = new byte[header.Length + unstuffedBodyLength];
+            header.CopyTo(result);
+            var w = header.Length;
+            atLineStart = true;
+            for (var i = 0; i < body.Length; i++)
+            {
+                var b = body[i];
+                if (atLineStart && b == (byte)'.' && i + 1 < body.Length)
                 {
                     // Drop one storage stuffing dot; transfer stuffing is applied by WriteStuffedArticleAsync.
                     atLineStart = false;
                     continue;
                 }
 
-                ms.WriteByte(b);
+                result[w++] = b;
                 atLineStart = b == (byte)'\n';
             }
 
-            return ms.ToArray();
+            return result;
         }
 
         private async Task<(int Code, string Line)> ReadStatusLineAsync(CancellationToken cancellationToken)

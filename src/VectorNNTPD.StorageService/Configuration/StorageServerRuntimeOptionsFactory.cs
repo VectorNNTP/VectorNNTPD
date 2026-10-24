@@ -99,7 +99,8 @@ namespace VectorNNTPD.StorageService.Configuration
                     listener.ParserAccumulationMaxBytes,
                     TimeSpan.FromSeconds(listener.TlsHandshakeTimeoutSeconds),
                     TimeSpan.FromSeconds(listener.IoProgressTimeoutSeconds),
-                    listener.MaxActiveConnections),
+                    listener.MaxActiveConnections,
+                    TimeSpan.FromSeconds(listener.ArticleReceiveTimeoutSeconds)),
                 CertificateDomainNames: CertificateIdentities.ForFqdn(fqdn, includeNewsHostname: false));
         }
     }

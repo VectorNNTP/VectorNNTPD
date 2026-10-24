@@ -19,20 +19,20 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         private static readonly AsyncLocal<int> IntervalFlushExceptionScope = new();
 
         [Fact]
-        public async Task Database_reopens_with_schema_version_2_and_page_size_8192()
+        public async Task Database_reopens_with_schema_version_3_and_page_size_8192()
         {
             var root = ArticleIndexTestSupport.NewDirectory();
             var spool = ArticleIndexTestSupport.NewDirectory();
             try
             {
                 var first = await ArticleIndexTestSupport.StartSpoolAsync(root, spool);
-                Assert.Equal(2, first.SchemaVersion);
+                Assert.Equal(3, first.SchemaVersion);
                 Assert.Equal(8192, first.PageSize);
                 Assert.Equal(0, first.PresenceCount);
                 await ArticleIndexTestSupport.StopAsync(first);
 
                 var second = await ArticleIndexTestSupport.StartSpoolAsync(root, spool);
-                Assert.Equal(2, second.SchemaVersion);
+                Assert.Equal(3, second.SchemaVersion);
                 Assert.Equal(8192, second.PageSize);
                 Assert.Equal(0, second.Counters.StartupRows);
                 await ArticleIndexTestSupport.StopAsync(second);
@@ -199,7 +199,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                     text.Append(reader.GetString(3));
                 }
 
-                Assert.Contains("IX_ArticleIndex_LastAccessedAt", text.ToString(), StringComparison.Ordinal);
+                Assert.Contains("IX_ArticleIndex_Lfu", text.ToString(), StringComparison.Ordinal);
             }
             finally
             {
@@ -219,7 +219,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 var id = ArticleIndexTestSupport.Id(4);
                 await index.InsertStoredAsync(id, spool, 100, CancellationToken.None);
                 var older = await index.TouchAsync(id, spool, 100, CancellationToken.None);
-                Assert.Equal(ArticleIndexTouchDisposition.Unchanged, older.Disposition);
+                Assert.Equal(ArticleIndexTouchDisposition.Updated, older.Disposition);
+                Assert.True(index.TryGetIndexedRecord(id, out var touchedOnce));
+                Assert.Equal(2, touchedOnce.AccessCount);
                 var newer = await index.TouchAsync(id, spool, 250, CancellationToken.None);
                 Assert.Equal(ArticleIndexTouchDisposition.Updated, newer.Disposition);
                 Assert.True(index.TryGetIndexedRecord(id, out var record));

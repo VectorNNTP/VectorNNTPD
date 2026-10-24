@@ -100,6 +100,38 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
+        public async Task Critical_capacity_rejects_takeThis_before_queue_admission()
+        {
+            var inbound = Build("<capacity-critical@seg.test>", "body\r\n");
+            var queue = new AcceptedArticleQueue();
+            var allow = false;
+            await using var harness = await Harness.StartAsync(queue, allowsArticleAdmission: () => allow);
+            Assert.Equal(439, await harness.TakeThisAsync(inbound));
+            Assert.Equal(0, queue.EnqueuedCount);
+            Assert.Equal(0, queue.ReservedBytes);
+            Assert.Equal(0, queue.AccountedBytes);
+
+            allow = true;
+            Assert.Equal(239, await harness.TakeThisAsync(inbound));
+            Assert.Equal(1, queue.EnqueuedCount);
+        }
+
+        [Fact]
+        public async Task Concurrent_sessions_cannot_bypass_blocked_admission_gate()
+        {
+            var queue = new AcceptedArticleQueue();
+            var allow = false;
+            Func<bool> gate = () => allow;
+            await using var first = await Harness.StartAsync(queue, allowsArticleAdmission: gate);
+            await using var second = await Harness.StartAsync(queue, allowsArticleAdmission: gate);
+            var a = Build("<cap-a@seg.test>", "a\r\n");
+            var b = Build("<cap-b@seg.test>", "b\r\n");
+            var results = await Task.WhenAll(first.TakeThisAsync(a), second.TakeThisAsync(b));
+            Assert.All(results, code => Assert.Equal(439, code));
+            Assert.Equal(0, queue.EnqueuedCount);
+        }
+
+        [Fact]
         public async Task Malformed_article_is_rejected_without_enqueue()
         {
             var queue = new AcceptedArticleQueue();
@@ -148,7 +180,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
-        public async Task Full_queue_blocks_on_reserve_until_dequeue_then_accepts()
+        public async Task Full_queue_blocks_on_reserve_until_processed_bytes_are_released()
         {
             var first = Build("<admit-held@seg.test>", "alpha-body\r\n");
             var queue = new AcceptedArticleQueue(first.Record.ArtSize, TimeProvider.System);
@@ -163,12 +195,17 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             Assert.Equal(first.Record.ArtSize, queue.AccountedBytes);
             Assert.False(pending.IsCompleted);
 
-            Assert.True((await queue.DequeueAsync(CancellationToken.None)).HasArticle);
+            var firstDelivery = await queue.DequeueAsync(CancellationToken.None);
+            Assert.True(firstDelivery.HasArticle);
+            Assert.Equal(first.Record.ArtSize, queue.InFlightBytes);
+            Assert.False(pending.IsCompleted);
+            queue.ReleaseProcessed(firstDelivery.Article.ArtSize);
             Assert.Equal(239, await pending.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.Equal(0, queue.ReservedBytes);
             Assert.Equal(second.Record.ArtSize, queue.QueuedBytes);
             var delivery = await queue.DequeueAsync(CancellationToken.None);
             Assert.True(delivery.Article.ArtData.Span.SequenceEqual(second.Record.ArtData.Span));
+            queue.ReleaseProcessed(delivery.Article.ArtSize);
         }
 
         [Fact]
@@ -492,21 +529,27 @@ namespace VectorNNTPD.StorageService.Tests.Listener
 
             public PipeTransport Transport { get; }
 
-            public static async Task<Harness> StartAsync(IAcceptedArticleQueue queue)
+            public static async Task<Harness> StartAsync(
+                IAcceptedArticleQueue queue,
+                Func<bool>? allowsArticleAdmission = null)
             {
                 var transport = new PipeTransport();
                 var session = new StorageNntpFeedSession(
                     transport,
-                    new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
+                    new StorageServerListenerRuntimeOptions(
+                        262144,
+                        TimeSpan.FromSeconds(30),
+                        TimeSpan.FromSeconds(30),
+                        8,
+                        TimeSpan.FromSeconds(300)),
                     NullLogger.Instance,
                     CacheFqdn,
                     acceptedArticles: queue,
-                    assemblyAdmission: new StoreAssemblyAdmission(8));
+                    assemblyAdmission: new StoreAssemblyAdmission(8),
+                    allowsArticleAdmission: allowsArticleAdmission);
                 var harness = new Harness(transport, session);
                 var greeting = await harness.ReadStatusAsync();
                 Assert.Equal(200, greeting);
-                await harness.SendRawAsync("MODE STREAM\r\n"u8.ToArray());
-                Assert.Equal(203, await harness.ReadStatusAsync());
                 return harness;
             }
 

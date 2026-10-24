@@ -47,7 +47,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         internal static SegmentPoolCatalog Catalog(params string[] spools)
         {
             var catalog = new SegmentPoolCatalog();
-            catalog.Publish([new SegmentPoolDevice("block:test", spools)]);
+            var paths = spools
+                .Select(static spool => Path.TrimEndingDirectorySeparator(Path.GetFullPath(spool)))
+                .ToArray();
+            catalog.Publish([new SegmentPoolDevice("block:test", paths)]);
             return catalog;
         }
 

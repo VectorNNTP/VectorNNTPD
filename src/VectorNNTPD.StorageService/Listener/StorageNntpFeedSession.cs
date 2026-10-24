@@ -9,9 +9,10 @@ using VectorNNTPD.StorageService.Ingress;
 namespace VectorNNTPD.StorageService.Listener
 {
     /// <summary>
-    /// RFC 4644 STREAMING feed session over an established TLS transport.
-    /// Accepts <c>CAPABILITIES</c>, <c>MODE STREAM</c>, <c>CHECK</c>, <c>TAKETHIS</c>, and <c>QUIT</c>.
+    /// Storage NNTP session over an established TLS transport.
+    /// Accepts <c>ARTICLE</c>, <c>TAKETHIS</c>, and <c>QUIT</c> only. Other verbs receive <c>500</c>.
     /// A successful <c>TAKETHIS</c> commits into <see cref="IAcceptedArticleQueue"/> before <c>239</c> is written.
+    /// <c>ARTICLE</c> serves indexed CanonicalV1 spool files immediately; no mode negotiation is required.
     /// </summary>
     public sealed partial class StorageNntpFeedSession : IAsyncDisposable
     {
@@ -24,19 +25,18 @@ namespace VectorNNTPD.StorageService.Listener
         private const int InitialAssemblyRentBytes = 64 * 1024;
 
         private static readonly byte[] Greeting = "200 VectorNNTP StorageServer ready\r\n"u8.ToArray();
-        private static readonly byte[] CapabilitiesHeader = "101 Capability list follows\r\n"u8.ToArray();
-        private static readonly byte[] CapabilitiesBody = "VERSION 2\r\nSTREAMING\r\nIMPLEMENTATION VectorNNTP-StorageServer\r\n.\r\n"u8.ToArray();
-        private static readonly byte[] ModeStreamOk = "203 Streaming allowed\r\n"u8.ToArray();
         private static readonly byte[] Closing = "205 Connection closing\r\n"u8.ToArray();
         private static readonly byte[] SyntaxError = "501 Syntax error\r\n"u8.ToArray();
         private static readonly byte[] UnknownCommand = "500 Unknown command\r\n"u8.ToArray();
         private static readonly byte[] TemporaryFailure = "400 Temporary failure\r\n"u8.ToArray();
+        private static readonly byte[] NoSuchArticle = "430 No Such Article Found\r\n"u8.ToArray();
+        private static readonly byte[] ArticleNotAvailable = "403 Article not available\r\n"u8.ToArray();
+        private static readonly byte[] ArticlePrefix = "220 0 "u8.ToArray();
+        private static readonly byte[] ArticleFollowsSuffix = " article follows\r\n"u8.ToArray();
+        private static readonly byte[] ArticleTerminator = ".\r\n"u8.ToArray();
 
-        private static readonly byte[] CapabilitiesKeyword = "CAPABILITIES"u8.ToArray();
-        private static readonly byte[] ModeKeyword = "MODE"u8.ToArray();
-        private static readonly byte[] StreamKeyword = "STREAM"u8.ToArray();
-        private static readonly byte[] CheckKeyword = "CHECK"u8.ToArray();
         private static readonly byte[] TakeThisKeyword = "TAKETHIS"u8.ToArray();
+        private static readonly byte[] ArticleKeyword = "ARTICLE"u8.ToArray();
         private static readonly byte[] QuitKeyword = "QUIT"u8.ToArray();
 
         private readonly IStorageListenerTransport _transport;
@@ -44,15 +44,20 @@ namespace VectorNNTPD.StorageService.Listener
         private readonly ILogger _logger;
         private readonly IAcceptedArticleQueue? _acceptedArticles;
         private readonly StoreAssemblyAdmission? _assemblyAdmission;
+        private readonly Func<bool>? _allowsArticleAdmission;
         private readonly Func<ArticleId, bool>? _articlePresent;
+        private readonly Func<ArticleId, string?>? _resolveRetrievableArticle;
+        private readonly Func<ArticleId, CancellationToken, ValueTask>? _afterArticleDelivered;
+        private readonly Func<ArticleId, IDisposable>? _acquireArticleReadLease;
         private readonly NntpArticleParser _parser;
         private byte[] _pending;
         private readonly byte[] _readScratch;
         private readonly byte[] _statusScratch;
+        private readonly byte[] _articleFollows;
         private int _pendingCount;
         private int _disposed;
 
-        /// <summary>Initializes a STREAMING feed session over an established transport.</summary>
+        /// <summary>Initializes a Storage NNTP session over an established transport.</summary>
         public StorageNntpFeedSession(
             IStorageListenerTransport transport,
             StorageServerListenerRuntimeOptions listener,
@@ -60,7 +65,11 @@ namespace VectorNNTPD.StorageService.Listener
             string pathIdentity,
             IAcceptedArticleQueue? acceptedArticles = null,
             StoreAssemblyAdmission? assemblyAdmission = null,
-            Func<ArticleId, bool>? articlePresent = null)
+            Func<bool>? allowsArticleAdmission = null,
+            Func<ArticleId, bool>? articlePresent = null,
+            Func<ArticleId, string?>? resolveRetrievableArticle = null,
+            Func<ArticleId, CancellationToken, ValueTask>? afterArticleDelivered = null,
+            Func<ArticleId, IDisposable>? acquireArticleReadLease = null)
         {
             ArgumentNullException.ThrowIfNull(transport);
             ArgumentNullException.ThrowIfNull(listener);
@@ -71,12 +80,18 @@ namespace VectorNNTPD.StorageService.Listener
             _logger = logger;
             _acceptedArticles = acceptedArticles;
             _assemblyAdmission = assemblyAdmission;
+            _allowsArticleAdmission = allowsArticleAdmission;
             _articlePresent = articlePresent;
+            _resolveRetrievableArticle = resolveRetrievableArticle;
+            _afterArticleDelivered = afterArticleDelivered;
+            _acquireArticleReadLease = acquireArticleReadLease;
             _parser = new NntpArticleParser(pathIdentity.Trim());
             var capacity = Math.Max(listener.ParserAccumulationMaxBytes, MaximumCommandOctets);
             _pending = new byte[MaximumCommandOctets];
             _readScratch = new byte[Math.Min(capacity, 64 * 1024)];
             _statusScratch = new byte[4 + 1 + NntpMessageIdValidation.MaxMessageIdLength + 2];
+            _articleFollows = new byte[
+                ArticlePrefix.Length + NntpMessageIdValidation.MaxMessageIdLength + ArticleFollowsSuffix.Length];
         }
 
         /// <summary>Sends the greeting, then reads commands until <c>QUIT</c>, peer close, or cancellation.</summary>
@@ -110,34 +125,6 @@ namespace VectorNNTPD.StorageService.Listener
                     return;
                 }
 
-                if (TryMatchKeyword(line, CapabilitiesKeyword, out var capsRest))
-                {
-                    if (!capsRest.IsEmpty)
-                    {
-                        await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    await WriteFullyAsync(CapabilitiesHeader, cancellationToken).ConfigureAwait(false);
-                    await WriteFullyAsync(CapabilitiesBody, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
-                if (TryMatchModeStream(line, out var modeStreamSyntaxError))
-                {
-                    await WriteFullyAsync(
-                            modeStreamSyntaxError ? SyntaxError : ModeStreamOk,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    continue;
-                }
-
-                if (TryMatchKeyword(line, CheckKeyword, out var checkRest))
-                {
-                    await HandleCheckAsync(SkipSpaces(checkRest), cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-
                 if (TryMatchKeyword(line, TakeThisKeyword, out var takeRest))
                 {
                     // One heap copy of the message-id argument; spans cannot cross the TAKETHIS awaits.
@@ -148,6 +135,14 @@ namespace VectorNNTPD.StorageService.Listener
                         return;
                     }
 
+                    continue;
+                }
+
+                if (TryMatchKeyword(line, ArticleKeyword, out var articleRest))
+                {
+                    // Message-ID octets must outlive the awaits used while reading the spool file.
+                    var articleArg = SkipSpaces(articleRest).ToArray();
+                    await HandleArticleAsync(articleArg, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -166,20 +161,184 @@ namespace VectorNNTPD.StorageService.Listener
             return ValueTask.CompletedTask;
         }
 
-        private Task HandleCheckAsync(ReadOnlySpan<byte> argument, CancellationToken cancellationToken)
+        /// <summary>
+        /// Serves <c>ARTICLE &lt;message-id&gt;</c> from the indexed final CanonicalV1 spool file.
+        /// The published file is read and framed fully before any <c>220</c> is written, so a read
+        /// failure never injects a second status line into a partial article response. A write failure
+        /// after <c>220</c> propagates and ends the session without emitting another NNTP status.
+        /// </summary>
+        private async Task HandleArticleAsync(byte[] argument, CancellationToken cancellationToken)
         {
-            if (!TryParseMessageIdArgument(argument, out var messageId))
+            if (!TryParseMessageIdArgument(argument, out var messageIdSpan))
             {
-                return WriteFullyAsync(SyntaxError, cancellationToken);
+                await WriteFullyAsync(SyntaxError, cancellationToken).ConfigureAwait(false);
+                return;
             }
 
-            var alreadyHave = _articlePresent?.Invoke(ArticleId.FromMessageId(messageId)) == true;
-            return WriteStatusAsync(
-                alreadyHave ? (byte)'4' : (byte)'2',
-                (byte)'3',
-                (byte)'8',
-                messageId,
-                cancellationToken);
+            // Heap copy: ReadOnlySpan cannot live across the spool-read awaits below.
+            var messageId = messageIdSpan.ToArray();
+            var articleId = ArticleId.FromMessageId(messageId);
+            // Lease before path resolve so eviction cannot delete between lookup and open.
+            using var readLease = _acquireArticleReadLease?.Invoke(articleId);
+            string? articlePath;
+            try
+            {
+                articlePath = _resolveRetrievableArticle?.Invoke(articleId);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+            {
+                await WriteFullyAsync(NoSuchArticle, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(articlePath))
+            {
+                await WriteFullyAsync(NoSuchArticle, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            byte[] artData;
+            try
+            {
+                artData = await ReadPublishedArticleAsync(articlePath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (FileNotFoundException)
+            {
+                await WriteFullyAsync(NoSuchArticle, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                await WriteFullyAsync(NoSuchArticle, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or EndOfStreamException)
+            {
+                StorageNntpFeedSessionLogMessages.ArticleRetrievalFailed(
+                    _logger,
+                    articleId.ToLowerHexString(),
+                    ex.GetType().Name);
+                await WriteFullyAsync(TemporaryFailure, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (artData.Length == 0 || artData.Length > ArticleResourceLimits.MaxArticleBytes)
+            {
+                await WriteFullyAsync(ArticleNotAvailable, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var framing = CanonicalArticleFraming.Analyze(artData);
+            if (!framing.IsFrameable)
+            {
+                await WriteFullyAsync(ArticleNotAvailable, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            byte[]? stuffedHeader = null;
+            var splitBody = framing.BodyStart >= 0
+                && CanonicalArticleDeliveryFraming.TryCreateStuffedHeader(
+                    artData,
+                    framing.BodyStart,
+                    out stuffedHeader);
+
+            // Response phase: do not catch write failures — a mid-response I/O error must not emit 4xx into the body.
+            await WriteFullyAsync(BuildArticleFollowsLine(messageId), cancellationToken).ConfigureAwait(false);
+            if (splitBody)
+            {
+                await WriteFullyAsync(stuffedHeader, cancellationToken).ConfigureAwait(false);
+                await WriteFullyAsync(artData.AsMemory(framing.BodyStart), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await WriteFullyAsync(artData, cancellationToken).ConfigureAwait(false);
+            }
+
+            await WriteFullyAsync(ArticleTerminator, cancellationToken).ConfigureAwait(false);
+            await NotifyArticleDeliveredBestEffortAsync(articleId, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Reads only the published final path. Temporary <c>.writing-*</c> names are never opened.
+        /// </summary>
+        private static async Task<byte[]> ReadPublishedArticleAsync(
+            string articlePath,
+            CancellationToken cancellationToken)
+        {
+            await using var stream = new FileStream(
+                articlePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            if (stream.Length <= 0 || stream.Length > ArticleResourceLimits.MaxArticleBytes)
+            {
+                return [];
+            }
+
+            var length = (int)stream.Length;
+            var buffer = GC.AllocateUninitializedArray<byte>(length);
+            var offset = 0;
+            while (offset < length)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), cancellationToken)
+                    .ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new EndOfStreamException();
+                }
+
+                offset += read;
+            }
+
+            return buffer;
+        }
+
+        /// <summary>
+        /// Best-effort post-delivery hook (typically last-access touch). Failures never change the already-written <c>220</c>.
+        /// </summary>
+        private async Task NotifyArticleDeliveredBestEffortAsync(
+            ArticleId articleId,
+            CancellationToken cancellationToken)
+        {
+            var notify = _afterArticleDelivered;
+            if (notify is null)
+            {
+                return;
+            }
+
+            try
+            {
+                await notify(articleId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+            {
+                StorageNntpFeedSessionLogMessages.ArticleTouchFailed(
+                    _logger,
+                    articleId.ToLowerHexString(),
+                    ex.GetType().Name);
+            }
+        }
+
+        /// <summary>Writes <c>220 0 &lt;message-id&gt; article follows</c> ending in CRLF into <see cref="_articleFollows"/>.</summary>
+        private ReadOnlyMemory<byte> BuildArticleFollowsLine(ReadOnlySpan<byte> messageId)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(messageId.Length, NntpMessageIdValidation.MaxMessageIdLength);
+            var length = ArticlePrefix.Length + messageId.Length + ArticleFollowsSuffix.Length;
+            ArticlePrefix.CopyTo(_articleFollows);
+            messageId.CopyTo(_articleFollows.AsSpan(ArticlePrefix.Length));
+            ArticleFollowsSuffix.CopyTo(_articleFollows.AsSpan(ArticlePrefix.Length + messageId.Length));
+            return _articleFollows.AsMemory(0, length);
         }
 
         private async Task<bool> HandleTakeThisAsync(byte[] argument, CancellationToken cancellationToken)
@@ -195,12 +354,27 @@ namespace VectorNNTPD.StorageService.Listener
             // argument holds the message-id octets for the rest of this method (copied once in RunAsync).
             var requestId = ArticleId.FromMessageId(requestMessageId);
 
+            // Critical / unknown capacity: reject before assembly or queue admission (no 239).
+            if (_allowsArticleAdmission is not null && !_allowsArticleAdmission())
+            {
+                await DrainArticleAsync(cancellationToken).ConfigureAwait(false);
+                await WriteStatusAsync(
+                        (byte)'4',
+                        (byte)'3',
+                        (byte)'9',
+                        argument,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return true;
+            }
+
             StoreAssemblyAdmission? admission = null;
             var gate = _assemblyAdmission;
             if (gate is not null)
             {
                 if (!gate.TryEnter())
                 {
+                    // No assembly permit: discard without renting a growing article buffer.
                     await DrainArticleAsync(cancellationToken).ConfigureAwait(false);
                     await WriteStatusAsync(
                             (byte)'4',
@@ -217,6 +391,8 @@ namespace VectorNNTPD.StorageService.Listener
 
             byte[]? rented = null;
             QueueReservation? reservation = null;
+            // Canonical buffer owned until queue commit transfers ArtData; release on any pre-commit exit.
+            ArticleRecord? assembled = null;
             try
             {
                 var destuffed = await ReadDestuffedArticleAsync(cancellationToken).ConfigureAwait(false);
@@ -234,6 +410,11 @@ namespace VectorNNTPD.StorageService.Listener
                     _parser,
                     payload,
                     ArticlePathMode.Normalize);
+
+                // Destuffed wire buffer is no longer required; free it before any admission wait so
+                // blocked queue reservation cannot retain both wire and canonical copies.
+                ReturnAssemblyBuffer(ref rented);
+
                 if (!created.IsAccepted)
                 {
                     await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
@@ -241,10 +422,9 @@ namespace VectorNNTPD.StorageService.Listener
                     return true;
                 }
 
-                var record = created.Record;
-                if (!record.ArtId.Equals(requestId))
+                assembled = created.Record;
+                if (!assembled.Value.ArtId.Equals(requestId))
                 {
-                    record.ReleaseUnusedCanonicalBuffer();
                     await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
@@ -253,14 +433,21 @@ namespace VectorNNTPD.StorageService.Listener
                 var queue = _acceptedArticles;
                 if (queue is null || queue.IsCompleted)
                 {
-                    record.ReleaseUnusedCanonicalBuffer();
                     await WriteFullyAsync(TemporaryFailure, cancellationToken).ConfigureAwait(false);
                     return false;
                 }
 
+                // Re-check after assembly so a critical sample published during the read cannot slip a 239.
+                if (_allowsArticleAdmission is not null && !_allowsArticleAdmission())
+                {
+                    await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
+                        .ConfigureAwait(false);
+                    return true;
+                }
+
+                var record = assembled.Value;
                 if (record.ArtSize > queue.MaxQueuedBytes)
                 {
-                    record.ReleaseUnusedCanonicalBuffer();
                     await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                         .ConfigureAwait(false);
                     return true;
@@ -280,7 +467,6 @@ namespace VectorNNTPD.StorageService.Listener
 
                     if (reservation is null)
                     {
-                        record.ReleaseUnusedCanonicalBuffer();
                         await WriteStatusAsync((byte)'4', (byte)'3', (byte)'9', argument, cancellationToken)
                             .ConfigureAwait(false);
                         return true;
@@ -301,17 +487,18 @@ namespace VectorNNTPD.StorageService.Listener
                 {
                     queue.Release(reservation.Value);
                     reservation = null;
-                    record.ReleaseUnusedCanonicalBuffer();
                     throw;
                 }
 
                 reservation = null;
                 if (!committed)
                 {
-                    record.ReleaseUnusedCanonicalBuffer();
                     await WriteFullyAsync(TemporaryFailure, cancellationToken).ConfigureAwait(false);
                     return false;
                 }
+
+                // Queue owns ArtData; do not release the canonical creator on this path.
+                assembled = null;
 
                 // ArtData remains reachable via the queued Memory; Exact buffers are not pooled.
                 if (_logger.IsEnabled(LogLevel.Debug))
@@ -334,6 +521,25 @@ namespace VectorNNTPD.StorageService.Listener
 
                 throw;
             }
+            catch (OperationCanceledException)
+            {
+                if (reservation is { } held)
+                {
+                    _acceptedArticles?.Release(held);
+                }
+
+                throw;
+            }
+            catch (TimeoutException)
+            {
+                if (reservation is { } held)
+                {
+                    _acceptedArticles?.Release(held);
+                }
+
+                await WriteFullyAsync(TemporaryFailure, cancellationToken).ConfigureAwait(false);
+                return false;
+            }
             catch (InvalidOperationException)
             {
                 // Oversized article or unrecoverable framing residue: RFC 4644 temporary failure + close.
@@ -347,34 +553,202 @@ namespace VectorNNTPD.StorageService.Listener
             }
             finally
             {
-                if (rented is not null)
+                if (assembled is { } leftover)
                 {
-                    ArrayPool<byte>.Shared.Return(rented);
+                    leftover.ReleaseUnusedCanonicalBuffer();
                 }
 
+                ReturnAssemblyBuffer(ref rented);
                 admission?.Exit();
             }
         }
 
+        /// <summary>
+        /// Discards a framed TAKETHIS body without renting a growing assembly buffer.
+        /// Used when no <see cref="StoreAssemblyAdmission"/> permit is held. Still enforces
+        /// <see cref="ArticleResourceLimits.MaxArticleBytes"/> and the overall receive deadline.
+        /// </summary>
         private async Task DrainArticleAsync(CancellationToken cancellationToken)
         {
             try
             {
-                var destuffed = await ReadDestuffedArticleAsync(cancellationToken).ConfigureAwait(false);
-                if (destuffed.Array is not null)
-                {
-                    ArrayPool<byte>.Shared.Return(destuffed.Array);
-                }
+                await DiscardFramedArticleAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (EndOfStreamException ex)
+            catch (Exception ex) when (ex is EndOfStreamException or InvalidOperationException or TimeoutException)
             {
+                // Peer closed, oversized body, or receive deadline — stop draining; caller decides response.
                 ExpectedException.Ignore(ex);
             }
         }
 
-        private Task<(byte[]? Array, ReadOnlyMemory<byte> Memory)> ReadDestuffedArticleAsync(
+        private async Task DiscardFramedArticleAsync(CancellationToken cancellationToken)
+        {
+            using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            overall.CancelAfter(_listener.ArticleReceiveTimeout);
+            try
+            {
+                await DiscardFramedCoreAsync(ArticleResourceLimits.MaxArticleBytes, overall.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested
+                && overall.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"NNTP TAKETHIS article receive exceeded overall timeout of {_listener.ArticleReceiveTimeout}.");
+            }
+        }
+
+        /// <summary>
+        /// Reads through the multiline terminator while counting destuffed bytes only.
+        /// Does not retain article payload beyond the fixed session read scratch.
+        /// </summary>
+        private async Task DiscardFramedCoreAsync(int maxBytes, CancellationToken cancellationToken)
+        {
+            var written = 0L;
+            var atLineStart = true;
+            byte[]? rentedInput = null;
+            byte[] input;
+            if (_pendingCount > _readScratch.Length)
+            {
+                rentedInput = ArrayPool<byte>.Shared.Rent(_pendingCount);
+                input = rentedInput;
+            }
+            else
+            {
+                input = _readScratch;
+            }
+
+            var inputCount = 0;
+            var inputOffset = 0;
+            try
+            {
+                if (_pendingCount > 0)
+                {
+                    _pending.AsSpan(0, _pendingCount).CopyTo(input);
+                    inputCount = _pendingCount;
+                    _pendingCount = 0;
+                }
+
+                while (true)
+                {
+                    if (inputCount - inputOffset == 0)
+                    {
+                        inputOffset = 0;
+                        inputCount = await _transport.ReadAsync(input.AsMemory(), cancellationToken).ConfigureAwait(false);
+                        if (inputCount == 0)
+                        {
+                            throw new EndOfStreamException("NNTP TAKETHIS ended before multiline terminator.");
+                        }
+                    }
+
+                    var span = input.AsSpan(inputOffset, inputCount - inputOffset);
+                    var index = 0;
+                    var needMore = false;
+                    while (index < span.Length)
+                    {
+                        if (atLineStart && span[index] == (byte)'.')
+                        {
+                            if (index + 1 >= span.Length
+                                || (span[index + 1] == (byte)'\r' && index + 2 >= span.Length))
+                            {
+                                needMore = true;
+                                break;
+                            }
+
+                            var next = span[index + 1];
+                            if (next == (byte)'\n')
+                            {
+                                inputOffset += index + 2;
+                                PreserveLeftover(input, inputOffset, inputCount - inputOffset);
+                                return;
+                            }
+
+                            if (next == (byte)'\r' && span[index + 2] == (byte)'\n')
+                            {
+                                inputOffset += index + 3;
+                                PreserveLeftover(input, inputOffset, inputCount - inputOffset);
+                                return;
+                            }
+
+                            index += 1;
+                            atLineStart = false;
+                            continue;
+                        }
+
+                        var start = index;
+                        do
+                        {
+                            var current = span[index++];
+                            atLineStart = current is (byte)'\r' or (byte)'\n';
+                        }
+                        while (index < span.Length && !(atLineStart && span[index] == (byte)'.'));
+
+                        var sliceLength = index - start;
+                        if (written + sliceLength > maxBytes)
+                        {
+                            throw new InvalidOperationException("NNTP TAKETHIS article exceeds maximum size.");
+                        }
+
+                        written += sliceLength;
+                    }
+
+                    inputOffset += index;
+                    if (needMore)
+                    {
+                        var leftover = inputCount - inputOffset;
+                        if (leftover > 0 && inputOffset > 0)
+                        {
+                            Buffer.BlockCopy(input, inputOffset, input, 0, leftover);
+                        }
+
+                        inputOffset = 0;
+                        inputCount = leftover;
+                        var read = await _transport
+                            .ReadAsync(input.AsMemory(inputCount, input.Length - inputCount), cancellationToken)
+                            .ConfigureAwait(false);
+                        if (read == 0)
+                        {
+                            throw new EndOfStreamException("NNTP TAKETHIS ended before multiline terminator.");
+                        }
+
+                        inputCount += read;
+                    }
+                }
+            }
+            finally
+            {
+                ReturnRentedInput(rentedInput);
+            }
+        }
+
+        private async Task<(byte[]? Array, ReadOnlyMemory<byte> Memory)> ReadDestuffedArticleAsync(
             CancellationToken cancellationToken)
-            => ReadDestuffedCoreAsync(ArticleResourceLimits.MaxArticleBytes, cancellationToken);
+        {
+            using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            overall.CancelAfter(_listener.ArticleReceiveTimeout);
+            try
+            {
+                return await ReadDestuffedCoreAsync(ArticleResourceLimits.MaxArticleBytes, overall.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested
+                && overall.IsCancellationRequested)
+            {
+                throw new TimeoutException(
+                    $"NNTP TAKETHIS article receive exceeded overall timeout of {_listener.ArticleReceiveTimeout}.");
+            }
+        }
+
+        private static void ReturnAssemblyBuffer(ref byte[]? rented)
+        {
+            if (rented is null)
+            {
+                return;
+            }
+
+            ArrayPool<byte>.Shared.Return(rented);
+            rented = null;
+        }
 
         private async Task<(byte[]? Array, ReadOnlyMemory<byte> Memory)> ReadDestuffedCoreAsync(
             int maxBytes,
@@ -465,7 +839,7 @@ namespace VectorNNTPD.StorageService.Listener
                         while (index < span.Length && !(atLineStart && span[index] == (byte)'.'));
 
                         var slice = span[start..index];
-                        if (written > maxBytes - slice.Length)
+                        if ((long)written + slice.Length > maxBytes)
                         {
                             throw new InvalidOperationException("NNTP TAKETHIS article exceeds maximum size.");
                         }
@@ -729,23 +1103,6 @@ namespace VectorNNTPD.StorageService.Listener
 
             messageId = argument[..end];
             return NntpMessageIdValidation.IsValidMessageId(messageId);
-        }
-
-        private static bool TryMatchModeStream(ReadOnlySpan<byte> line, out bool syntaxError)
-        {
-            syntaxError = false;
-            if (!TryMatchKeyword(line, ModeKeyword, out var modeRest))
-            {
-                return false;
-            }
-
-            if (!TryMatchKeyword(SkipSpaces(modeRest), StreamKeyword, out var streamRest))
-            {
-                return false;
-            }
-
-            syntaxError = !streamRest.IsEmpty;
-            return true;
         }
 
         private static bool TryMatchKeyword(

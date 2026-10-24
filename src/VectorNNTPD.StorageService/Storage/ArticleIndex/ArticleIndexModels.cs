@@ -9,8 +9,11 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Insert a spool-published article. Duplicate keys keep the original receipt time.</summary>
         Insert = 1,
 
-        /// <summary>Move <c>LastAccessedAt</c> forward. A missing row is not created.</summary>
+        /// <summary>Increment access count and move <c>LastAccessedAt</c> forward when newer. A missing row is not created.</summary>
         Touch = 2,
+
+        /// <summary>Remove one evicted row after its spool file was deleted.</summary>
+        EvictDelete = 3,
     }
 
     /// <summary>Outcome of one committed mutation after the transaction commits.</summary>
@@ -60,11 +63,15 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
     /// <param name="ReceivedAtUnixMilliseconds">UTC Unix epoch milliseconds of first index insert.</param>
     /// <param name="LastAccessedAtUnixMilliseconds">UTC Unix epoch milliseconds of the newest committed access.</param>
     /// <param name="SpoolDirectory">Validated spool root. Not the article file path.</param>
+    /// <param name="AccessCount">Committed access count used for LFU ordering.</param>
+    /// <param name="ArtSizeBytes">Indexed payload size in bytes.</param>
     internal readonly record struct ArticleIndexRecord(
         ArticleId ArticleId,
         long ReceivedAtUnixMilliseconds,
         long LastAccessedAtUnixMilliseconds,
-        string SpoolDirectory);
+        string SpoolDirectory,
+        long AccessCount = 1,
+        long ArtSizeBytes = 0);
 
     /// <summary>One <c>wal_checkpoint</c> result row.</summary>
     /// <param name="Busy">Non-zero when SQLite could not checkpoint every frame.</param>
@@ -110,12 +117,19 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="id">Canonical article identity.</param>
         /// <param name="unixMilliseconds">UTC Unix epoch milliseconds supplied by the caller.</param>
         /// <param name="spoolDirectory">Spool root for an insert. Null for a touch.</param>
-        internal ArticleIndexRequest(ArticleIndexCommandKind kind, ArticleId id, long unixMilliseconds, string? spoolDirectory)
+        /// <param name="artSizeBytes">Payload size for an insert.</param>
+        internal ArticleIndexRequest(
+            ArticleIndexCommandKind kind,
+            ArticleId id,
+            long unixMilliseconds,
+            string? spoolDirectory,
+            long artSizeBytes = 0)
         {
             Kind = kind;
             Id = id;
             UnixMilliseconds = unixMilliseconds;
             SpoolDirectory = spoolDirectory;
+            ArtSizeBytes = artSizeBytes;
             Completion = new TaskCompletionSource<ArticleIndexWriteResult>(TaskCreationOptions.RunContinuationsAsynchronously);
             _ = Completion.Task.ContinueWith(
                 static task => _ = task.Exception,
@@ -135,6 +149,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 
         /// <summary>Gets the spool root for an insert.</summary>
         internal string? SpoolDirectory { get; }
+
+        /// <summary>Gets the payload size supplied for an insert.</summary>
+        internal long ArtSizeBytes { get; }
 
         /// <summary>Gets the commit completion. Set by the writer after the transaction outcome is known.</summary>
         internal TaskCompletionSource<ArticleIndexWriteResult> Completion { get; }
@@ -169,11 +186,23 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Gets or sets the newest access timestamp in the batch.</summary>
         internal long LastAccessedAt { get; set; }
 
+        /// <summary>Gets or sets the summed access increments for touches in this batch.</summary>
+        internal int AccessIncrement { get; set; }
+
         /// <summary>Gets or sets the spool root from the first insert.</summary>
         internal string? SpoolDirectory { get; set; }
 
+        /// <summary>Gets or sets the indexed payload size for the first insert in this batch.</summary>
+        internal long ArtSizeBytes { get; set; }
+
         /// <summary>Gets a value indicating whether a touch should run after the insert.</summary>
         internal bool HasTouch { get; set; }
+
+        /// <summary>Gets a value indicating whether this batch deletes an evicted row.</summary>
+        internal bool HasEvictDelete { get; set; }
+
+        /// <summary>Gets or sets the evict-delete outcome. Meaningful after a successful commit.</summary>
+        internal ArticleIndexWriteDisposition EvictDeleteDisposition { get; set; }
 
         /// <summary>Gets or sets the insert statement outcome. Meaningful after a successful commit.</summary>
         internal ArticleIndexWriteDisposition InsertDisposition { get; set; }
