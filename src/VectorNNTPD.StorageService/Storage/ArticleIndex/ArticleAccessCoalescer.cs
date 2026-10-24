@@ -4,7 +4,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 {
 
     /// <summary>
-    /// Collapses repeated touches for one article into the newest timestamp while a token command is queued.
+    /// Collapses repeated touches for one article into the newest timestamp and a summed access increment while a token command is queued.
     /// </summary>
     /// <remarks>
     /// The map is bounded by <see cref="ArticleIndexSettings.MaxCoalescedKeys"/> keys and
@@ -39,6 +39,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         slot.Timestamp = unixMilliseconds;
                     }
 
+                    slot.AccessIncrements++;
                     if (slot.Count < ArticleIndexSettings.MaxCoalescedWaitersPerKey)
                     {
                         slot.Waiters[slot.Count++] = completion;
@@ -53,7 +54,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     return true;
                 }
 
-                _pending.Add(articleId, new Slot { Timestamp = unixMilliseconds });
+                _pending.Add(articleId, new Slot { Timestamp = unixMilliseconds, AccessIncrements = 1 });
                 return true;
             }
         }
@@ -80,12 +81,14 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Removes the pending touch for a token the writer is about to commit.</summary>
         /// <param name="articleId">Token article identity.</param>
         /// <param name="timestamp">Newest timestamp seen for that token, including joined touches.</param>
+        /// <param name="accessIncrements">Summed access increments for the token, including joined touches.</param>
         /// <param name="waiters">Joined completions. Null when nobody joined.</param>
         /// <param name="count">Number of valid entries in <paramref name="waiters"/>.</param>
         /// <returns><see langword="false"/> when no pending slot exists.</returns>
         internal bool TryTake(
             ArticleId articleId,
             out long timestamp,
+            out int accessIncrements,
             out TaskCompletionSource<ArticleIndexWriteResult>[]? waiters,
             out int count)
         {
@@ -94,15 +97,28 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 if (!_pending.Remove(articleId, out var slot))
                 {
                     timestamp = 0;
+                    accessIncrements = 0;
                     waiters = null;
                     count = 0;
                     return false;
                 }
 
                 timestamp = slot.Timestamp;
+                accessIncrements = slot.AccessIncrements;
                 waiters = slot.Count == 0 ? null : slot.Waiters;
                 count = slot.Count;
                 return true;
+            }
+        }
+
+        /// <summary>Returns whether a touch is queued for <paramref name="articleId"/>.</summary>
+        /// <param name="articleId">Article identity.</param>
+        /// <returns><see langword="true"/> when a token or joined touch is pending.</returns>
+        internal bool HasPending(ArticleId articleId)
+        {
+            lock (_gate)
+            {
+                return _pending.ContainsKey(articleId);
             }
         }
 
@@ -163,6 +179,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         {
             /// <summary>Gets or sets the newest access time observed for the token.</summary>
             internal long Timestamp;
+
+            /// <summary>Gets or sets the number of coalesced access increments for the token.</summary>
+            internal int AccessIncrements;
 
             /// <summary>Gets completions that joined this token instead of taking a queue slot.</summary>
             internal readonly TaskCompletionSource<ArticleIndexWriteResult>[] Waiters =

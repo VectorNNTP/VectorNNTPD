@@ -38,6 +38,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         private readonly ArticleIndexCounters _counters = new();
         private readonly ArticlePresenceIndex _presence = new();
         private readonly ArticleIngestionReservations _reservations = new();
+        private readonly SpoolLfuEviction? _eviction;
         private readonly List<SpoolSlot> _spools = new();
         private readonly Dictionary<string, SpoolSlot> _bySpool = new(PathComparer);
         private readonly SemaphoreSlim _checkpointGate = new(1, 1);
@@ -53,14 +54,17 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="catalog">Validated spool roots. One database is opened for each root.</param>
         /// <param name="logger">Startup and writer logger.</param>
         /// <param name="time">Clock for reconciliation elapsed time. Each writer uses the same clock.</param>
+        /// <param name="eviction">Filesystem-threshold LFU eviction helper.</param>
         public ArticleIndexService(
             IOptions<StorageServerOptions> options,
             SegmentPoolCatalog catalog,
             ILogger<ArticleIndexService> logger,
-            TimeProvider time)
-            : this(options.Value, catalog, logger, time, settings: null)
+            TimeProvider time,
+            SpoolLfuEviction eviction)
+            : this(options.Value, catalog, logger, time, settings: null, eviction)
         {
             ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(eviction);
         }
 
         /// <summary>Initializes the service with explicit options and test settings.</summary>
@@ -69,12 +73,14 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="logger">Startup and writer logger.</param>
         /// <param name="time">Clock.</param>
         /// <param name="settings">Null uses <see cref="ArticleIndexSettings"/> defaults.</param>
+        /// <param name="eviction">Null disables capacity eviction in tests.</param>
         internal ArticleIndexService(
             StorageServerOptions options,
             SegmentPoolCatalog catalog,
             ILogger<ArticleIndexService> logger,
             TimeProvider time,
-            ArticleIndexSettings? settings)
+            ArticleIndexSettings? settings,
+            SpoolLfuEviction? eviction = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(catalog);
@@ -85,6 +91,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             _logger = logger;
             _time = time;
             _settings = settings ?? new ArticleIndexSettings();
+            _eviction = eviction;
             DatabaseDirectory = string.Empty;
             DatabasePath = string.Empty;
         }
@@ -348,10 +355,12 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             ArticleId articleId,
             string spoolDirectory,
             long receivedAtUnixMilliseconds,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            long artSizeBytes = 0)
         {
             ThrowIfNotReady();
-            return Require(spoolDirectory).WriterOrThrow().InsertAsync(articleId, spoolDirectory, receivedAtUnixMilliseconds, cancellationToken);
+            return Require(spoolDirectory).WriterOrThrow()
+                .InsertAsync(articleId, spoolDirectory, receivedAtUnixMilliseconds, artSizeBytes, cancellationToken);
         }
 
         /// <inheritdoc />
@@ -439,6 +448,73 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 
             var spool = Require(spoolDirectory);
             return spool.Database.CopyOldest(accessedAtOrBeforeUnixMilliseconds, destination, spool.Counters, spool.Include);
+        }
+
+        /// <inheritdoc />
+        public int CopyLeastFrequentlyUsed(string spoolDirectory, Span<ArticleIndexRecord> destination)
+        {
+            ThrowIfNotReady();
+            var spool = Require(spoolDirectory);
+            return spool.Database.CopyLeastFrequentlyUsed(
+                destination,
+                spool.Counters,
+                (id, accessed) => IsEvictionCandidate(spoolDirectory, id, accessed));
+        }
+
+        /// <inheritdoc />
+        public ValueTask EvictUntilBelowHighAsync(string spoolDirectory, CancellationToken cancellationToken)
+        {
+            ThrowIfNotReady();
+            if (_eviction is null)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            return _eviction.EvictUntilBelowHighAsync(this, spoolDirectory, cancellationToken);
+        }
+
+        /// <summary>Gets the stored-byte total recorded in one spool database.</summary>
+        internal long StoredBytesFor(string spoolDirectory) => Require(spoolDirectory).Database.StoredBytes;
+
+        /// <summary>Returns whether <paramref name="articleId"/> has an active ingestion reservation.</summary>
+        internal bool IsIngestionReserved(ArticleId articleId) => _reservations.IsReserved(articleId);
+
+        /// <summary>Returns whether an indexed row may be considered for eviction.</summary>
+        internal bool IsEvictionCandidate(string spoolDirectory, ArticleId articleId, long accessedAt)
+        {
+            var spool = Require(spoolDirectory);
+            return spool.Include(articleId, accessedAt) && !spool.Coalescer.HasPending(articleId);
+        }
+
+        /// <summary>Deletes one evicted index row on the writer thread.</summary>
+        internal ValueTask<bool> DeleteEvictedRowAsync(
+            string spoolDirectory,
+            ArticleId articleId,
+            CancellationToken cancellationToken) =>
+            Require(spoolDirectory).WriterOrThrow().EvictDeleteAsync(articleId, cancellationToken);
+
+        /// <summary>Evicts one LFU-eligible article when possible.</summary>
+        internal async ValueTask<bool> TryEvictOneAsync(
+            string spoolDirectory,
+            SpoolLfuEviction eviction,
+            CancellationToken cancellationToken)
+        {
+            var spool = Require(spoolDirectory);
+            var buffer = new ArticleIndexRecord[128];
+            var count = spool.Database.CopyLeastFrequentlyUsed(
+                buffer,
+                spool.Counters,
+                (id, accessed) => eviction.IsEligible(this, spoolDirectory, id, accessed));
+            for (var i = 0; i < count; i++)
+            {
+                if (await eviction.EvictCandidateAsync(this, spoolDirectory, buffer[i], cancellationToken)
+                        .ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <inheritdoc />

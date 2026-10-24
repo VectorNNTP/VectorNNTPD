@@ -137,5 +137,13 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="directory">Database directory. The legacy file was renamed, not deleted.</param>
         [LoggerMessage(EventId = 5812, Level = LogLevel.Warning, Message = "Article index migrated legacy rows={Rows} databases={Databases} directory={Directory}")]
         public static partial void LegacyMigrated(ILogger logger, int rows, int databases, string directory);
+
+        /// <summary>Logs a spool file delete failure during eviction.</summary>
+        [LoggerMessage(EventId = 5813, Level = LogLevel.Warning, Message = "Article index eviction file delete failed articleId={ArticleId} error={Error}")]
+        public static partial void EvictionFileDeleteFailed(ILogger logger, string ArticleId, string Error);
+
+        /// <summary>Logs an index delete failure after the spool file was already removed.</summary>
+        [LoggerMessage(EventId = 5814, Level = LogLevel.Error, Message = "Article index eviction row delete failed articleId={ArticleId} spool={Spool}")]
+        public static partial void EvictionIndexDeleteFailed(ILogger logger, string articleId, string spool);
     }
 }

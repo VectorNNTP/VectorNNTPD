@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Articles;
+
 namespace VectorNNTPD.StorageService.Listener
 {
 
@@ -22,6 +24,28 @@ namespace VectorNNTPD.StorageService.Listener
 
         /// <summary>Gets the current in-flight count.</summary>
         public int InFlight => Volatile.Read(ref _inFlight);
+
+        /// <summary>
+        /// Caps concurrent assemblies so worst-case retained payload
+        /// (<c>count × MaxArticleBytes</c>) cannot exceed the accepted-queue byte budget
+        /// and cannot exceed <paramref name="maxActiveConnections"/>.
+        /// </summary>
+        /// <param name="maxActiveConnections">Listener connection ceiling.</param>
+        /// <param name="maxQueuedBytes">Accepted-article queue budget.</param>
+        /// <returns>Positive assembly concurrency limit.</returns>
+        public static int LimitFor(int maxActiveConnections, long maxQueuedBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxActiveConnections, 1);
+            if (maxQueuedBytes < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxQueuedBytes));
+            }
+
+            var byBudget = (int)Math.Min(
+                int.MaxValue,
+                Math.Max(1L, maxQueuedBytes / ArticleResourceLimits.MaxArticleBytes));
+            return Math.Min(maxActiveConnections, byBudget);
+        }
 
         /// <summary>Reserves one assembly slot.</summary>
         public bool TryEnter()

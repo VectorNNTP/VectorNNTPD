@@ -217,9 +217,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             {
                 using var warmup = identity.Acquire(ids[i], CancellationToken.None);
                 var warmed = SpoolCandidateBuilder.Fill(catalog, monitor.Observations, gate, health, 2, TimeProvider.System, buffer);
-                if (gate.TryReserve(buffer.AsSpan(0, warmed), 1024, out var chosen))
+                if (gate.TryReserve(buffer.AsSpan(0, warmed), 1024, criticalPercent: 85, out var chosen))
                 {
-                    gate.Exit(chosen.SpoolRoot);
+                    gate.Exit(chosen);
                 }
 
                 _ = SpoolArticlePath.CombineArticle(roots[0], ids[i]);
@@ -237,9 +237,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var candidateBytes = Measure(count, _ =>
             {
                 var written = SpoolCandidateBuilder.Fill(catalog, monitor.Observations, gate, health, 2, TimeProvider.System, buffer);
-                if (gate.TryReserve(buffer.AsSpan(0, written), 1024, out var chosen))
+                if (gate.TryReserve(buffer.AsSpan(0, written), 1024, criticalPercent: 85, out var chosen))
                 {
-                    gate.Exit(chosen.SpoolRoot);
+                    gate.Exit(chosen);
                 }
             });
             var pathBytes = Measure(count, i =>

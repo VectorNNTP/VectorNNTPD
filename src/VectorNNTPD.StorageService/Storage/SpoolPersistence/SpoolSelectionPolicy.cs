@@ -3,27 +3,25 @@ namespace VectorNNTPD.StorageService.Storage.SpoolPersistence
 
     /// <summary>
     /// Documented ranking and failure-retry constants for <see cref="SpoolSelector"/>.
-    /// <c>LowPercent</c>, <c>HighPercent</c>, and <c>CriticalPercent</c> are not read here.
-    /// Those remain future eviction thresholds and do not admit or reject a write.
+    /// <c>CriticalPercent</c> is supplied by the caller and excludes spools above that used percent.
+    /// <c>HighPercent</c>/<c>LowPercent</c> drive per-spool eviction monitors, not placement ranking.
     /// </summary>
     internal static class SpoolSelectionPolicy
     {
         /// <summary>
         /// A device sample or free-space probe older than this is not used as a measurement.
-        /// A stale sample is not zero, not idle, and not a reason to skip the spool.
+        /// A stale or missing free-space sample makes the spool ineligible for placement.
         /// </summary>
         internal static readonly TimeSpan SampleFreshness = TimeSpan.FromSeconds(5);
 
         /// <summary>
-        /// Free-space values within this fraction of the larger value are tied.
-        /// One percent ignores megabyte noise on a multi-terabyte spool and still
-        /// prefers a spool that is materially emptier.
+        /// Historical free-space tie fraction. Placement now ranks strictly by available bytes;
+        /// this constant remains for tests and documentation of prior tie-band behaviour.
         /// </summary>
         internal const double FreeSpaceTieFraction = 0.01;
 
         /// <summary>
-        /// Smallest free-space gap that breaks a tie. One gibibyte.
-        /// Below this gap, in-flight writes, fresh measurements, and the spool path decide.
+        /// Historical free-space tie floor (one gibibyte). Placement now ranks strictly by available bytes.
         /// </summary>
         internal const long FreeSpaceTieMinimumBytes = 1L << 30;
 

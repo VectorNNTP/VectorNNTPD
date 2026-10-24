@@ -49,12 +49,14 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="spoolDirectory">Validated spool root that holds the final file.</param>
         /// <param name="receivedAtUnixMilliseconds">One UTC Unix epoch millisecond sample.</param>
         /// <param name="cancellationToken">Cancels the wait. A queued command can still commit.</param>
+        /// <param name="artSizeBytes">Payload size stored for LFU accounting and eviction metadata.</param>
         /// <returns>The commit result. <see cref="ArticleIndexInsertResult.Inserted"/> is false when the original timestamps were kept.</returns>
         ValueTask<ArticleIndexInsertResult> InsertStoredAsync(
             ArticleId articleId,
             string spoolDirectory,
             long receivedAtUnixMilliseconds,
-            CancellationToken cancellationToken);
+            CancellationToken cancellationToken,
+            long artSizeBytes = 0);
 
         /// <summary>
         /// Waits until this caller owns the in-flight reservation for <paramref name="articleId"/>.
@@ -69,7 +71,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="articleId">Identity that this caller reserved.</param>
         void ReleaseIngestion(ArticleId articleId);
 
-        /// <summary>Moves <c>LastAccessedAt</c> forward in <paramref name="spoolDirectory"/> when that row exists and the timestamp is newer.</summary>
+        /// <summary>Increments <c>AccessCount</c> and moves <c>LastAccessedAt</c> forward when the timestamp is newer.</summary>
         /// <param name="articleId">Canonical article identity.</param>
         /// <param name="spoolDirectory">Spool whose database owns the article.</param>
         /// <param name="accessedAtUnixMilliseconds">UTC Unix epoch milliseconds.</param>
@@ -108,6 +110,17 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="destination">Buffer filled oldest first. Rows with a newer pending touch are omitted.</param>
         /// <returns>The number of rows written.</returns>
         int CopyAccessedAtOrBefore(string spoolDirectory, long accessedAtOrBeforeUnixMilliseconds, Span<ArticleIndexRecord> destination);
+
+        /// <summary>Copies rows in LFU order. Pending touches, leases, and ingestion reservations are skipped.</summary>
+        /// <param name="spoolDirectory">Spool whose database is queried.</param>
+        /// <param name="destination">Buffer. At most 10000 rows are accepted.</param>
+        /// <returns>The number of rows written.</returns>
+        int CopyLeastFrequentlyUsed(string spoolDirectory, Span<ArticleIndexRecord> destination);
+
+        /// <summary>Evicts LFU victims until filesystem used percent is at or below <c>LowPercent</c>.</summary>
+        /// <param name="spoolDirectory">Spool whose device occupancy is observed.</param>
+        /// <param name="cancellationToken">Observed between attempts.</param>
+        ValueTask EvictUntilBelowHighAsync(string spoolDirectory, CancellationToken cancellationToken);
 
         /// <summary>Gets the SQLite path for a registered spool.</summary>
         /// <param name="spoolDirectory">Registered spool root.</param>

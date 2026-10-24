@@ -437,6 +437,11 @@ namespace VectorNNTPD.StorageService.Configuration
                 failures.Add("StorageServer:Listener:IoProgressTimeoutSeconds must be between 1 and 600.");
             }
 
+            if (listener.ArticleReceiveTimeoutSeconds is < 30 or > 3600)
+            {
+                failures.Add("StorageServer:Listener:ArticleReceiveTimeoutSeconds must be between 30 and 3600.");
+            }
+
             if (listener.MaxActiveConnections < 1)
             {
                 failures.Add("StorageServer:Listener:MaxActiveConnections must be between 1 and 2147483647.");

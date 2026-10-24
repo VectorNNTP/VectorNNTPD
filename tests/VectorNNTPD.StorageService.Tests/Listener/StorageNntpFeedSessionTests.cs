@@ -115,13 +115,14 @@ namespace VectorNNTPD.StorageService.Tests.Listener
         }
 
         [Fact]
-        public async Task Check_then_mode_stream_then_capabilities_are_accepted()
+        public async Task Unsupported_commands_return_500_without_mode_or_capabilities()
         {
             var queue = new AcceptedArticleQueue();
             await using var harness = await Harness.StartAsync(queue);
-            Assert.StartsWith("101 ", await harness.CommandAsync("CAPABILITIES\r\n").WaitAsync(Safety), StringComparison.Ordinal);
-            Assert.StartsWith("203 ", await harness.CommandAsync("MODE STREAM\r\n").WaitAsync(Safety), StringComparison.Ordinal);
-            Assert.StartsWith("238 ", await harness.CommandAsync("CHECK <want@seg.test>\r\n").WaitAsync(Safety), StringComparison.Ordinal);
+            Assert.StartsWith("500 ", await harness.CommandAsync("CAPABILITIES\r\n").WaitAsync(Safety), StringComparison.Ordinal);
+            Assert.StartsWith("500 ", await harness.CommandAsync("MODE STREAM\r\n").WaitAsync(Safety), StringComparison.Ordinal);
+            Assert.StartsWith("500 ", await harness.CommandAsync("CHECK <want@seg.test>\r\n").WaitAsync(Safety), StringComparison.Ordinal);
+            Assert.StartsWith("205 ", await harness.CommandAsync("QUIT\r\n").WaitAsync(Safety), StringComparison.Ordinal);
         }
 
         private static int CountHop(string article, string hop)
@@ -250,7 +251,12 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 var transport = new PipeTransport();
                 var session = new StorageNntpFeedSession(
                     transport,
-                    new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
+                    new StorageServerListenerRuntimeOptions(
+                        262144,
+                        TimeSpan.FromSeconds(30),
+                        TimeSpan.FromSeconds(30),
+                        8,
+                        TimeSpan.FromSeconds(300)),
                     NullLogger.Instance,
                     CacheFqdn,
                     acceptedArticles: queue,

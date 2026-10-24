@@ -33,11 +33,28 @@ namespace VectorNNTPD.StorageService.Ingress
         /// <summary>Bytes reserved for admitted transfers that are not yet queued.</summary>
         long ReservedBytes { get; }
 
-        /// <summary>Queued bytes plus reserved bytes. Both count toward <see cref="MaxQueuedBytes"/>.</summary>
+        /// <summary>
+        /// Queued bytes plus reserved bytes plus in-flight (dequeued, not yet released) bytes.
+        /// All three count toward <see cref="MaxQueuedBytes"/>.
+        /// </summary>
         long AccountedBytes { get; }
+
+        /// <summary>
+        /// Bytes for articles dequeued but not yet finished by a worker
+        /// (including capacity-blocked holds). Counts toward <see cref="MaxQueuedBytes"/>.
+        /// </summary>
+        long InFlightBytes { get; }
 
         /// <summary>Admission requests waiting for reserved bytes. They do not hold a reservation yet.</summary>
         int AdmissionWaiters { get; }
+
+        /// <summary>
+        /// Releases bytes retained after dequeue once processing finishes (completed, failed, or abandoned).
+        /// Do not call while the article is still held for <c>WaitingForCapacity</c>.
+        /// A second release of the same bytes is a no-op only when the caller never over-releases the total.
+        /// </summary>
+        /// <param name="bytes">Article size previously moved into in-flight on dequeue.</param>
+        void ReleaseProcessed(int bytes);
 
         /// <summary>
         /// Reserves <paramref name="bytes"/> when no admission is waiting and the reservation fits.
@@ -84,8 +101,10 @@ namespace VectorNNTPD.StorageService.Ingress
         /// <summary>
         /// Removes one article when one is already queued.
         /// Does not wait and does not allocate a cancellation source.
-        /// A false result leaves the queue unchanged. A true result releases that article's bytes
-        /// from the queue budget and transfers ownership of the article to the caller.
+        /// A false result leaves the queue unchanged. A true result moves that article's bytes
+        /// into <see cref="InFlightBytes"/> (still counted in <see cref="AccountedBytes"/>) and
+        /// transfers ownership of the article to the caller, who must call
+        /// <see cref="ReleaseProcessed"/> when finished.
         /// An empty completed queue returns <see langword="false"/>; it does not signal completion.
         /// Call <see cref="DequeueAsync"/> to wait or to observe completion.
         /// </summary>

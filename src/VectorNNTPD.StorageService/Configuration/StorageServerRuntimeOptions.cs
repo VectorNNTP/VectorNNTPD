@@ -33,5 +33,6 @@ namespace VectorNNTPD.StorageService.Configuration
         int ParserAccumulationMaxBytes,
         TimeSpan TlsHandshakeTimeout,
         TimeSpan IoProgressTimeout,
-        int MaxActiveConnections);
+        int MaxActiveConnections,
+        TimeSpan ArticleReceiveTimeout);
 }

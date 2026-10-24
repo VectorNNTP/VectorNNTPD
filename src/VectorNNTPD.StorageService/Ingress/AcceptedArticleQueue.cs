@@ -5,7 +5,7 @@ namespace VectorNNTPD.StorageService.Ingress
 {
 
     /// <summary>
-    /// Multi-writer, multi-reader queue of accepted articles, bounded by queued bytes.
+    /// Multi-writer, multi-reader queue of accepted articles, bounded by accounted bytes.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -14,9 +14,11 @@ namespace VectorNNTPD.StorageService.Ingress
     /// not dropped after the budget check. Enqueue does not copy <see cref="AcceptedArticle.ArtData"/>.
     /// </para>
     /// <para>
-    /// The default budget is one gibibyte. At 768,000-byte articles that is about 1,398 articles.
-    /// TAKETHIS 239 is sent only after a true enqueue. A false enqueue is the overload signal
-    /// and is not a durable-storage acknowledgement.
+    /// The budget covers queued payloads, admission reservations, and dequeued in-flight articles
+    /// (including capacity-blocked holds) until <see cref="ReleaseProcessed"/>. Dequeue alone does
+    /// not free budget. The default budget is one gibibyte. At 768,000-byte articles that is about
+    /// 1,398 articles. TAKETHIS 239 is sent only after a true enqueue. A false enqueue is the
+    /// overload signal and is not a durable-storage acknowledgement.
     /// </para>
     /// </remarks>
     public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
@@ -39,6 +41,7 @@ namespace VectorNNTPD.StorageService.Ingress
         private long _dequeued;
         private long _queuedBytes;
         private long _reservedBytes;
+        private long _inFlightBytes;
         private long _nextReservationId;
         private bool _completed;
 
@@ -121,7 +124,19 @@ namespace VectorNNTPD.StorageService.Ingress
             {
                 lock (_gate)
                 {
-                    return _queuedBytes + _reservedBytes;
+                    return _queuedBytes + _reservedBytes + _inFlightBytes;
+                }
+            }
+        }
+
+        /// <inheritdoc />
+        public long InFlightBytes
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _inFlightBytes;
                 }
             }
         }
@@ -191,7 +206,7 @@ namespace VectorNNTPD.StorageService.Ingress
 
             lock (_gate)
             {
-                var accounted = _queuedBytes + _reservedBytes;
+                var accounted = _queuedBytes + _reservedBytes + _inFlightBytes;
                 if (_completed || article.ArtSize > _maxQueuedBytes || accounted > _maxQueuedBytes - article.ArtSize)
                 {
                     return false;
@@ -387,19 +402,46 @@ namespace VectorNNTPD.StorageService.Ingress
             DisposeRegistrations(granted);
         }
 
-        /// <summary>Accounts a dequeue and grants the oldest waiter that now fits.</summary>
-        /// <param name="bytes">Bytes removed from the queue.</param>
-        /// <returns>Waiters whose registrations must be disposed after the lock is released.</returns>
+        /// <inheritdoc />
+        public void ReleaseProcessed(int bytes)
+        {
+            if (bytes < 1)
+            {
+                return;
+            }
+
+            List<ReservationWaiter>? granted;
+            lock (_gate)
+            {
+                if (_inFlightBytes <= 0)
+                {
+                    return;
+                }
+
+                _inFlightBytes = _inFlightBytes > bytes ? _inFlightBytes - bytes : 0;
+                granted = PumpWaiters();
+            }
+
+            DisposeRegistrations(granted);
+        }
+
+        /// <summary>
+        /// Moves dequeued bytes from the queue into in-flight so capacity-blocked holds still
+        /// consume the admission budget. Does not grant waiters (accounted total is unchanged).
+        /// </summary>
+        /// <param name="bytes">Bytes removed from the queue channel.</param>
+        /// <returns>Always null; dequeue does not free budget for new admissions.</returns>
         private List<ReservationWaiter>? NoteDequeued(int bytes)
         {
             _dequeued++;
             _queuedBytes -= bytes;
+            _inFlightBytes += bytes;
             if (_stamps.Count > 0)
             {
                 _stamps.Dequeue();
             }
 
-            return PumpWaiters();
+            return null;
         }
 
         /// <summary>
@@ -415,7 +457,7 @@ namespace VectorNNTPD.StorageService.Ingress
                 return false;
             }
 
-            var accounted = _queuedBytes + _reservedBytes;
+            var accounted = _queuedBytes + _reservedBytes + _inFlightBytes;
             if (accounted > _maxQueuedBytes - bytes)
             {
                 return false;
@@ -448,7 +490,7 @@ namespace VectorNNTPD.StorageService.Ingress
             while (_waiters.Count > 0)
             {
                 var head = _waiters.Peek();
-                var accounted = _queuedBytes + _reservedBytes;
+                var accounted = _queuedBytes + _reservedBytes + _inFlightBytes;
                 if (head.Bytes > _maxQueuedBytes || accounted > _maxQueuedBytes - head.Bytes)
                 {
                     return granted;

@@ -134,12 +134,14 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="articleId">Canonical article identity.</param>
         /// <param name="spoolDirectory">Validated spool root.</param>
         /// <param name="receivedAtUnixMilliseconds">UTC Unix epoch milliseconds used for both initial timestamps.</param>
+        /// <param name="artSizeBytes">Payload size recorded in the index row and metadata.</param>
         /// <param name="cancellationToken">Cancels the wait. A command already queued can still commit.</param>
         /// <returns>Whether this call created the row.</returns>
         internal async ValueTask<ArticleIndexInsertResult> InsertAsync(
             ArticleId articleId,
             string spoolDirectory,
             long receivedAtUnixMilliseconds,
+            long artSizeBytes,
             CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(spoolDirectory);
@@ -150,12 +152,18 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     nameof(spoolDirectory));
             }
 
+            if (artSizeBytes < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artSizeBytes));
+            }
+
             EnsureTimestamp(receivedAtUnixMilliseconds);
             var request = new ArticleIndexRequest(
                 ArticleIndexCommandKind.Insert,
                 articleId,
                 receivedAtUnixMilliseconds,
-                spoolDirectory);
+                spoolDirectory,
+                artSizeBytes);
             await EnqueueAsync(request, cancellationToken).ConfigureAwait(false);
             var result = await request.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             return new ArticleIndexInsertResult(true, result.Disposition == ArticleIndexWriteDisposition.Inserted);
@@ -194,6 +202,18 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 
             var result = await request.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             return MapTouch(result.Disposition);
+        }
+
+        /// <summary>Queues deletion of one evicted row after its spool file was removed.</summary>
+        /// <param name="articleId">Canonical article identity.</param>
+        /// <param name="cancellationToken">Cancels the wait.</param>
+        /// <returns><see langword="true"/> when the row was deleted.</returns>
+        internal async ValueTask<bool> EvictDeleteAsync(ArticleId articleId, CancellationToken cancellationToken)
+        {
+            var request = new ArticleIndexRequest(ArticleIndexCommandKind.EvictDelete, articleId, unixMilliseconds: 0, spoolDirectory: null);
+            await EnqueueAsync(request, cancellationToken).ConfigureAwait(false);
+            var result = await request.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return result.Disposition == ArticleIndexWriteDisposition.Updated;
         }
 
         /// <summary>
@@ -615,6 +635,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         mutation.HasInsert = true;
                         mutation.ReceivedAt = request.UnixMilliseconds;
                         mutation.SpoolDirectory = request.SpoolDirectory;
+                        mutation.ArtSizeBytes = request.ArtSizeBytes;
                         if (!mutation.HasTouch || request.UnixMilliseconds > mutation.LastAccessedAt)
                         {
                             mutation.LastAccessedAt = request.UnixMilliseconds;
@@ -625,14 +646,23 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     continue;
                 }
 
+                if (request.Kind == ArticleIndexCommandKind.EvictDelete)
+                {
+                    mutation.HasEvictDelete = true;
+                    mutation.InsertWaiters.Add(request);
+                    continue;
+                }
+
                 var stamp = request.UnixMilliseconds;
-                if (_coalescer.TryTake(request.Id, out var pending, out var waiters, out var count))
+                var increment = 1;
+                if (_coalescer.TryTake(request.Id, out var pending, out var accessIncrements, out var waiters, out var count))
                 {
                     if (pending > stamp)
                     {
                         stamp = pending;
                     }
 
+                    increment = accessIncrements <= 0 ? 1 : accessIncrements;
                     if (count > 0 && waiters is not null)
                     {
                         mutation.CoalescedTouches ??= new List<TaskCompletionSource<ArticleIndexWriteResult>>(count);
@@ -644,6 +674,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 }
 
                 mutation.HasTouch = true;
+                mutation.AccessIncrement += increment;
                 if (stamp > mutation.LastAccessedAt)
                 {
                     mutation.LastAccessedAt = stamp;
@@ -687,6 +718,12 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         {
             foreach (var mutation in _mutations)
             {
+                if (mutation.HasEvictDelete && mutation.EvictDeleteDisposition == ArticleIndexWriteDisposition.Updated)
+                {
+                    _presence.Remove(mutation.Id);
+                    continue;
+                }
+
                 var present = mutation.HasInsert
                     || mutation.TouchDisposition is ArticleIndexWriteDisposition.Updated or ArticleIndexWriteDisposition.Unchanged;
                 if (!present || mutation.TouchDisposition == ArticleIndexWriteDisposition.Missing && !mutation.HasInsert)
@@ -721,7 +758,8 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 }
 
                 Note(mutation);
-                var insert = new ArticleIndexWriteResult(mutation.InsertDisposition);
+                var insert = new ArticleIndexWriteResult(
+                    mutation.HasEvictDelete ? mutation.EvictDeleteDisposition : mutation.InsertDisposition);
                 foreach (var waiter in mutation.InsertWaiters)
                 {
                     waiter.Completion.TrySetResult(insert);

@@ -172,7 +172,12 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 var transport = new PipeDuplex();
                 var session = new StorageNntpFeedSession(
                     transport,
-                    new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
+                    new StorageServerListenerRuntimeOptions(
+                        262144,
+                        TimeSpan.FromSeconds(30),
+                        TimeSpan.FromSeconds(30),
+                        8,
+                        TimeSpan.FromSeconds(300)),
                     NullLogger.Instance,
                     "cache01.usenet.ninja",
                     acceptedArticles: queue,

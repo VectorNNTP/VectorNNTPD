@@ -127,8 +127,6 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                     CancellationToken.None);
                 var client = new RawNntpClient(tcp, ssl);
                 Assert.Equal(200, await client.ReadStatusAsync());
-                await ssl.WriteAsync("MODE STREAM\r\n"u8.ToArray());
-                Assert.Equal(203, await client.ReadStatusAsync());
                 return client;
             }
 

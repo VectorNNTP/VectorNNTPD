@@ -20,7 +20,10 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         internal const string SpoolRegistryFileName = "article-index-spools.registry";
 
         /// <summary>Schema version written to a per-spool <c>ArticleIndexMeta</c>. Version 1 is the retired single-database shape.</summary>
-        internal const int SchemaVersion = 2;
+        internal const int SchemaVersion = 3;
+
+        /// <summary>Maximum eviction attempts per capacity-eviction pass.</summary>
+        internal const int MaxEvictionAttempts = 256;
 
         /// <summary>Page size applied before the first schema write. Existing databases keep their page size.</summary>
         internal const int PageSizeBytes = 8192;

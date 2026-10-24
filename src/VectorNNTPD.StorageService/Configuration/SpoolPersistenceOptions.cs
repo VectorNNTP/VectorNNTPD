@@ -12,10 +12,13 @@ namespace VectorNNTPD.StorageService.Configuration
     /// <para>
     /// At 10 Gbps the payload rate is 1.25 GB/s. An average 750 KiB article
     /// (<c>750 × 1024 = 768_000</c> bytes) is about 1,628 articles/s. The default
-    /// 1 GiB queue holds about 1,398 such articles. STORE admission reserves that
-    /// article's META <c>ArtSize</c> before WINDOW credit is granted, so a full queue
-    /// does not receive the body. <c>TryCommit</c> moves the reservation into the queue
-    /// without adding the bytes twice. A dequeued article leaves the budget.
+    /// 1 GiB queue holds about 1,398 such articles. Admission reserves <c>ArtSize</c>
+    /// before <c>239</c>. <c>TryCommit</c> moves the reservation into the queue without
+    /// adding the bytes twice. A dequeued article stays in the budget as in-flight until
+    /// the worker calls <c>ReleaseProcessed</c> (capacity-blocked holds included), so
+    /// sustained critical storage cannot refill the queue past <see cref="MaxQueuedBytes"/>.
+    /// TAKETHIS may assemble a body before reservation; concurrent assemblies are capped by
+    /// listener <c>MaxActiveConnections</c> and are outside this byte budget until reserved.
     /// Path rewrite keeps a rented second buffer until publish returns, then returns it
     /// to a pool capped at eight arrays per size. Live memory is still the original plus
     /// that buffer. The pool retains at most eight arrays of each size that has been used.

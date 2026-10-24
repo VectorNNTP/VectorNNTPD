@@ -67,6 +67,18 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Gets or sets a test signal invoked under the shard lock when a caller is about to wait.</summary>
         internal Action? OnWaiting { get; set; }
 
+        /// <summary>Returns whether <paramref name="articleId"/> is reserved for in-flight ingestion.</summary>
+        /// <param name="articleId">Canonical article identity.</param>
+        /// <returns><see langword="true"/> when a caller holds the reservation.</returns>
+        internal bool IsReserved(ArticleId articleId)
+        {
+            var shard = _shards[Shard(articleId)];
+            lock (shard.Gate)
+            {
+                return shard.InFlight.ContainsKey(articleId);
+            }
+        }
+
         /// <summary>Drops a reservation this caller acquired. Published membership is left unchanged.</summary>
         /// <param name="articleId">Identity passed to <see cref="ReserveAsync"/>.</param>
         internal void Release(ArticleId articleId)

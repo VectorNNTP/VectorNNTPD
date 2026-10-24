@@ -226,6 +226,13 @@ namespace VectorNNTPD.StorageService.Configuration
         /// </summary>
         public int IoProgressTimeoutSeconds { get; set; } = 60;
 
+        /// <summary>
+        /// Overall deadline in seconds for receiving one TAKETHIS article (headers and body through
+        /// the multiline terminator). Unlike <see cref="IoProgressTimeoutSeconds"/>, this does not
+        /// reset when the peer drips another byte. Default is 300 seconds.
+        /// </summary>
+        public int ArticleReceiveTimeoutSeconds { get; set; } = 300;
+
         /// <summary>Maximum concurrently active accepted connections.</summary>
         public int MaxActiveConnections { get; set; } = 1024;
     }

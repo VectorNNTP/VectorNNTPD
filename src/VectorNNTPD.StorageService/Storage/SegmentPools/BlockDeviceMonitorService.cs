@@ -27,6 +27,12 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
         private Task? _execution;
         private int _started;
 
+        /// <summary>
+        /// Raised after a consistent free-space snapshot is published (periodic sample or test injection).
+        /// Subscribers include the admission gate and per-spool eviction monitors.
+        /// </summary>
+        internal event Action? CapacitySamplePublished;
+
         /// <summary>Initializes a one-second monitor.</summary>
         /// <param name="catalog">Devices published by successful validation.</param>
         /// <param name="counters">Platform counter source.</param>
@@ -87,8 +93,9 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 
         /// <summary>
         /// Subtracts <paramref name="bytes"/> from the cached available space for <paramref name="spoolPath"/>
-        /// and records the commit so a probe already in progress cannot add those bytes back.
-        /// A missing cache entry is left unchanged. Duplicate and failed publishes do not call this.
+        /// and every sibling path on the same physical device, and records the commit so a probe already
+        /// in progress cannot add those bytes back. Shared-volume directories must not pretend to have
+        /// independent free space.
         /// </summary>
         /// <param name="spoolPath">Canonical spool path.</param>
         /// <param name="bytes">Bytes renamed into that spool. Negative values are ignored.</param>
@@ -101,18 +108,127 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 
             lock (_publishGate)
             {
-                if (!_observations.Space.TryGetValue(spoolPath, out var current))
-                {
-                    return;
-                }
-
-                var space = new Dictionary<string, SpoolSpaceObservation>(_observations.Space, StringComparer.Ordinal);
-                var available = current.AvailableBytes > bytes ? current.AvailableBytes - bytes : 0;
-                space[spoolPath] = current with { AvailableBytes = available };
-                _observations = _observations with { Space = space };
+                AdjustCachedAvailable(spoolPath, -bytes);
                 var pending = _commitsAfterProbeOpen.GetValueOrDefault(spoolPath);
                 _commitsAfterProbeOpen[spoolPath] = pending > long.MaxValue - bytes ? long.MaxValue : pending + bytes;
             }
+
+            CapacitySamplePublished?.Invoke();
+        }
+
+        /// <summary>Publishes one filesystem sample for tests and local eviction verification.</summary>
+        /// <param name="spoolPath">Canonical spool path.</param>
+        /// <param name="totalBytes">Filesystem capacity in bytes.</param>
+        /// <param name="availableBytes">Available bytes on that spool.</param>
+        internal void SetSpaceObservationForTests(string spoolPath, long totalBytes, long availableBytes)
+        {
+            if (string.IsNullOrEmpty(spoolPath) || totalBytes <= 0)
+            {
+                return;
+            }
+
+            lock (_publishGate)
+            {
+                var space = new Dictionary<string, SpoolSpaceObservation>(_observations.Space, StringComparer.Ordinal);
+                space[spoolPath] = new SpoolSpaceObservation(totalBytes, availableBytes, _time.GetTimestamp());
+                _observations = _observations with { Space = space, Timestamp = _time.GetTimestamp() };
+            }
+
+            CapacitySamplePublished?.Invoke();
+        }
+
+        /// <summary>
+        /// Adds <paramref name="bytes"/> back to the cached available space for <paramref name="spoolPath"/>
+        /// and sibling paths on the same physical device after eviction.
+        /// </summary>
+        /// <param name="spoolPath">Canonical spool path.</param>
+        /// <param name="bytes">Bytes reclaimed on that spool. Negative values are ignored.</param>
+        internal void NoteFreedBytes(string spoolPath, long bytes)
+        {
+            if (bytes <= 0 || string.IsNullOrEmpty(spoolPath))
+            {
+                return;
+            }
+
+            lock (_publishGate)
+            {
+                AdjustCachedAvailable(spoolPath, bytes);
+            }
+
+            CapacitySamplePublished?.Invoke();
+        }
+
+        /// <summary>
+        /// Adjusts cached available bytes for <paramref name="spoolPath"/> and every catalog sibling
+        /// on the same device. Caller must hold <see cref="_publishGate"/>.
+        /// </summary>
+        private void AdjustCachedAvailable(string spoolPath, long deltaBytes)
+        {
+            var paths = PathsSharingDevice(spoolPath);
+            var space = new Dictionary<string, SpoolSpaceObservation>(_observations.Space, StringComparer.Ordinal);
+            var changed = false;
+            foreach (var path in paths)
+            {
+                if (!space.TryGetValue(path, out var current))
+                {
+                    continue;
+                }
+
+                long available;
+                if (deltaBytes < 0)
+                {
+                    var consume = -deltaBytes;
+                    available = current.AvailableBytes > consume ? current.AvailableBytes - consume : 0;
+                }
+                else
+                {
+                    available = current.AvailableBytes > long.MaxValue - deltaBytes
+                        ? long.MaxValue
+                        : current.AvailableBytes + deltaBytes;
+                    if (available > current.TotalBytes)
+                    {
+                        available = current.TotalBytes;
+                    }
+                }
+
+                space[path] = current with { AvailableBytes = available };
+                changed = true;
+            }
+
+            if (changed)
+            {
+                _observations = _observations with { Space = space };
+            }
+        }
+
+        private IEnumerable<string> PathsSharingDevice(string spoolPath)
+        {
+            foreach (var device in _catalog.Devices)
+            {
+                var match = false;
+                foreach (var path in device.PoolPaths)
+                {
+                    if (string.Equals(path, spoolPath, StringComparison.Ordinal))
+                    {
+                        match = true;
+                        break;
+                    }
+                }
+
+                if (!match)
+                {
+                    continue;
+                }
+
+                foreach (var path in device.PoolPaths)
+                {
+                    yield return path;
+                }
+
+                yield break;
+            }
+
+            yield return spoolPath;
         }
 
         /// <inheritdoc />
@@ -312,6 +428,8 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
 
                 _observations = new SpoolObservationSnapshot(_time.GetTimestamp(), devices, unavailable, space);
             }
+
+            CapacitySamplePublished?.Invoke();
         }
 
         /// <summary>

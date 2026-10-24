@@ -34,6 +34,8 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         private SqliteCommand? _touch;
         private SqliteCommand? _exists;
         private SqliteCommand? _countUpdate;
+        private SqliteCommand? _storedBytesUpdate;
+        private SqliteCommand? _evictDelete;
         private SqliteCommand? _load;
         private ReadSlot[]? _readers;
         private SemaphoreSlim? _readerGate;
@@ -72,6 +74,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Gets the article count stored in <c>ArticleIndexMeta</c> at initialization.</summary>
         internal long ArticleCount { get; private set; }
 
+        /// <summary>Gets the stored-byte total from <c>ArticleIndexMeta</c> at initialization and after commits on this connection.</summary>
+        internal long StoredBytes { get; private set; }
+
         /// <summary>Gets the WAL file length, or zero when the file is absent.</summary>
         internal long WalBytes
         {
@@ -82,7 +87,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             }
         }
 
-        /// <summary>Opens the writer, creates or checks schema version 2, and opens readers.</summary>
+        /// <summary>Opens the writer, creates or migrates schema version 3, and opens readers.</summary>
         /// <param name="cancellationToken">Observed before the file is opened. The SQLite calls themselves are synchronous.</param>
         internal void Initialize(CancellationToken cancellationToken)
         {
@@ -221,14 +226,21 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             var touch = _touch!;
             var exists = _exists!;
             var countUpdate = _countUpdate!;
+            var storedBytesUpdate = _storedBytesUpdate!;
+            var evictDelete = _evictDelete!;
             using var transaction = connection.BeginTransaction();
             insert.Transaction = transaction;
             touch.Transaction = transaction;
             exists.Transaction = transaction;
             countUpdate.Transaction = transaction;
+            storedBytesUpdate.Transaction = transaction;
+            evictDelete.Transaction = transaction;
             try
             {
                 var inserted = 0;
+                long insertedBytes = 0;
+                var evicted = 0;
+                long evictedBytes = 0;
                 foreach (var mutation in mutations)
                 {
                     if (mutation.HasInsert)
@@ -238,6 +250,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         var existed = exists.ExecuteScalar() is not null and not DBNull;
                         insert.Parameters[0].Value = _writerHash;
                         insert.Parameters[1].Value = mutation.ReceivedAt;
+                        insert.Parameters[2].Value = mutation.ArtSizeBytes;
                         var changed = insert.ExecuteNonQuery();
                         if (existed)
                         {
@@ -246,6 +259,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         else if (changed == 1)
                         {
                             inserted++;
+                            insertedBytes += mutation.ArtSizeBytes;
                             mutation.InsertDisposition = ArticleIndexWriteDisposition.Inserted;
                         }
                         else
@@ -254,32 +268,61 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         }
                     }
 
-                    if (!mutation.HasTouch)
+                    if (mutation.HasTouch)
+                    {
+                        mutation.Id.CopyTo(_writerHash);
+                        var delta = mutation.AccessIncrement <= 0 ? 1 : mutation.AccessIncrement;
+                        touch.Parameters[0].Value = delta;
+                        touch.Parameters[1].Value = mutation.LastAccessedAt;
+                        touch.Parameters[2].Value = _writerHash;
+                        var updated = touch.ExecuteNonQuery();
+                        if (updated == 1)
+                        {
+                            mutation.TouchDisposition = ArticleIndexWriteDisposition.Updated;
+                        }
+                        else if (mutation.HasInsert)
+                        {
+                            mutation.TouchDisposition = ArticleIndexWriteDisposition.Unchanged;
+                        }
+                        else
+                        {
+                            exists.Parameters[0].Value = _writerHash;
+                            var found = exists.ExecuteScalar();
+                            mutation.TouchDisposition = found is null or DBNull
+                                ? ArticleIndexWriteDisposition.Missing
+                                : ArticleIndexWriteDisposition.Unchanged;
+                        }
+                    }
+
+                    if (!mutation.HasEvictDelete)
                     {
                         continue;
                     }
 
                     mutation.Id.CopyTo(_writerHash);
-                    touch.Parameters[0].Value = mutation.LastAccessedAt;
-                    touch.Parameters[1].Value = _writerHash;
-                    var updated = touch.ExecuteNonQuery();
-                    if (updated == 1)
+                    evictDelete.Parameters[0].Value = _writerHash;
+                    object? deletedSize;
+                    using (var reader = evictDelete.ExecuteReader())
                     {
-                        mutation.TouchDisposition = ArticleIndexWriteDisposition.Updated;
+                        if (!reader.Read())
+                        {
+                            deletedSize = null;
+                        }
+                        else
+                        {
+                            deletedSize = reader.GetInt64(0);
+                        }
+                    }
+
+                    if (deletedSize is null)
+                    {
+                        mutation.EvictDeleteDisposition = ArticleIndexWriteDisposition.Missing;
                         continue;
                     }
 
-                    if (mutation.HasInsert)
-                    {
-                        mutation.TouchDisposition = ArticleIndexWriteDisposition.Unchanged;
-                        continue;
-                    }
-
-                    exists.Parameters[0].Value = _writerHash;
-                    var found = exists.ExecuteScalar();
-                    mutation.TouchDisposition = found is null or DBNull
-                        ? ArticleIndexWriteDisposition.Missing
-                        : ArticleIndexWriteDisposition.Unchanged;
+                    evicted++;
+                    evictedBytes += (long)deletedSize;
+                    mutation.EvictDeleteDisposition = ArticleIndexWriteDisposition.Updated;
                 }
 
                 if (inserted > 0)
@@ -291,11 +334,40 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     }
                 }
 
+                if (insertedBytes > 0)
+                {
+                    storedBytesUpdate.Parameters[0].Value = insertedBytes;
+                    if (storedBytesUpdate.ExecuteNonQuery() != 1)
+                    {
+                        throw new InvalidOperationException("Article index metadata row is missing.");
+                    }
+                }
+
+                if (evicted > 0)
+                {
+                    countUpdate.Parameters[0].Value = -evicted;
+                    if (countUpdate.ExecuteNonQuery() != 1)
+                    {
+                        throw new InvalidOperationException("Article index metadata row is missing.");
+                    }
+                }
+
+                if (evictedBytes > 0)
+                {
+                    storedBytesUpdate.Parameters[0].Value = -evictedBytes;
+                    if (storedBytesUpdate.ExecuteNonQuery() != 1)
+                    {
+                        throw new InvalidOperationException("Article index metadata row is missing.");
+                    }
+                }
+
                 if (CommitHookApplies())
                 {
                     _settings.BeforeCommit!.Invoke();
                 }
                 transaction.Commit();
+                ArticleCount += inserted - evicted;
+                StoredBytes += insertedBytes - evictedBytes;
             }
             catch
             {
@@ -317,6 +389,8 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 touch.Transaction = null;
                 exists.Transaction = null;
                 countUpdate.Transaction = null;
+                storedBytesUpdate.Transaction = null;
+                evictDelete.Transaction = null;
             }
         }
 
@@ -344,7 +418,9 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     articleId,
                     reader.GetInt64(0),
                     reader.GetInt64(1),
-                    _spoolDirectory);
+                    _spoolDirectory,
+                    reader.GetInt64(2),
+                    reader.GetInt64(3));
                 return true;
             }
             finally
@@ -418,7 +494,71 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                         articleId,
                         reader.GetInt64(1),
                         accessed,
-                        _spoolDirectory);
+                        _spoolDirectory,
+                        reader.GetInt64(3),
+                        reader.GetInt64(4));
+                }
+
+                return count;
+            }
+            finally
+            {
+                counters?.NoteRead(System.Diagnostics.Stopwatch.GetElapsedTime(started));
+                Return(slot.Index);
+            }
+        }
+
+        /// <summary>Copies rows in LFU order with optional inclusion filter.</summary>
+        /// <param name="destination">Buffer filled in ascending LFU order.</param>
+        /// <param name="counters">Optional read timer.</param>
+        /// <param name="include">Returns false to skip a row and keep scanning.</param>
+        /// <returns>The number of rows written to <paramref name="destination"/>.</returns>
+        internal int CopyLeastFrequentlyUsed(
+            Span<ArticleIndexRecord> destination,
+            ArticleIndexCounters? counters,
+            Func<ArticleId, long, bool>? include)
+        {
+            if (destination.Length == 0)
+            {
+                return 0;
+            }
+
+            if (destination.Length > 10_000)
+            {
+                throw new ArgumentOutOfRangeException(nameof(destination), "Article index eviction reads are limited to 10000 rows.");
+            }
+
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var slot = Rent();
+            try
+            {
+                var command = slot.Lfu;
+                var limit = include is null ? destination.Length : 10_000;
+                command.Parameters[0].Value = limit;
+                using var reader = command.ExecuteReader();
+                var count = 0;
+                while (reader.Read() && count < destination.Length)
+                {
+                    var length = reader.GetBytes(0, 0, slot.Hash, 0, slot.Hash.Length);
+                    if (length != ArticleIndexSettings.HashLength)
+                    {
+                        throw new InvalidOperationException("Article index returned a hash that is not 32 bytes.");
+                    }
+
+                    var articleId = ArticleId.FromSpan(slot.Hash);
+                    var accessed = reader.GetInt64(2);
+                    if (include is not null && !include(articleId, accessed))
+                    {
+                        continue;
+                    }
+
+                    destination[count++] = new ArticleIndexRecord(
+                        articleId,
+                        reader.GetInt64(1),
+                        accessed,
+                        _spoolDirectory,
+                        reader.GetInt64(3),
+                        reader.GetInt64(4));
                 }
 
                 return count;
@@ -548,34 +688,118 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             PageSize = Convert.ToInt32(ExecuteScalar(connection, "PRAGMA page_size;"), System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        /// <summary>Creates schema version 2 or refuses a different version. An unknown version is not modified.</summary>
+        /// <summary>Creates schema version 3, migrates version 2, or refuses an unknown version.</summary>
         /// <param name="connection">Open writer connection.</param>
         private void Migrate(SqliteConnection connection)
         {
-            using var transaction = connection.BeginTransaction();
-            Execute(connection, ArticleIndexSql.CreateMeta, transaction);
-            Execute(connection, ArticleIndexSql.CreateArticles, transaction);
-            Execute(connection, ArticleIndexSql.CreateAccessIndex, transaction);
-            Execute(connection, ArticleIndexSql.InsertMeta, transaction);
-            transaction.Commit();
+            // Schema DDL stays inside one writer transaction so no reader remains open across
+            // CREATE/ALTER/INDEX (avoids SQLite Error 6: database table is locked).
+            using (var transaction = connection.BeginTransaction())
+            {
+                Execute(connection, ArticleIndexSql.CreateMeta, transaction);
+                Execute(connection, ArticleIndexSql.CreateArticles, transaction);
+                EnsureV3Columns(connection, transaction);
+                Execute(connection, ArticleIndexSql.InsertMeta, transaction);
 
+                var version = ReadMetaVersion(connection, transaction);
+                if (version == 2)
+                {
+                    Execute(connection, ArticleIndexSql.SetSchemaVersion3, transaction);
+                    version = ArticleIndexSettings.SchemaVersion;
+                }
+                else if (version != ArticleIndexSettings.SchemaVersion)
+                {
+                    throw new InvalidOperationException(
+                        $"Article index '{DatabasePath}' has schema version {version}. This build supports version {ArticleIndexSettings.SchemaVersion} only and does not modify a newer or older database.");
+                }
+
+                Execute(connection, ArticleIndexSql.CreateLfuIndex, transaction);
+                Execute(connection, ArticleIndexSql.DropLastAccessedIndex, transaction);
+                transaction.Commit();
+            }
+
+            ReadMeta(connection, out var schemaVersion, out var articleCount, out var storedBytes);
+            SchemaVersion = schemaVersion;
+            ArticleCount = articleCount;
+            StoredBytes = storedBytes;
+        }
+
+        /// <summary>Reads only the schema version while an optional writer transaction is open.</summary>
+        private static int ReadMetaVersion(SqliteConnection connection, SqliteTransaction? transaction)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = ArticleIndexSql.ReadMeta;
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                throw new InvalidOperationException("Article index metadata row is missing.");
+            }
+
+            return reader.GetInt32(0);
+        }
+
+        /// <summary>Reads metadata and closes the reader before further writer statements run.</summary>
+        private static void ReadMeta(
+            SqliteConnection connection,
+            out int version,
+            out long articleCount,
+            out long storedBytes)
+        {
             using var command = connection.CreateCommand();
             command.CommandText = ArticleIndexSql.ReadMeta;
             using var reader = command.ExecuteReader();
             if (!reader.Read())
             {
-                throw new InvalidOperationException($"Article index '{DatabasePath}' has no schema version row.");
+                throw new InvalidOperationException("Article index metadata row is missing.");
             }
 
-            var version = reader.GetInt32(0);
-            if (version != ArticleIndexSettings.SchemaVersion)
+            version = reader.GetInt32(0);
+            articleCount = reader.GetInt64(1);
+            storedBytes = reader.FieldCount > 2 && !reader.IsDBNull(2) ? reader.GetInt64(2) : 0;
+        }
+
+        /// <summary>Adds version-3 columns when opening an older on-disk layout.</summary>
+        /// <param name="connection">Open writer connection.</param>
+        /// <param name="transaction">Optional transaction.</param>
+        private static void EnsureV3Columns(SqliteConnection connection, SqliteTransaction? transaction = null)
+        {
+            if (!ColumnExists(connection, "ArticleIndexMeta", "StoredBytes", transaction))
             {
-                throw new InvalidOperationException(
-                    $"Article index '{DatabasePath}' has schema version {version}. This build supports version {ArticleIndexSettings.SchemaVersion} only and does not modify a newer or older database.");
+                Execute(connection, ArticleIndexSql.AddMetaStoredBytes, transaction);
             }
 
-            SchemaVersion = version;
-            ArticleCount = reader.GetInt64(1);
+            if (!ColumnExists(connection, "ArticleIndex", "AccessCount", transaction))
+            {
+                Execute(connection, ArticleIndexSql.AddAccessCount, transaction);
+            }
+
+            if (!ColumnExists(connection, "ArticleIndex", "ArtSizeBytes", transaction))
+            {
+                Execute(connection, ArticleIndexSql.AddArtSizeBytes, transaction);
+            }
+        }
+
+        /// <summary>Returns whether a table already has a column.</summary>
+        private static bool ColumnExists(
+            SqliteConnection connection,
+            string table,
+            string column,
+            SqliteTransaction? transaction = null)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = $"PRAGMA table_info({table});";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>Prepares the writer statements used for every batch and for the startup scan.</summary>
@@ -585,6 +809,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             _insert = Prepare(connection, ArticleIndexSql.Insert);
             AddBlob(_insert, "$hash");
             _insert.Parameters.Add("$received", SqliteType.Integer);
+            _insert.Parameters.Add("$artSize", SqliteType.Integer);
 
             _import = Prepare(connection, ArticleIndexSql.Import);
             AddBlob(_import, "$hash");
@@ -592,6 +817,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             _import.Parameters.Add("$accessed", SqliteType.Integer);
 
             _touch = Prepare(connection, ArticleIndexSql.Touch);
+            _touch.Parameters.Add("$delta", SqliteType.Integer);
             _touch.Parameters.Add("$accessed", SqliteType.Integer);
             AddBlob(_touch, "$hash");
 
@@ -600,6 +826,12 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
 
             _countUpdate = Prepare(connection, ArticleIndexSql.AddCount);
             _countUpdate.Parameters.Add("$delta", SqliteType.Integer);
+
+            _storedBytesUpdate = Prepare(connection, ArticleIndexSql.AddStoredBytes);
+            _storedBytesUpdate.Parameters.Add("$delta", SqliteType.Integer);
+
+            _evictDelete = Prepare(connection, ArticleIndexSql.EvictDelete);
+            AddBlob(_evictDelete, "$hash");
 
             _load = Prepare(connection, ArticleIndexSql.LoadHashes);
         }
@@ -634,6 +866,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                             slot.Lookup.Dispose();
                             slot.Oldest.Dispose();
                             slot.Before.Dispose();
+                            slot.Lfu.Dispose();
                             slot.Scan.Dispose();
                             slot.Connection.Dispose();
                         }
@@ -664,6 +897,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             SqliteCommand? lookup = null;
             SqliteCommand? oldest = null;
             SqliteCommand? before = null;
+            SqliteCommand? lfu = null;
             SqliteCommand? scan = null;
             try
             {
@@ -679,6 +913,8 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 before = Prepare(connection, ArticleIndexSql.AccessedBefore);
                 before.Parameters.Add("$threshold", SqliteType.Integer);
                 before.Parameters.Add("$limit", SqliteType.Integer);
+                lfu = Prepare(connection, ArticleIndexSql.LeastFrequentlyUsed);
+                lfu.Parameters.Add("$limit", SqliteType.Integer);
                 scan = Prepare(connection, ArticleIndexSql.ScanLocations);
                 _readers![index] = new ReadSlot(
                     index,
@@ -686,6 +922,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     lookup,
                     oldest,
                     before,
+                    lfu,
                     scan,
                     new byte[ArticleIndexSettings.HashLength]);
                 _freeReaders!.Push(index);
@@ -694,6 +931,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             catch
             {
                 scan?.Dispose();
+                lfu?.Dispose();
                 before?.Dispose();
                 oldest?.Dispose();
                 lookup?.Dispose();
@@ -738,6 +976,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 slot.Lookup.Dispose();
                 slot.Oldest.Dispose();
                 slot.Before.Dispose();
+                slot.Lfu.Dispose();
                 slot.Scan.Dispose();
                 slot.Connection.Dispose();
             }
@@ -753,12 +992,16 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             _touch?.Dispose();
             _exists?.Dispose();
             _countUpdate?.Dispose();
+            _storedBytesUpdate?.Dispose();
+            _evictDelete?.Dispose();
             _load?.Dispose();
             _insert = null;
             _import = null;
             _touch = null;
             _exists = null;
             _countUpdate = null;
+            _storedBytesUpdate = null;
+            _evictDelete = null;
             _load = null;
         }
 
@@ -818,6 +1061,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <param name="Lookup">Primary-key lookup.</param>
         /// <param name="Oldest">Oldest rows.</param>
         /// <param name="Before">Rows at or before an access time.</param>
+        /// <param name="Lfu">Least-frequently-used rows.</param>
         /// <param name="Scan">Hash and spool scan.</param>
         /// <param name="Hash">Reusable 32-byte buffer. It is not shared with another slot.</param>
         private readonly record struct ReadSlot(
@@ -826,6 +1070,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             SqliteCommand Lookup,
             SqliteCommand Oldest,
             SqliteCommand Before,
+            SqliteCommand Lfu,
             SqliteCommand Scan,
             byte[] Hash);
     }
@@ -833,74 +1078,109 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
     /// <summary>Literal SQL for the article index. Values are bound, not interpolated.</summary>
     internal static class ArticleIndexSql
     {
-        /// <summary>Version and article-count row.</summary>
+        /// <summary>Version, article-count, and stored-byte row.</summary>
         internal const string CreateMeta =
             """
             CREATE TABLE IF NOT EXISTS ArticleIndexMeta (
                 Id INTEGER NOT NULL CONSTRAINT PK_ArticleIndexMeta PRIMARY KEY CHECK (Id = 1),
                 SchemaVersion INTEGER NOT NULL,
-                ArticleCount INTEGER NOT NULL CHECK (ArticleCount >= 0)
+                ArticleCount INTEGER NOT NULL CHECK (ArticleCount >= 0),
+                StoredBytes INTEGER NOT NULL DEFAULT 0 CHECK (StoredBytes >= 0)
             ) WITHOUT ROWID;
             """;
 
-        /// <summary>Article rows keyed by the 32-byte BLAKE3 digest.</summary>
+        /// <summary>Article rows keyed by the 32-byte BLAKE3 digest (schema version 3 shape).</summary>
+        /// <remarks>
+        /// <c>CREATE TABLE IF NOT EXISTS</c> leaves a pre-existing version-2 table unchanged;
+        /// <see cref="ArticleIndexDatabase"/> then adds missing columns via <c>ALTER TABLE</c>.
+        /// </remarks>
         internal const string CreateArticles =
             """
             CREATE TABLE IF NOT EXISTS ArticleIndex (
                 MessageIdHash BLOB NOT NULL CONSTRAINT PK_ArticleIndex PRIMARY KEY,
                 ReceivedAt INTEGER NOT NULL,
                 LastAccessedAt INTEGER NOT NULL,
+                AccessCount INTEGER NOT NULL DEFAULT 1 CHECK (AccessCount >= 1),
+                ArtSizeBytes INTEGER NOT NULL DEFAULT 0 CHECK (ArtSizeBytes >= 0),
                 CONSTRAINT CK_ArticleIndex_HashLength CHECK (length(MessageIdHash) = 32),
                 CONSTRAINT CK_ArticleIndex_Received CHECK (ReceivedAt >= 0),
                 CONSTRAINT CK_ArticleIndex_Accessed CHECK (LastAccessedAt >= 0)
             ) WITHOUT ROWID;
             """;
 
-        /// <summary>Supports oldest-access and access-threshold scans.</summary>
-        internal const string CreateAccessIndex =
+        /// <summary>LFU eviction ordering index.</summary>
+        internal const string CreateLfuIndex =
             """
-            CREATE INDEX IF NOT EXISTS IX_ArticleIndex_LastAccessedAt
-            ON ArticleIndex (LastAccessedAt);
+            CREATE INDEX IF NOT EXISTS IX_ArticleIndex_Lfu
+            ON ArticleIndex (AccessCount, LastAccessedAt, MessageIdHash);
             """;
 
-        /// <summary>Inserts schema version 2 when the metadata row is absent.</summary>
+        internal const string DropLastAccessedIndex =
+            """
+            DROP INDEX IF EXISTS IX_ArticleIndex_LastAccessedAt;
+            """;
+
+        internal const string AddMetaStoredBytes =
+            """
+            ALTER TABLE ArticleIndexMeta ADD COLUMN StoredBytes INTEGER NOT NULL DEFAULT 0;
+            """;
+
+        internal const string AddAccessCount =
+            """
+            ALTER TABLE ArticleIndex ADD COLUMN AccessCount INTEGER NOT NULL DEFAULT 1;
+            """;
+
+        internal const string AddArtSizeBytes =
+            """
+            ALTER TABLE ArticleIndex ADD COLUMN ArtSizeBytes INTEGER NOT NULL DEFAULT 0;
+            """;
+
+        internal const string SetSchemaVersion3 =
+            """
+            UPDATE ArticleIndexMeta SET SchemaVersion = 3 WHERE Id = 1;
+            """;
+
+        /// <summary>Inserts schema version 3 when the metadata row is absent.</summary>
         internal const string InsertMeta =
             """
-            INSERT INTO ArticleIndexMeta (Id, SchemaVersion, ArticleCount)
-            VALUES (1, 2, 0)
+            INSERT INTO ArticleIndexMeta (Id, SchemaVersion, ArticleCount, StoredBytes)
+            VALUES (1, 3, 0, 0)
             ON CONFLICT(Id) DO NOTHING;
             """;
 
-        /// <summary>Reads the schema version and article count.</summary>
+        /// <summary>Reads the schema version, article count, and stored-byte total.</summary>
         internal const string ReadMeta =
             """
-            SELECT SchemaVersion, ArticleCount FROM ArticleIndexMeta WHERE Id = 1;
+            SELECT SchemaVersion, ArticleCount, StoredBytes FROM ArticleIndexMeta WHERE Id = 1;
             """;
 
-        /// <summary>Inserts a new article. A conflict keeps <c>ReceivedAt</c> and <c>LastAccessedAt</c>.</summary>
+        /// <summary>Inserts a new article. A conflict keeps the original row.</summary>
         internal const string Insert =
             """
-            INSERT INTO ArticleIndex (MessageIdHash, ReceivedAt, LastAccessedAt)
-            VALUES ($hash, $received, $received)
+            INSERT INTO ArticleIndex (MessageIdHash, ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes)
+            VALUES ($hash, $received, $received, 1, $artSize)
             ON CONFLICT(MessageIdHash) DO UPDATE SET
                 ReceivedAt = ArticleIndex.ReceivedAt,
-                LastAccessedAt = ArticleIndex.LastAccessedAt;
+                LastAccessedAt = ArticleIndex.LastAccessedAt,
+                AccessCount = ArticleIndex.AccessCount,
+                ArtSizeBytes = ArticleIndex.ArtSizeBytes;
             """;
 
         /// <summary>Inserts a migrated row with its original receipt and access times.</summary>
         internal const string Import =
             """
-            INSERT INTO ArticleIndex (MessageIdHash, ReceivedAt, LastAccessedAt)
-            VALUES ($hash, $received, $accessed)
+            INSERT INTO ArticleIndex (MessageIdHash, ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes)
+            VALUES ($hash, $received, $accessed, 1, 0)
             ON CONFLICT(MessageIdHash) DO NOTHING;
             """;
 
-        /// <summary>Moves the access time forward. <c>ReceivedAt</c> is not assigned.</summary>
+        /// <summary>Increments access count and moves the access time forward when newer.</summary>
         internal const string Touch =
             """
             UPDATE ArticleIndex
-            SET LastAccessedAt = $accessed
-            WHERE MessageIdHash = $hash AND LastAccessedAt < $accessed;
+            SET AccessCount = AccessCount + $delta,
+                LastAccessedAt = CASE WHEN LastAccessedAt < $accessed THEN $accessed ELSE LastAccessedAt END
+            WHERE MessageIdHash = $hash;
             """;
 
         /// <summary>Distinguishes a missing touch from an unchanged row.</summary>
@@ -915,6 +1195,20 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
             UPDATE ArticleIndexMeta SET ArticleCount = ArticleCount + $delta WHERE Id = 1;
             """;
 
+        /// <summary>Adjusts the metadata stored-byte total in the same transaction as row changes.</summary>
+        internal const string AddStoredBytes =
+            """
+            UPDATE ArticleIndexMeta SET StoredBytes = StoredBytes + $delta WHERE Id = 1;
+            """;
+
+        /// <summary>Deletes one evicted row and returns its indexed size.</summary>
+        internal const string EvictDelete =
+            """
+            DELETE FROM ArticleIndex
+            WHERE MessageIdHash = $hash
+            RETURNING ArtSizeBytes;
+            """;
+
         /// <summary>Startup membership scan. No other columns are selected.</summary>
         internal const string LoadHashes =
             """
@@ -924,7 +1218,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Primary-key location lookup.</summary>
         internal const string Lookup =
             """
-            SELECT ReceivedAt, LastAccessedAt
+            SELECT ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes
             FROM ArticleIndex
             WHERE MessageIdHash = $hash;
             """;
@@ -932,19 +1226,28 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
         /// <summary>Oldest committed rows.</summary>
         internal const string Oldest =
             """
-            SELECT MessageIdHash, ReceivedAt, LastAccessedAt
+            SELECT MessageIdHash, ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes
             FROM ArticleIndex
-            ORDER BY LastAccessedAt
+            ORDER BY LastAccessedAt, MessageIdHash
             LIMIT $limit;
             """;
 
         /// <summary>Rows whose access time is at or before a threshold, oldest first.</summary>
         internal const string AccessedBefore =
             """
-            SELECT MessageIdHash, ReceivedAt, LastAccessedAt
+            SELECT MessageIdHash, ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes
             FROM ArticleIndex
             WHERE LastAccessedAt <= $threshold
-            ORDER BY LastAccessedAt
+            ORDER BY LastAccessedAt, MessageIdHash
+            LIMIT $limit;
+            """;
+
+        /// <summary>LFU rows with recency and hash tie-breakers.</summary>
+        internal const string LeastFrequentlyUsed =
+            """
+            SELECT MessageIdHash, ReceivedAt, LastAccessedAt, AccessCount, ArtSizeBytes
+            FROM ArticleIndex
+            ORDER BY AccessCount, LastAccessedAt, MessageIdHash
             LIMIT $limit;
             """;
 

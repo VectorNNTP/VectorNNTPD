@@ -9,6 +9,7 @@
     "BindPortTls": 1191,
     "GracefulShutdownTimeout": "00:00:30",
     "Listener": {
+      "ArticleReceiveTimeoutSeconds": 300,
       "IoProgressTimeoutSeconds": 60,
       "MaxActiveConnections": 1024,
       "ParserAccumulationMaxBytes": 262144,

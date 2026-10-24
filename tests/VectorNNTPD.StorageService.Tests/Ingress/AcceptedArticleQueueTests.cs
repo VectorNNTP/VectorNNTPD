@@ -114,7 +114,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
         }
 
         [Fact]
-        public async Task Byte_budget_rejects_an_enqueue_until_a_dequeue_frees_space()
+        public async Task Byte_budget_rejects_an_enqueue_until_processed_bytes_are_released()
         {
             var queue = new AcceptedArticleQueue(10, TimeProvider.System);
             var first = new AcceptedArticle(default, 1, 6, new byte[6]);
@@ -126,12 +126,19 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
 
             var delivery = await queue.DequeueAsync(CancellationToken.None);
             Assert.True(delivery.HasArticle);
+            Assert.Equal(0, queue.QueuedBytes);
+            Assert.Equal(6, queue.InFlightBytes);
+            Assert.Equal(6, queue.AccountedBytes);
+            // Dequeue alone must not free admission budget (capacity-blocked holds stay accounted).
+            Assert.False(queue.TryEnqueue(second));
+            queue.ReleaseProcessed(delivery.Article.ArtSize);
+            Assert.Equal(0, queue.AccountedBytes);
             Assert.True(queue.TryEnqueue(second));
             Assert.Equal(6, queue.QueuedBytes);
         }
 
         [Fact]
-        public void TryDequeue_releases_the_byte_budget_and_does_not_wait()
+        public void TryDequeue_moves_bytes_to_in_flight_until_ReleaseProcessed()
         {
             var queue = new AcceptedArticleQueue(10, TimeProvider.System);
             var first = new AcceptedArticle(default, 1, 6, new byte[6]);
@@ -145,7 +152,10 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             Assert.True(delivery.HasArticle);
             Assert.Equal(6, delivery.Article.ArtSize);
             Assert.Equal(0, queue.QueuedBytes);
+            Assert.Equal(6, queue.InFlightBytes);
             Assert.Equal(1, queue.DequeuedCount);
+            Assert.False(queue.TryEnqueue(second));
+            queue.ReleaseProcessed(delivery.Article.ArtSize);
             Assert.True(queue.TryEnqueue(second));
             Assert.Equal(6, queue.QueuedBytes);
 
@@ -154,6 +164,32 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             Assert.True(drained.HasArticle);
             Assert.False(queue.TryDequeue(out _));
             Assert.Equal(0, queue.QueuedBytes);
+            Assert.Equal(6, queue.InFlightBytes);
+            queue.ReleaseProcessed(drained.Article.ArtSize);
+            Assert.Equal(0, queue.AccountedBytes);
+        }
+
+        [Fact]
+        public void Held_in_flight_articles_keep_accounted_budget_under_capacity_blockage()
+        {
+            var queue = new AcceptedArticleQueue(100, TimeProvider.System);
+            Assert.True(queue.TryEnqueue(new AcceptedArticle(default, 1, 40, new byte[40])));
+            Assert.True(queue.TryEnqueue(new AcceptedArticle(default, 2, 40, new byte[40])));
+            Assert.True(queue.TryEnqueue(new AcceptedArticle(default, 3, 20, new byte[20])));
+            Assert.Equal(100, queue.AccountedBytes);
+
+            Assert.True(queue.TryDequeue(out var a));
+            Assert.True(queue.TryDequeue(out var b));
+            Assert.Equal(20, queue.QueuedBytes);
+            Assert.Equal(80, queue.InFlightBytes);
+            Assert.Equal(100, queue.AccountedBytes);
+            Assert.False(queue.TryEnqueue(new AcceptedArticle(default, 4, 1, new byte[1])));
+
+            queue.ReleaseProcessed(a.Article.ArtSize);
+            Assert.Equal(60, queue.AccountedBytes);
+            Assert.True(queue.TryEnqueue(new AcceptedArticle(default, 4, 40, new byte[40])));
+            Assert.Equal(100, queue.AccountedBytes);
+            queue.ReleaseProcessed(b.Article.ArtSize);
         }
 
         [Fact]
@@ -170,6 +206,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     if ((index & 1) == 0 && queue.TryDequeue(out var ready))
                     {
                         Assert.True(seen.TryAdd(ready.Article.ArtSize, 0));
+                        queue.ReleaseProcessed(ready.Article.ArtSize);
                         continue;
                     }
 
@@ -179,6 +216,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                         if (delivery.HasArticle)
                         {
                             Assert.True(seen.TryAdd(delivery.Article.ArtSize, 0));
+                            queue.ReleaseProcessed(delivery.Article.ArtSize);
                         }
                     }
                     catch (OperationCanceledException) when (started.IsCancellationRequested)
@@ -197,6 +235,8 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             await Task.WhenAll(consumers);
             Assert.Equal(count, seen.Count);
             Assert.Equal(0, queue.QueuedBytes);
+            Assert.Equal(0, queue.InFlightBytes);
+            Assert.Equal(0, queue.AccountedBytes);
             Assert.Equal(count, queue.DequeuedCount);
         }
 
