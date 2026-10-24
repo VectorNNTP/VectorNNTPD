@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.StorageService;
 using Xunit.Abstractions;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
@@ -296,9 +298,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
 
                             Interlocked.Increment(ref done);
                         }
-                        catch (Exception)
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                         {
                             Interlocked.Increment(ref fail);
+                            ExpectedException.Ignore(ex);
                         }
                     }
                 });
@@ -312,20 +315,21 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         private static void OpMinimalCreateNew(string path, StageMetrics metrics)
         {
             var totalStart = Stopwatch.GetTimestamp();
-            var openStart = totalStart;
-            var stream = new FileStream(
+            long openEnd;
+            using (new FileStream(
                 path,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.None,
                 bufferSize: 128 * 1024,
-                FileOptions.SequentialScan);
-            var openEnd = Stopwatch.GetTimestamp();
-            var openMs = Ms(openEnd - openStart);
-            var closeStart = openEnd;
-            stream.Dispose();
+                FileOptions.SequentialScan))
+            {
+                openEnd = Stopwatch.GetTimestamp();
+            }
+
             var closeEnd = Stopwatch.GetTimestamp();
-            var closeMs = Ms(closeEnd - closeStart);
+            var openMs = Ms(openEnd - totalStart);
+            var closeMs = Ms(closeEnd - openEnd);
             var totalMs = Ms(closeEnd - totalStart);
             metrics.Record(openMs, writeMs: 0, flushMs: 0, moveMs: 0, closeMs, totalMs, openEnd);
         }
@@ -334,31 +338,29 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var totalStart = Stopwatch.GetTimestamp();
             var temp = final + ".writing-" + Guid.NewGuid().ToString("N");
-            var openStart = Stopwatch.GetTimestamp();
-            var stream = new FileStream(
+            long openEnd;
+            long writeEnd;
+            long flushEnd;
+            using (var stream = new FileStream(
                 temp,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.None,
                 bufferSize: 128 * 1024,
-                FileOptions.SequentialScan);
-            var openEnd = Stopwatch.GetTimestamp();
-            var openMs = Ms(openEnd - openStart);
+                FileOptions.SequentialScan))
+            {
+                openEnd = Stopwatch.GetTimestamp();
+                stream.Write(payload);
+                writeEnd = Stopwatch.GetTimestamp();
+                stream.Flush(flushToDisk: false);
+                flushEnd = Stopwatch.GetTimestamp();
+            }
 
-            var writeStart = openEnd;
-            stream.Write(payload);
-            var writeEnd = Stopwatch.GetTimestamp();
-            var writeMs = Ms(writeEnd - writeStart);
-
-            var flushStart = writeEnd;
-            stream.Flush(flushToDisk: false);
-            var flushEnd = Stopwatch.GetTimestamp();
-            var flushMs = Ms(flushEnd - flushStart);
-
-            var closeStart = flushEnd;
-            stream.Dispose();
             var closeEnd = Stopwatch.GetTimestamp();
-            var closeMs = Ms(closeEnd - closeStart);
+            var openMs = Ms(openEnd - totalStart);
+            var writeMs = Ms(writeEnd - openEnd);
+            var flushMs = Ms(flushEnd - writeEnd);
+            var closeMs = Ms(closeEnd - flushEnd);
 
             var moveStart = closeEnd;
             File.Move(temp, final, overwrite: true);
@@ -372,32 +374,30 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var totalStart = Stopwatch.GetTimestamp();
             // Open existing (not CreateNew): isolates write/flush/close from create.
-            var openStart = totalStart;
-            var stream = new FileStream(
+            long openEnd;
+            long writeEnd;
+            long flushEnd;
+            using (var stream = new FileStream(
                 path,
                 FileMode.Open,
                 FileAccess.Write,
                 FileShare.None,
                 bufferSize: 128 * 1024,
-                FileOptions.SequentialScan);
-            var openEnd = Stopwatch.GetTimestamp();
-            var openMs = Ms(openEnd - openStart);
+                FileOptions.SequentialScan))
+            {
+                openEnd = Stopwatch.GetTimestamp();
+                stream.SetLength(0);
+                stream.Write(payload);
+                writeEnd = Stopwatch.GetTimestamp();
+                stream.Flush(flushToDisk: false);
+                flushEnd = Stopwatch.GetTimestamp();
+            }
 
-            var writeStart = openEnd;
-            stream.SetLength(0);
-            stream.Write(payload);
-            var writeEnd = Stopwatch.GetTimestamp();
-            var writeMs = Ms(writeEnd - writeStart);
-
-            var flushStart = writeEnd;
-            stream.Flush(flushToDisk: false);
-            var flushEnd = Stopwatch.GetTimestamp();
-            var flushMs = Ms(flushEnd - flushStart);
-
-            var closeStart = flushEnd;
-            stream.Dispose();
             var closeEnd = Stopwatch.GetTimestamp();
-            var closeMs = Ms(closeEnd - closeStart);
+            var openMs = Ms(openEnd - totalStart);
+            var writeMs = Ms(writeEnd - openEnd);
+            var flushMs = Ms(flushEnd - writeEnd);
+            var closeMs = Ms(closeEnd - flushEnd);
             var totalMs = Ms(closeEnd - totalStart);
             metrics.Record(openMs, writeMs, flushMs, moveMs: 0, closeMs, totalMs, openEnd);
         }

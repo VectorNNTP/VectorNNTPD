@@ -81,13 +81,12 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
             var list = new List<SpoolCapacityState>(_entries.Count);
             foreach (var device in _catalog.Devices)
             {
-                foreach (var path in device.PoolPaths)
-                {
-                    if (_entries.TryGetValue(Canonical(path), out var entry))
-                    {
-                        list.Add(entry.Snapshot());
-                    }
-                }
+                list.AddRange(
+                    device.PoolPaths
+                        .Select(Canonical)
+                        .Select(path => _entries.TryGetValue(path, out var entry) ? entry : null)
+                        .Where(static entry => entry is not null)
+                        .Select(static entry => entry!.Snapshot()));
             }
 
             return list.ToArray();
@@ -160,9 +159,8 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
         {
             foreach (var device in _catalog.Devices)
             {
-                foreach (var path in device.PoolPaths)
+                foreach (var canonical in device.PoolPaths.Select(Canonical))
                 {
-                    var canonical = Canonical(path);
                     _entries.GetOrAdd(canonical, static (p, id) => new Entry(p, id), device.DeviceId);
                 }
             }

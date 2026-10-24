@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Articles.Parsing;
+using VectorNNTPD.StorageService;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.StorageService.Ingress;
 using VectorNNTPD.StorageService.Listener;
@@ -205,6 +206,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             }
             catch (Exception ex) when (ex is ChannelClosedException or EndOfStreamException)
             {
+                ExpectedException.Ignore(ex);
             }
 
             Assert.Equal(1, queue.QueuedCount);
@@ -404,6 +406,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                 }
                 catch (Exception ex) when (ex is ChannelClosedException or EndOfStreamException or OperationCanceledException)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
 
@@ -439,6 +442,7 @@ namespace VectorNNTPD.StorageService.Tests.Listener
                     or EndOfStreamException
                     or ChannelClosedException)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 await Transport.DisposeAsync();

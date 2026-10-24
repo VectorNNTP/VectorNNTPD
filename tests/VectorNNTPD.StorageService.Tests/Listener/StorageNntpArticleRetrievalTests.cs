@@ -268,12 +268,12 @@ namespace VectorNNTPD.StorageService.Tests.Listener
             var count = 0;
             for (var i = 0; i < article.Length - 2; i++)
             {
-                if (article[i] == (byte)'.' && article[i + 1] == (byte)'\r' && article[i + 2] == (byte)'\n')
+                if (article[i] == (byte)'.'
+                    && article[i + 1] == (byte)'\r'
+                    && article[i + 2] == (byte)'\n'
+                    && (i == 0 || article[i - 1] == (byte)'\n'))
                 {
-                    if (i == 0 || article[i - 1] == (byte)'\n')
-                    {
-                        count++;
-                    }
+                    count++;
                 }
             }
 

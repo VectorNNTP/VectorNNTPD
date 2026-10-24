@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.StorageService;
 using Xunit.Abstractions;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
@@ -117,7 +119,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             using var store = B2PrototypeStore.Create();
             var payload = CreatePayload(16 * 1024);
             var kinds = new ConcurrentBag<B2PublishKind>();
-            var barrier = new Barrier(4);
+            using var barrier = new Barrier(4);
             var tasks = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
             {
                 barrier.SignalAndWait();
@@ -287,12 +289,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var nextId = 0;
             var logicalIds = new ConcurrentBag<string>();
 
-            B2PrototypeStore? b2 = null;
-            if (variant == BenchVariant.ImmutableBlobVisibility)
-            {
-                b2 = B2PrototypeStore.Create(Path.Join(runDir, "b2"));
-            }
-            else
+            using var b2 = variant == BenchVariant.ImmutableBlobVisibility
+                ? B2PrototypeStore.Create(Path.Join(runDir, "b2"))
+                : null;
+            if (b2 is null)
             {
                 PrecreateShards(runDir);
             }
@@ -303,150 +303,129 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var cpuStart = process.TotalProcessorTime;
             var wall = Stopwatch.StartNew();
 
-            try
+            var tasks = new Task[workers];
+            for (var w = 0; w < workers; w++)
             {
-                var tasks = new Task[workers];
-                for (var w = 0; w < workers; w++)
+                tasks[w] = Task.Run(() =>
                 {
-                    tasks[w] = Task.Run(() =>
+                    while (true)
                     {
-                        while (true)
+                        var id = Interlocked.Increment(ref nextId);
+                        if (id > ops)
                         {
-                            var id = Interlocked.Increment(ref nextId);
-                            if (id > ops)
-                            {
-                                return;
-                            }
-
-                            var logical = $"art-{id:x8}";
-                            var e2eStart = Stopwatch.GetTimestamp();
-                            try
-                            {
-                                if (variant == BenchVariant.TempRename)
-                                {
-                                    var pubStart = Stopwatch.GetTimestamp();
-                                    var final = BuildTempRenameFinal(runDir, id);
-                                    PublishTempRename(final, payload);
-                                    publishMs.Add(Stopwatch.GetElapsedTime(pubStart).TotalMilliseconds);
-                                    visibilityMs.Add(0); // rename is the visibility act; timed inside publish
-
-                                    var retStart = Stopwatch.GetTimestamp();
-                                    if (!FileContentsEqual(final, payload))
-                                    {
-                                        Interlocked.Increment(ref errors);
-                                    }
-
-                                    retrieveMs.Add(Stopwatch.GetElapsedTime(retStart).TotalMilliseconds);
-                                    logicalIds.Add(final);
-                                }
-                                else
-                                {
-                                    var pubStart = Stopwatch.GetTimestamp();
-                                    var published = b2!.Publish(logical, payload, visibilityElapsedMs: out var visMs);
-                                    publishMs.Add(Stopwatch.GetElapsedTime(pubStart).TotalMilliseconds);
-                                    visibilityMs.Add(visMs);
-                                    if (published.Kind == B2PublishKind.Duplicate)
-                                    {
-                                        Interlocked.Increment(ref duplicates);
-                                    }
-                                    else if (published.Kind != B2PublishKind.Stored)
-                                    {
-                                        Interlocked.Increment(ref errors);
-                                        continue;
-                                    }
-
-                                    var retStart = Stopwatch.GetTimestamp();
-                                    // Same streaming content check as TempRename (map resolve + FileContentsEqual).
-                                    if (!b2.TryResolveVisibleBlobPath(logical, out var blobPath)
-                                        || !FileContentsEqual(blobPath, payload))
-                                    {
-                                        Interlocked.Increment(ref errors);
-                                    }
-
-                                    retrieveMs.Add(Stopwatch.GetElapsedTime(retStart).TotalMilliseconds);
-                                    logicalIds.Add(logical);
-                                }
-
-                                e2eMs.Add(Stopwatch.GetElapsedTime(e2eStart).TotalMilliseconds);
-                            }
-                            catch
-                            {
-                                Interlocked.Increment(ref errors);
-                            }
+                            return;
                         }
-                    });
-                }
 
-                Task.WaitAll(tasks);
-                wall.Stop();
+                        var logical = $"art-{id:x8}";
+                        var e2eStart = Stopwatch.GetTimestamp();
+                        try
+                        {
+                            if (variant == BenchVariant.TempRename)
+                            {
+                                var pubStart = Stopwatch.GetTimestamp();
+                                var final = BuildTempRenameFinal(runDir, id);
+                                PublishTempRename(final, payload);
+                                publishMs.Add(Stopwatch.GetElapsedTime(pubStart).TotalMilliseconds);
+                                visibilityMs.Add(0); // rename is the visibility act; timed inside publish
 
-                if (b2 is not null)
-                {
-                    orphanCount = b2.ListInvisibleBlobFiles().Count;
-                }
+                                var retStart = Stopwatch.GetTimestamp();
+                                if (!FileContentsEqual(final, payload))
+                                {
+                                    Interlocked.Increment(ref errors);
+                                }
 
-                var verified = 0;
-                var verifyFail = 0;
-                foreach (var key in logicalIds.Take(VerifySample))
-                {
-                    bool ok;
-                    if (variant == BenchVariant.TempRename)
-                    {
-                        ok = FileContentsEqual(key, payload);
+                                retrieveMs.Add(Stopwatch.GetElapsedTime(retStart).TotalMilliseconds);
+                                logicalIds.Add(final);
+                            }
+                            else
+                            {
+                                var pubStart = Stopwatch.GetTimestamp();
+                                var published = b2!.Publish(logical, payload, visibilityElapsedMs: out var visMs);
+                                publishMs.Add(Stopwatch.GetElapsedTime(pubStart).TotalMilliseconds);
+                                visibilityMs.Add(visMs);
+                                if (published.Kind == B2PublishKind.Duplicate)
+                                {
+                                    Interlocked.Increment(ref duplicates);
+                                }
+                                else if (published.Kind != B2PublishKind.Stored)
+                                {
+                                    Interlocked.Increment(ref errors);
+                                    continue;
+                                }
+
+                                var retStart = Stopwatch.GetTimestamp();
+                                // Same streaming content check as TempRename (map resolve + FileContentsEqual).
+                                if (!b2.TryResolveVisibleBlobPath(logical, out var blobPath)
+                                    || !FileContentsEqual(blobPath, payload))
+                                {
+                                    Interlocked.Increment(ref errors);
+                                }
+
+                                retrieveMs.Add(Stopwatch.GetElapsedTime(retStart).TotalMilliseconds);
+                                logicalIds.Add(logical);
+                            }
+
+                            e2eMs.Add(Stopwatch.GetElapsedTime(e2eStart).TotalMilliseconds);
+                        }
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+                        {
+                            Interlocked.Increment(ref errors);
+                            ExpectedException.Ignore(ex);
+                        }
                     }
-                    else
-                    {
-                        ok = b2!.TryResolveVisibleBlobPath(key, out var blobPath)
-                            && FileContentsEqual(blobPath, payload);
-                    }
-
-                    if (ok)
-                    {
-                        verified++;
-                    }
-                    else
-                    {
-                        verifyFail++;
-                    }
-                }
-
-                process.Refresh();
-                var wsEnd = process.WorkingSet64;
-                var cpu = process.TotalProcessorTime - cpuStart;
-                var cpuPct = wall.Elapsed.TotalMilliseconds > 0
-                    ? 100d * cpu.TotalMilliseconds / (wall.Elapsed.TotalMilliseconds * Environment.ProcessorCount)
-                    : 0d;
-
-                var completed = logicalIds.Count;
-                var pubArr = ToSorted(publishMs);
-                var visArr = ToSorted(visibilityMs);
-                var retArr = ToSorted(retrieveMs);
-                var e2eArr = ToSorted(e2eMs);
-                var pubPerSec = completed / Math.Max(wall.Elapsed.TotalSeconds, 0.001);
-                var retPerSec = retrieveMs.Count / Math.Max(wall.Elapsed.TotalSeconds, 0.001);
-
-                Emit(
-                    $"b2vis-result variant={variant} repeat={repeat} opsRequested={ops} completed={completed} "
-                    + $"errors={errors} duplicates={duplicates} orphanInvisibleBlobs={orphanCount} "
-                    + $"workers={workers} wallMs={wall.Elapsed.TotalMilliseconds:0} "
-                    + $"publishOpsPerSec={pubPerSec:0.00} retrieveOpsPerSec={retPerSec:0.00} "
-                    + $"articleBytes={ArticleBytes} bytesWritten={completed * (long)ArticleBytes} "
-                    + $"publishMs_p50={Pct(pubArr, 0.50):0.000} p95={Pct(pubArr, 0.95):0.000} p99={Pct(pubArr, 0.99):0.000} avg={Avg(pubArr):0.000} "
-                    + $"visibilityMs_p50={Pct(visArr, 0.50):0.000} p95={Pct(visArr, 0.95):0.000} avg={Avg(visArr):0.000} "
-                    + $"retrieveMs_p50={Pct(retArr, 0.50):0.000} p95={Pct(retArr, 0.95):0.000} p99={Pct(retArr, 0.99):0.000} avg={Avg(retArr):0.000} "
-                    + $"e2ePublishRetrieveMs_p50={Pct(e2eArr, 0.50):0.000} p95={Pct(e2eArr, 0.95):0.000} p99={Pct(e2eArr, 0.99):0.000} "
-                    + $"verifySample={VerifySample} verifiedOk={verified} verifyFail={verifyFail} "
-                    + $"wsStart={wsStart} wsEnd={wsEnd} wsPeakObserved={Math.Max(wsStart, wsEnd)} "
-                    + $"cpuMs={cpu.TotalMilliseconds:0} cpuPctOfMachine={cpuPct:0.0} runDir={runDir}");
-
-                Assert.Equal(0, errors);
-                Assert.Equal(0, verifyFail);
-                Assert.Equal(ops, completed);
+                });
             }
-            finally
+
+            Task.WaitAll(tasks);
+            wall.Stop();
+
+            if (b2 is not null)
             {
-                b2?.Dispose();
+                orphanCount = b2.ListInvisibleBlobFiles().Count;
             }
+
+            var verifyResults = logicalIds
+                .Take(VerifySample)
+                .Select(key => variant == BenchVariant.TempRename
+                    ? FileContentsEqual(key, payload)
+                    : b2!.TryResolveVisibleBlobPath(key, out var blobPath)
+                        && FileContentsEqual(blobPath, payload))
+                .ToArray();
+            var verified = verifyResults.Count(static ok => ok);
+            var verifyFail = verifyResults.Length - verified;
+
+            process.Refresh();
+            var wsEnd = process.WorkingSet64;
+            var cpu = process.TotalProcessorTime - cpuStart;
+            var cpuPct = wall.Elapsed.TotalMilliseconds > 0
+                ? 100d * cpu.TotalMilliseconds / (wall.Elapsed.TotalMilliseconds * Environment.ProcessorCount)
+                : 0d;
+
+            var completed = logicalIds.Count;
+            var pubArr = ToSorted(publishMs);
+            var visArr = ToSorted(visibilityMs);
+            var retArr = ToSorted(retrieveMs);
+            var e2eArr = ToSorted(e2eMs);
+            var pubPerSec = completed / Math.Max(wall.Elapsed.TotalSeconds, 0.001);
+            var retPerSec = retrieveMs.Count / Math.Max(wall.Elapsed.TotalSeconds, 0.001);
+
+            Emit(
+                $"b2vis-result variant={variant} repeat={repeat} opsRequested={ops} completed={completed} "
+                + $"errors={errors} duplicates={duplicates} orphanInvisibleBlobs={orphanCount} "
+                + $"workers={workers} wallMs={wall.Elapsed.TotalMilliseconds:0} "
+                + $"publishOpsPerSec={pubPerSec:0.00} retrieveOpsPerSec={retPerSec:0.00} "
+                + $"articleBytes={ArticleBytes} bytesWritten={completed * (long)ArticleBytes} "
+                + $"publishMs_p50={Pct(pubArr, 0.50):0.000} p95={Pct(pubArr, 0.95):0.000} p99={Pct(pubArr, 0.99):0.000} avg={Avg(pubArr):0.000} "
+                + $"visibilityMs_p50={Pct(visArr, 0.50):0.000} p95={Pct(visArr, 0.95):0.000} avg={Avg(visArr):0.000} "
+                + $"retrieveMs_p50={Pct(retArr, 0.50):0.000} p95={Pct(retArr, 0.95):0.000} p99={Pct(retArr, 0.99):0.000} avg={Avg(retArr):0.000} "
+                + $"e2ePublishRetrieveMs_p50={Pct(e2eArr, 0.50):0.000} p95={Pct(e2eArr, 0.95):0.000} p99={Pct(e2eArr, 0.99):0.000} "
+                + $"verifySample={VerifySample} verifiedOk={verified} verifyFail={verifyFail} "
+                + $"wsStart={wsStart} wsEnd={wsEnd} wsPeakObserved={Math.Max(wsStart, wsEnd)} "
+                + $"cpuMs={cpu.TotalMilliseconds:0} cpuPctOfMachine={cpuPct:0.0} runDir={runDir}");
+
+            Assert.Equal(0, errors);
+            Assert.Equal(0, verifyFail);
+            Assert.Equal(ops, completed);
         }
 
         private void RunVisibilityContentionProbe(string root, byte[] payload, int workers, int ops)
@@ -702,8 +681,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                     {
                         WriteBlob(blobPath, payload, hooks.FailAfterBytesWritten);
                     }
-                    catch
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
+                        ExpectedException.Ignore(ex);
                         return new B2PublishResult(B2PublishKind.Failed, blobId, blobPath);
                     }
 
@@ -841,8 +821,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                         Directory.Delete(_root, recursive: true);
                     }
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
 

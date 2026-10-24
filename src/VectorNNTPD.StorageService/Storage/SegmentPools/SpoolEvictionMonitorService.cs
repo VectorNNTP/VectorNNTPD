@@ -66,21 +66,17 @@ namespace VectorNNTPD.StorageService.Storage.SegmentPools
                 return Task.CompletedTask;
             }
 
-            foreach (var device in _catalog.Devices)
-            {
-                foreach (var path in device.PoolPaths)
-                {
-                    var monitor = new SpoolEvictionMonitor(
-                        path,
-                        device.DeviceId,
-                        _registry,
-                        _monitor,
-                        _services,
-                        _options,
-                        _loggerFactory.CreateLogger<SpoolEvictionMonitor>());
-                    _monitors.Add(monitor);
-                }
-            }
+            _monitors.AddRange(
+                _catalog.Devices.SelectMany(device =>
+                    device.PoolPaths.Select(path =>
+                        new SpoolEvictionMonitor(
+                            path,
+                            device.DeviceId,
+                            _registry,
+                            _monitor,
+                            _services,
+                            _options,
+                            _loggerFactory.CreateLogger<SpoolEvictionMonitor>()))));
 
             SpoolEvictionMonitorServiceLogMessages.SupervisorStarted(_logger, _monitors.Count);
             _monitor.CapacitySamplePublished += OnCapacitySample;

@@ -304,14 +304,7 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                     object? deletedSize;
                     using (var reader = evictDelete.ExecuteReader())
                     {
-                        if (!reader.Read())
-                        {
-                            deletedSize = null;
-                        }
-                        else
-                        {
-                            deletedSize = reader.GetInt64(0);
-                        }
+                        deletedSize = reader.Read() ? reader.GetInt64(0) : null;
                     }
 
                     if (deletedSize is null)
@@ -705,7 +698,6 @@ namespace VectorNNTPD.StorageService.Storage.ArticleIndex
                 if (version == 2)
                 {
                     Execute(connection, ArticleIndexSql.SetSchemaVersion3, transaction);
-                    version = ArticleIndexSettings.SchemaVersion;
                 }
                 else if (version != ArticleIndexSettings.SchemaVersion)
                 {

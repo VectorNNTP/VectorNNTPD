@@ -1146,9 +1146,11 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                         {
                             timing = await client.TakeThisTimedAsync(built).ConfigureAwait(false);
                         }
-                        catch (Exception)
+                        catch (Exception ex) when (
+                            ex is not OperationCanceledException && !ExceptionHelpers.IsFatal(ex))
                         {
                             Interlocked.Increment(ref transportFailed);
+                            ExpectedException.Ignore(ex);
                             continue;
                         }
 
@@ -1232,7 +1234,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
 
                 var payloadGbit = payloadBytes * 8d / Math.Max(sustainElapsed.TotalSeconds, 0.001) / 1_000_000_000d;
                 var payloadGbitCompleted = completed > 0
-                    ? (completed * (long)ArticleBytes * 8d) / Math.Max(sustainElapsed.TotalSeconds, 0.001) / 1_000_000_000d
+                    ? ((double)completed * ArticleBytes * 8d)
+                        / Math.Max(sustainElapsed.TotalSeconds, 0.001)
+                        / 1_000_000_000d
                     : 0d;
                 // Application framing bytes (TAKETHIS + article + terminator). TLS record overhead not measured.
                 var wireGbitEst = wireBytes * 8d / Math.Max(sustainElapsed.TotalSeconds, 0.001) / 1_000_000_000d;
@@ -1388,7 +1392,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         await sidecar.StopAsync().ConfigureAwait(false);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         Emit($"{label} sidecar-stop-warning {ex.GetType().Name}:{ex.Message}");
                     }
@@ -1400,7 +1404,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         await telemetry.StopAsync().ConfigureAwait(false);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         Emit($"{label} hostTelemetry-stop-warning {ex.GetType().Name}:{ex.Message}");
                     }
@@ -1427,9 +1431,10 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     Directory.Delete(runRoot, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
                     // Best-effort cleanup of the isolated run directory.
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -1489,8 +1494,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             {
                 Directory.Delete(runRoot, recursive: true);
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -1564,8 +1570,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             {
                 Directory.Delete(runRoot, recursive: true);
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                ExpectedException.Ignore(ex);
             }
         }
 
@@ -1707,8 +1714,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     Directory.Delete(root, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -1789,8 +1797,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     Directory.Delete(root, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -1838,8 +1847,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     Directory.Delete(root, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -1912,16 +1922,18 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     Directory.Delete(rootA, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
 
                 try
                 {
                     Directory.Delete(rootB, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    ExpectedException.Ignore(ex);
                 }
             }
         }
@@ -2161,10 +2173,11 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         await _loop.ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException ex)
                     {
+                        ExpectedException.Ignore(ex);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         _faults.Add($"{ex.GetType().Name}:{ex.Message}");
                     }
@@ -2229,7 +2242,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         return;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         _faults.Add($"{ex.GetType().Name}:{ex.Message}");
                     }
@@ -2414,10 +2427,11 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         await _loop.ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException ex)
                     {
+                        ExpectedException.Ignore(ex);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         _faults.Add($"{ex.GetType().Name}:{ex.Message}");
                     }
@@ -2443,40 +2457,41 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                             $"sidecar-{_runId}-{seq:D8}-{Environment.CurrentManagedThreadId}.tmp");
                         var totalStart = Stopwatch.GetTimestamp();
                         var openStart = totalStart;
-                        var stream = new FileStream(
+                        long openEnd;
+                        long closeEnd;
+                        using (new FileStream(
                             path,
                             FileMode.CreateNew,
                             FileAccess.Write,
                             FileShare.None,
                             bufferSize: 4096,
-                            FileOptions.SequentialScan);
-                        var openEnd = Stopwatch.GetTimestamp();
-                        var closeStart = openEnd;
-                        stream.Dispose();
-                        var closeEnd = Stopwatch.GetTimestamp();
+                            FileOptions.SequentialScan))
+                        {
+                            openEnd = Stopwatch.GetTimestamp();
+                        }
+
+                        closeEnd = Stopwatch.GetTimestamp();
                         var openMs = Ms(openEnd - openStart);
-                        var closeMs = Ms(closeEnd - closeStart);
+                        var closeMs = Ms(closeEnd - openEnd);
                         var totalMs = Ms(closeEnd - totalStart);
                         _openMs.Add(openMs);
                         _closeMs.Add(closeMs);
                         _totalMs.Add(totalMs);
                         Interlocked.Increment(ref _ops);
 
-                        if (openMs >= 10d || closeMs >= 10d || totalMs >= 10d)
+                        if ((openMs >= 10d || closeMs >= 10d || totalMs >= 10d)
+                            && _slowEvents.Count < EventCap)
                         {
-                            if (_slowEvents.Count < EventCap)
-                            {
-                                _slowEvents.Add(new SidecarOpEvent(
-                                    openMs,
-                                    closeMs,
-                                    totalMs,
-                                    openStart,
-                                    openEnd,
-                                    closeEnd,
-                                    Environment.CurrentManagedThreadId,
-                                    DateTime.UtcNow,
-                                    path));
-                            }
+                            _slowEvents.Add(new SidecarOpEvent(
+                                openMs,
+                                closeMs,
+                                totalMs,
+                                openStart,
+                                openEnd,
+                                closeEnd,
+                                Environment.CurrentManagedThreadId,
+                                DateTime.UtcNow,
+                                path));
                         }
 
                         try
@@ -2493,15 +2508,13 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     {
                         return;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                     {
                         _faults.Add($"{ex.GetType().Name}:{ex.Message}");
                     }
 
-                    var elapsed = TimeSpan.FromTicks(
-                        (long)((Stopwatch.GetTimestamp() - slotStart)
-                            * TimeSpan.TicksPerSecond
-                            / (double)Stopwatch.Frequency));
+                    var elapsed = TimeSpan.FromSeconds(
+                        (Stopwatch.GetTimestamp() - slotStart) / (double)Stopwatch.Frequency);
                     var remaining = interval - elapsed;
                     if (remaining > TimeSpan.Zero)
                     {
@@ -2567,16 +2580,12 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
             {
                 var sidecarSlow = _slowEvents.ToArray();
                 Array.Sort(sidecarSlow, static (a, b) => a.OpenStartTicks.CompareTo(b.OpenStartTicks));
-                var e2eOpen = new List<SlowOpEventView>();
-                foreach (var e in e2eSlow)
-                {
-                    if (e.Line.Contains("stage=open", StringComparison.Ordinal)
+                // Retain only ≥50 ms opens for burst windows (slow-op ring already ≥50).
+                var e2eOpen = e2eSlow
+                    .Where(static e =>
+                        e.Line.Contains("stage=open", StringComparison.Ordinal)
                         && e.Line.Contains("ms=", StringComparison.Ordinal))
-                    {
-                        // Retain only ≥50 ms opens for burst windows (slow-op ring already ≥50).
-                        e2eOpen.Add(e);
-                    }
-                }
+                    .ToList();
 
                 var windowTicks = (long)(0.060 * Stopwatch.Frequency);
                 var sidecarInE2eWindow = 0;
@@ -2821,13 +2830,10 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 return list;
             }
 
-            foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (int.TryParse(part, out var value) && value > 0)
-                {
-                    list.Add(value);
-                }
-            }
+            list.AddRange(
+                raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(static part => int.TryParse(part, out var value) ? value : 0)
+                    .Where(static value => value > 0));
 
             return list;
         }
@@ -2916,13 +2922,11 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
 
             body[0] = (byte)(index & 0xFF);
             // Multiline terminator is recognized only at a line start; the logical article must end with LF.
-            if (body.Length < 2 || body[^2] != (byte)'\r' || body[^1] != (byte)'\n')
+            if (body.Length >= 2
+                && (body[^2] != (byte)'\r' || body[^1] != (byte)'\n'))
             {
-                if (body.Length >= 2)
-                {
-                    body[^2] = (byte)'\r';
-                    body[^1] = (byte)'\n';
-                }
+                body[^2] = (byte)'\r';
+                body[^1] = (byte)'\n';
             }
 
             var logical = new byte[header.Length + body.Length];
@@ -3400,9 +3404,10 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     await _listener.DisposeAsync().ConfigureAwait(false);
                 }
-                catch
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     // Listener dispose is best-effort during bench teardown.
+                    ExpectedException.Ignore(ex);
                 }
 
                 try
@@ -3470,11 +3475,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 var inFlight = Interlocked.Increment(ref _processInFlight);
                 UpdateMax(ref _processMaxInFlight, inFlight);
                 var started = Stopwatch.GetTimestamp();
-                PublishStageAccumulator? stages = null;
-                if (_tailCorrelator is not null)
-                {
-                    stages = PublishStageAccumulator.Begin(_queueSnapshot);
-                }
+                var stages = _tailCorrelator is not null
+                    ? PublishStageAccumulator.Begin(_queueSnapshot)
+                    : null;
 
                 try
                 {
@@ -3483,14 +3486,14 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                     ProcessLatencyMs.Add(processMs);
                     if (result == AcceptedArticleProcessResult.Completed)
                     {
-                        if (_tailCorrelator is not null && stages is not null)
+                        if (stages is not null)
                         {
                             stages.SnapProcessEnd();
                             var admitStart = _admitStartLookup?.Invoke(article.ArtId);
                             var e2eMs = admitStart is long ticks
                                 ? Stopwatch.GetElapsedTime(ticks).TotalMilliseconds
                                 : double.NaN;
-                            _tailCorrelator.TryAdd(article.ArtId, processMs, stages, e2eMs);
+                            _tailCorrelator!.TryAdd(article.ArtId, processMs, stages, e2eMs);
                         }
 
                         Interlocked.Increment(ref _completed);

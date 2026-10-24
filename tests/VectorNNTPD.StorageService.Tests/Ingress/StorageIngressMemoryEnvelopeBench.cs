@@ -118,19 +118,17 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
 
                 process.Refresh();
                 var wsAfterRecover = process.WorkingSet64;
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-                process.Refresh();
-                var wsAfterGc = process.WorkingSet64;
+                // Snapshot working set without forcing GC. Forced collections are not a contract of
+                // the capacity envelope and trip cs/call-to-gc in CodeQL quality suites.
+                var wsAfterSettle = wsAfterRecover;
                 var line =
                     $"memory-blocked-stabilize-recover blockedMs={blockedDuration.TotalMilliseconds:0} articleBytes={articleBytes} "
                     + $"maxQueuedBytes={maxQueuedBytes} admitted={admitted} enqueueRejected={rejected} completed={processor.Completed} "
                     + $"peakAccounted={peakAccounted} finalAccounted={queue.AccountedBytes} finalInFlight={queue.InFlightBytes} "
                     + $"wsBefore={wsBefore} wsBlockedEnd={wsBlockedEnd} wsPeak={peakWs} wsAfterRecover={wsAfterRecover} "
-                    + $"wsAfterForcedGc={wsAfterGc} privateAfter={process.PrivateMemorySize64} "
+                    + $"wsAfterSettle={wsAfterSettle} privateAfter={process.PrivateMemorySize64} "
                     + $"managed={GC.GetTotalMemory(forceFullCollection: false)} "
-                    + "note=working_set_is_not_MaxQueuedBytes; includes runtime_pools_and_OS_retention";
+                    + "note=working_set_is_not_MaxQueuedBytes; includes runtime_pools_and_OS_retention;no-forced-gc";
                 Console.WriteLine(line);
                 _output.WriteLine(line);
                 Assert.True(admitted > 0);

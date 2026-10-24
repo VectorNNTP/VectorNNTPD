@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.StorageService;
 using Xunit.Abstractions;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
@@ -154,9 +156,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                             totalMs.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                             finals.Add(final);
                         }
-                        catch
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                         {
                             Interlocked.Increment(ref errors);
+                            ExpectedException.Ignore(ex);
                         }
                     }
                 });

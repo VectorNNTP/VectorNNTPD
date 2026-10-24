@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using VectorNNTPD.Common.Core;
+using VectorNNTPD.StorageService;
 using Xunit.Abstractions;
 
 namespace VectorNNTPD.StorageService.Tests.Storage
@@ -155,15 +157,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                         try
                         {
                             var final = BuildFinalPath(cellDir, id);
-                            string temp;
-                            if (variant == RenameVariant.SameDirectory)
-                            {
-                                temp = final + ".writing-" + Guid.NewGuid().ToString("N");
-                            }
-                            else
-                            {
-                                temp = Path.Join(cellStaging, Guid.NewGuid().ToString("N") + ".writing");
-                            }
+                            var temp = variant == RenameVariant.SameDirectory
+                                ? final + ".writing-" + Guid.NewGuid().ToString("N")
+                                : Path.Join(cellStaging, Guid.NewGuid().ToString("N") + ".writing");
 
                             // Distinct directories for CrossDirectorySameVolume (precondition of the variant).
                             if (variant == RenameVariant.CrossDirectorySameVolume)
@@ -187,9 +183,10 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                             totalMs.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                             finals.Add(final);
                         }
-                        catch
+                        catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                         {
                             Interlocked.Increment(ref errors);
+                            ExpectedException.Ignore(ex);
                         }
                     }
                 });

@@ -483,7 +483,6 @@ namespace VectorNNTPD.StorageService.Ingress
                     LogDropped(leftover);
                     Interlocked.Increment(ref _drainFailures);
                     _queue.ReleaseProcessed(leftover.ArtSize);
-                    held = null;
                 }
 
                 if (!retired)

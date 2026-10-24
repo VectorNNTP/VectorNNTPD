@@ -526,7 +526,6 @@ namespace VectorNNTPD.StorageService.Listener
                 if (reservation is { } held)
                 {
                     _acceptedArticles?.Release(held);
-                    reservation = null;
                 }
 
                 throw;
