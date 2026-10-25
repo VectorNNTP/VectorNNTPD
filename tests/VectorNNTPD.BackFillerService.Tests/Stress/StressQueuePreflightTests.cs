@@ -3,6 +3,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// <summary>Deterministic cleanliness thresholds for stress preflight (no broker I/O).</summary>
     public sealed class StressQueuePreflightTests
     {
+        /// <summary>Default limits accept zero ready and unacked up to two.</summary>
         [Fact]
         public void IsClean_true_when_ready_and_unacked_within_limits()
         {
@@ -10,6 +11,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(StressQueuePreflight.IsClean(ready: 0, unacked: 2));
         }
 
+        /// <summary>Non-zero ready or excessive unacked fails cleanliness.</summary>
         [Fact]
         public void IsClean_false_when_ready_or_unacked_exceed_limits()
         {
@@ -19,6 +21,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.False(StressQueuePreflight.IsClean(ready: 0, unacked: 25));
         }
 
+        /// <summary>Custom maxReady and maxUnacked bounds are inclusive.</summary>
         [Fact]
         public void IsClean_respects_custom_limits()
         {

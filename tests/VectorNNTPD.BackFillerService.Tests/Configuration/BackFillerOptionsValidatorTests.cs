@@ -17,6 +17,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
 
     public sealed class BackFillerOptionsValidatorTests
     {
+        /// <summary>Expected validation text when physical RAM is below the retention minimum.</summary>
         private static readonly string ExpectedMinimumPhysicalMemoryPhrase =
             $"at least {BackFillerArticleRetentionOptions.MinimumPhysicalMemoryGibibytes} GiB ({BackFillerArticleRetentionOptions.MinimumPhysicalMemoryBytes} bytes) of physical RAM";
 

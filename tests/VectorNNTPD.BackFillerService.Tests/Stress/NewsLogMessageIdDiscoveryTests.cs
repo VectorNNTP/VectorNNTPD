@@ -1,7 +1,9 @@
 namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
+    /// <summary>Regression tests for news-log parsing, discovery, corpus gates, and workload partitioning.</summary>
     public sealed class NewsLogMessageIdDiscoveryTests
     {
+        /// <summary>Known VectorNNTP log line shapes parse to status, provider, Message-ID, and size.</summary>
         [Theory]
         [InlineData(
             "Oct 17 00:00:00.026 + giganews <ebb7ba983a25481087a6b20e26d0c2df@ngPost> 740121 ?",
@@ -35,6 +37,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(size, entry.LoggedSize);
         }
 
+        /// <summary>Non-log and malformed lines do not parse.</summary>
         [Theory]
         [InlineData("")]
         [InlineData("not a log line")]
@@ -44,6 +47,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.False(NewsLogMessageIdDiscovery.TryParseLine(line.AsSpan(), out _));
         }
 
+        /// <summary>Discovery stats and unique set reflect deduplication and malformed rejection.</summary>
         [Fact]
         public async Task DiscoverAsync_streams_and_deduplicates()
         {
@@ -92,6 +96,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Missing directory throws with required corpus path in message.</summary>
         [Fact]
         public void RequireUsableCorpusDirectory_fails_when_missing()
         {
@@ -102,6 +107,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Contains(StressCorpusPaths.RequiredNewsLogDirectory, ex.Message, StringComparison.Ordinal);
         }
 
+        /// <summary>Directory without log files throws.</summary>
         [Fact]
         public void RequireUsableCorpusDirectory_fails_when_empty()
         {
@@ -119,6 +125,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Quoted local-parts are rejected and excluded from the unique set.</summary>
         [Fact]
         public async Task DiscoverAsync_rejects_non_canonical_message_ids_without_fabricating()
         {
@@ -148,6 +155,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>All-garbage corpus throws and leaves the unique set empty.</summary>
         [Fact]
         public async Task DiscoverAsync_fails_when_corpus_yields_no_usable_ids()
         {
@@ -170,6 +178,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Identical seed produces identical main workload file contents.</summary>
         [Fact]
         public void WriteWorkloadSets_is_reproducible_for_same_seed()
         {
@@ -198,6 +207,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Empty id input throws without generating synthetic ids.</summary>
         [Fact]
         public void WriteWorkloadSets_fails_on_empty_input_without_synthetic_fallback()
         {

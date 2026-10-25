@@ -5,6 +5,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class StressPublishGateTests
     {
+        /// <summary>Missing corpus directory fails RequireUsableCorpusDirectory before workload acceptance.</summary>
         [Fact]
         public async Task Missing_corpus_fails_before_workload_acceptance()
         {
@@ -15,6 +16,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             await Task.CompletedTask;
         }
 
+        /// <summary>Workload without manifest fails provenance guard without broker I/O.</summary>
         [Fact]
         public async Task Unprovenanced_workload_is_rejected_without_needing_a_broker()
         {
@@ -42,6 +44,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>ThrowIfPreflightBlocksPublish throws when no probed id retrieved successfully.</summary>
         [Fact]
         public void Live_preflight_failure_blocks_throughput_publish_decision()
         {
@@ -54,6 +57,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 () => CorpusArticlePreflight.ThrowIfPreflightBlocksPublish(failed));
         }
 
+        /// <summary>Documents ConnectAsync-before-RequestAsync reply consumer readiness contract.</summary>
         [Fact]
         public void Reply_consumer_readiness_is_required_before_request_publish()
         {
@@ -65,6 +69,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 StringComparison.Ordinal);
         }
 
+        /// <summary>StressRunId header is set when provided; Expiration remains unset.</summary>
         [Fact]
         public void StressRunId_is_optional_until_set_then_propagated_on_properties()
         {

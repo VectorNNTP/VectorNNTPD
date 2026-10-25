@@ -8,9 +8,16 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
     /// </summary>
     internal sealed class SequenceDbDataReader : DbDataReader
     {
+        /// <summary>Column names in ordinal order matching each row array.</summary>
         private readonly string[] _names;
+
+        /// <summary>Row value arrays; cells may be <see cref="DBNull.Value"/> for SQL NULL.</summary>
         private readonly object[][] _rows;
+
+        /// <summary>Current row ordinal; <c>-1</c> before the first successful <see cref="Read"/>.</summary>
         private int _index = -1;
+
+        /// <summary>Set by <see cref="Close"/>; subsequent reads throw.</summary>
         private bool _closed;
 
         /// <summary>Builds a reader over named columns and row value arrays (use <see cref="DBNull.Value"/> for SQL NULL).</summary>
@@ -179,6 +186,8 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
         /// <inheritdoc />
         public override void Close() => _closed = true;
 
+        /// <summary>Gets the row at <see cref="_index"/> or throws when no row is current.</summary>
+        /// <exception cref="InvalidOperationException">No successful <see cref="Read"/> has positioned a row.</exception>
         private object[] CurrentRow
         {
             get
@@ -192,6 +201,8 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             }
         }
 
+        /// <summary>Throws when the reader was closed via <see cref="Close"/>.</summary>
+        /// <exception cref="InvalidOperationException">The reader is closed.</exception>
         private void EnsureOpen()
         {
             if (_closed)
@@ -200,6 +211,8 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
             }
         }
 
+        /// <summary>Ensures the reader is open and a current row exists before cell access.</summary>
+        /// <exception cref="InvalidOperationException">Closed reader or no current row.</exception>
         private void EnsureOpenRow()
         {
             EnsureOpen();

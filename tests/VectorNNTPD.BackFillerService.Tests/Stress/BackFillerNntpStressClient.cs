@@ -11,17 +11,37 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class BackFillerNntpStressClient : IAsyncDisposable
     {
+        /// <summary>Listener hostname for TLS SNI and connect.</summary>
         private readonly string _host;
+
+        /// <summary>Listener TLS port.</summary>
         private readonly int _port;
+
+        /// <summary>When true, accepts any server certificate (stress/lab only).</summary>
         private readonly bool _acceptAnyServerCertificate;
+
+        /// <summary>Underlying TCP connection.</summary>
         private TcpClient? _tcp;
+
+        /// <summary>TLS wrapper over the TCP stream.</summary>
         private SslStream? _ssl;
+
+        /// <summary>Active IO stream (TLS when connected).</summary>
         private Stream? _stream;
+
+        /// <summary>Scratch buffer for status line reads.</summary>
         private readonly byte[] _lineBuffer = new byte[512];
+
+        /// <summary>Scratch buffer for multiline article body reads.</summary>
         private readonly byte[] _readBuffer = new byte[64 * 1024];
+
+        /// <summary>Reusable buffer for ARTICLE command bytes (512-octet limit).</summary>
         private readonly byte[] _commandBuffer = new byte[512];
+
+        /// <summary>Non-zero after dispose.</summary>
         private int _disposed;
 
+        /// <summary>Creates a client for the given listener host/port (not yet connected).</summary>
         public BackFillerNntpStressClient(string host, int port, bool acceptAnyServerCertificate = true)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(host);
@@ -32,6 +52,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             _acceptAnyServerCertificate = acceptAnyServerCertificate;
         }
 
+        /// <summary><see langword="true"/> when TLS stream is open and the TCP socket is connected.</summary>
         public bool IsConnected => _stream is not null && _tcp is { Connected: true };
 
         /// <summary>Connects, completes TLS, and consumes the <c>201</c> greeting.</summary>
@@ -159,6 +180,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Disposes TLS and TCP without sending QUIT (use <see cref="QuitAsync"/> for graceful shutdown).</summary>
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -181,13 +203,25 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// <summary>Pool of reusable TLS NNTP sessions with bounded size.</summary>
     public sealed class BackFillerNntpConnectionPool : IAsyncDisposable
     {
+        /// <summary>Shared listener host for rented clients.</summary>
         private readonly string _host;
+
+        /// <summary>Shared listener port.</summary>
         private readonly int _port;
+
+        /// <summary>Maximum concurrently created sessions.</summary>
         private readonly int _capacity;
+
+        /// <summary>Idle connected clients available for reuse.</summary>
         private readonly ConcurrentBag<BackFillerNntpStressClient> _idle = [];
+
+        /// <summary>Count of clients currently allocated (idle + in use).</summary>
         private int _created;
+
+        /// <summary>Non-zero after pool dispose.</summary>
         private int _disposed;
 
+        /// <summary>Creates a pool with at most <paramref name="capacity"/> concurrent TLS sessions.</summary>
         public BackFillerNntpConnectionPool(string host, int port, int capacity)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(host);
@@ -197,6 +231,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             _capacity = capacity;
         }
 
+        /// <summary>Returns a connected client from the idle bag or creates one until capacity is reached.</summary>
         public async Task<BackFillerNntpStressClient> RentAsync(
             StressMetrics metrics,
             CancellationToken cancellationToken)
@@ -244,6 +279,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Recycles a healthy connected client or disposes it and updates metrics.</summary>
         public void Return(BackFillerNntpStressClient client, StressMetrics metrics, bool healthy)
         {
             if (_disposed != 0 || !healthy || !client.IsConnected)
@@ -257,6 +293,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             _idle.Add(client);
         }
 
+        /// <summary>Gracefully QUITs idle clients then disposes the pool.</summary>
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

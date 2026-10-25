@@ -11,6 +11,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class ArticleWorkStressClientRequestPropertiesTests
     {
+        /// <summary>Stress work requests must not set AMQP Expiration.</summary>
         [Fact]
         public void CreateRequestProperties_omits_expiration_so_ready_work_can_buffer()
         {
@@ -23,6 +24,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(string.IsNullOrEmpty(props.Expiration));
         }
 
+        /// <summary>Required AMQP fields and RequestId header are populated for RPC.</summary>
         [Fact]
         public void CreateRequestProperties_sets_correlation_reply_to_content_type_and_request_id()
         {
@@ -42,6 +44,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(string.IsNullOrEmpty(props.Expiration));
         }
 
+        /// <summary>Production response TTL constant is not copied onto work requests.</summary>
         [Fact]
         public void Response_ttl_remains_one_second_and_is_not_applied_to_stress_requests()
         {
@@ -55,6 +58,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 props.Expiration ?? string.Empty);
         }
 
+        /// <summary>Classic and quorum queue arguments must not declare x-message-ttl.</summary>
         [Fact]
         public void Provider_work_queue_arguments_do_not_declare_x_message_ttl()
         {
@@ -84,6 +88,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(quorum.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
         }
 
+        /// <summary>Whitespace correlation or reply-to throws <see cref="ArgumentException"/>.</summary>
         [Fact]
         public void CreateRequestProperties_rejects_missing_correlation_or_reply_to()
         {

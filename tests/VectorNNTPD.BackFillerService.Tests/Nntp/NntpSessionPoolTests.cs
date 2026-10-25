@@ -1454,6 +1454,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 exception.Message);
         }
 
+        /// <summary>Builds a test session pool with standard timeouts and optional establishment gate.</summary>
+        /// <param name="factory">Transport factory supplying scripted servers.</param>
+        /// <param name="max">Maximum concurrent sessions for the provider definition.</param>
+        /// <param name="min">Minimum warm sessions (provider definition).</param>
+        /// <param name="keepAliveSeconds">KEEPALIVE interval passed to the provider definition.</param>
+        /// <param name="time">Optional time provider for pool timers.</param>
+        /// <param name="commandTimeout">Optional command timeout override.</param>
+        /// <param name="establishment">Optional establishment gate wired into new sessions.</param>
+        /// <param name="backbone">Provider backbone name on the definition.</param>
+        /// <param name="logger">Optional pool logger.</param>
+        /// <param name="shutdownGrace">Optional shutdown grace period.</param>
         internal static NntpSessionPool CreatePool(
             ScriptedNntpTransportFactory factory,
             int max,

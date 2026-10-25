@@ -113,6 +113,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             AssertDisposition(ArticleWorkOutcome.Cancelled, acknowledge: false, requeue: true, publish: false);
         }
 
+        /// <summary>Asserts ACK/requeue/publish flags from <see cref="ArticleWorkDispositionPlanner"/> for one terminal outcome.</summary>
         private static void AssertDisposition(
             ArticleWorkOutcome outcome,
             bool acknowledge,

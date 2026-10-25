@@ -2282,6 +2282,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             }
         }
 
+        /// <summary>Wraps a plaintext transport so the first handshake read can be stalled and cancellation observed.</summary>
         private sealed class StalledPlaintextStream : Stream
         {
             /// <summary>Transport wrapped for the scripted server.</summary>

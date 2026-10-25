@@ -304,6 +304,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.True(sawBlockedWaiter, "shutdown cancellation did not leave a permit waiter queued");
         }
 
+        /// <summary>
+        /// Runs one pool shutdown while a cancelled acquire and a shutdown acquire are queued; returns whether a blocked permit waiter was observed.
+        /// </summary>
         private static async Task<bool> RunConcurrentShutdownOnceAsync()
         {
             var factory = new ScriptedNntpTransportFactory();
@@ -337,6 +340,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             return sawBlockedWaiter;
         }
 
+        /// <summary>Connects a provider session to one enqueued scripted server with test timeouts.</summary>
         private static async Task<NntpProviderSession> ConnectAsync(
             ScriptedNntpServer server,
             TimeSpan? commandTimeout = null,
@@ -357,6 +361,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             return session;
         }
 
+        /// <summary>Polls <paramref name="predicate"/> until true or a five-second safety timeout.</summary>
         private static async Task WaitUntilAsync(Func<bool> predicate)
         {
             using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));

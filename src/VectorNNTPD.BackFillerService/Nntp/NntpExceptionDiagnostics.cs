@@ -127,10 +127,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>Reference equality for exception cycle detection along <see cref="Exception.InnerException"/> chains.</summary>
         private sealed class ReferenceEqualityComparer : IEqualityComparer<Exception>
         {
+            /// <summary>Shared comparer instance used by <see cref="FormatReason"/>.</summary>
             internal static readonly ReferenceEqualityComparer Instance = new();
 
+            /// <summary>Returns whether <paramref name="x"/> and <paramref name="y"/> are the same object instance.</summary>
+            /// <param name="x">First exception, or <see langword="null"/>.</param>
+            /// <param name="y">Second exception, or <see langword="null"/>.</param>
+            /// <returns><see langword="true"/> when both references are identical.</returns>
             public bool Equals(Exception? x, Exception? y) => ReferenceEquals(x, y);
 
+            /// <summary>Returns the runtime identity hash for <paramref name="obj"/>.</summary>
+            /// <param name="obj">Exception whose identity is hashed. Must not be null for <see cref="HashSet{T}"/> use.</param>
+            /// <returns>A hash derived from object identity, not <see cref="object.GetHashCode()"/>.</returns>
             public int GetHashCode(Exception obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
         }
     }

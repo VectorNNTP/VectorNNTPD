@@ -321,6 +321,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>
         /// Builds NACK requeue/discard for publish-path retries (not handler <see cref="ArticleWorkOutcome.UnexpectedFailure"/>).
         /// </summary>
+        /// <param name="deliveryCount">Broker <c>x-delivery-count</c> when present; otherwise null.</param>
+        /// <param name="redelivered">AMQP redelivered flag for missing-count handling.</param>
+        /// <returns>
+        /// ACK false, publish false, and requeue while the effective count is below <see cref="DeliveryLimit"/>.
+        /// </returns>
         /// <remarks>
         /// Must not use the planner's terminal UnexpectedFailure arm (ACK + reply). A failed or incomplete
         /// reply publish must leave the delivery eligible for requeue while retries remain.

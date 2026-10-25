@@ -479,6 +479,11 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             /// <summary>Optional physical connection identity stamped onto the returned result.</summary>
             private readonly Guid _connectionId;
 
+            /// <summary>Configures scripted retrieval inputs for elapsed and outcome logging tests.</summary>
+            /// <param name="payload">Article bytes for the callback, or null to skip consumption (failures).</param>
+            /// <param name="result">Base retrieval result (kind, code, session reuse).</param>
+            /// <param name="commandStartedTimestamp">Value assigned to <see cref="ArticleRetrievalResult.CommandStartedTimestamp"/> on return.</param>
+            /// <param name="connectionId">Optional connection identity stamped onto the returned result.</param>
             internal ScriptedRetriever(
                 byte[]? payload,
                 ArticleRetrievalResult result,

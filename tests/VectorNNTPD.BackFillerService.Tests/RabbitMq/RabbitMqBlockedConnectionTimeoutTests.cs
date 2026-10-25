@@ -358,6 +358,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
             }
         }
 
+        /// <summary>Creates a <see cref="RabbitMqService"/> with fast reconnect delays and configurable blocked-connection timeout.</summary>
         private static RabbitMqService CreateService(
             IRabbitMqConnectionFactory factory,
             ILogger<RabbitMqService>? logger = null,
@@ -381,20 +382,26 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         /// </summary>
         private sealed class RecordingHostsConnectionFactory : IRabbitMqConnectionFactory
         {
+            /// <summary>Inner fake factory that performs connects.</summary>
             private readonly FakeBackFillerRabbitMqConnectionFactory _inner = new();
 
+            /// <summary>Number of connect attempts observed on the inner factory.</summary>
             internal int ConnectCount => _inner.ConnectCount;
 
+            /// <summary>Last connection created by the inner factory.</summary>
             internal FakeBackFillerRabbitMqConnection? LastConnection => _inner.LastConnection;
 
+            /// <summary>Optional gate controlling when the inner factory completes a connect.</summary>
             internal TaskCompletionSource<int>? Connected
             {
                 get => _inner.Connected;
                 set => _inner.Connected = value;
             }
 
+            /// <summary><see cref="RabbitMqOptions"/> passed to each <see cref="ConnectAsync"/> call.</summary>
             internal List<RabbitMqOptions> ConnectOptions { get; } = [];
 
+            /// <inheritdoc />
             public Task<IRabbitMqConnection> ConnectAsync(
                 RabbitMqOptions options,
                 string connectionName,
@@ -425,14 +432,18 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 return new NoOpTimer();
             }
 
+            /// <summary>Timer that fires immediately in <see cref="ImmediateDelayTimeProvider"/> and performs no delayed work.</summary>
             private sealed class NoOpTimer : ITimer
             {
+                /// <inheritdoc />
                 public bool Change(TimeSpan dueTime, TimeSpan period) => true;
 
+                /// <inheritdoc />
                 public void Dispose()
                 {
                 }
 
+                /// <inheritdoc />
                 public ValueTask DisposeAsync() => ValueTask.CompletedTask;
             }
         }
@@ -442,8 +453,13 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
         /// </summary>
         private sealed class ControllableTimeProvider : TimeProvider
         {
+            /// <summary>Protects timer list and elapsed time.</summary>
             private readonly Lock _gate = new();
+
+            /// <summary>Virtual UTC offset from Unix epoch.</summary>
             private TimeSpan _elapsed;
+
+            /// <summary>Pending one-shot timers not yet due.</summary>
             private readonly List<PendingTimer> _timers = [];
 
             /// <inheritdoc />
@@ -497,6 +513,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 return timer;
             }
 
+            /// <summary>Registers or cancels a pending timer relative to the virtual clock.</summary>
             private void Schedule(PendingTimer timer, TimeSpan dueTime)
             {
                 lock (_gate)
@@ -520,6 +537,7 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 }
             }
 
+            /// <summary>Marks a timer cancelled and removes it from the pending list.</summary>
             private void Cancel(PendingTimer timer)
             {
                 lock (_gate)
@@ -529,10 +547,13 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                 }
             }
 
+            /// <summary>Virtual timer scheduled by <see cref="ControllableTimeProvider"/>.</summary>
             private sealed class PendingTimer : ITimer
             {
+                /// <summary>Owning virtual clock.</summary>
                 private readonly ControllableTimeProvider _owner;
 
+                /// <summary>Creates a timer owned by <paramref name="owner"/>.</summary>
                 internal PendingTimer(ControllableTimeProvider owner, TimerCallback callback, object? state)
                 {
                     _owner = owner;
@@ -540,16 +561,22 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     State = state;
                 }
 
+                /// <summary>Callback invoked when the timer fires.</summary>
                 internal TimerCallback Callback { get; }
 
+                /// <summary>Opaque state passed to <see cref="Callback"/>.</summary>
                 internal object? State { get; }
 
+                /// <summary>Virtual due time on the owner's clock.</summary>
                 internal TimeSpan DueAt { get; set; }
 
+                /// <summary>True when the timer was cancelled or set to infinite due time.</summary>
                 internal bool Cancelled { get; set; }
 
+                /// <summary>True when the callback should run synchronously from <see cref="Change"/>.</summary>
                 internal bool FireImmediately { get; set; }
 
+                /// <inheritdoc />
                 public bool Change(TimeSpan dueTime, TimeSpan period)
                 {
                     _ = period;
@@ -564,8 +591,10 @@ namespace VectorNNTPD.BackFillerService.Tests.RabbitMq
                     return true;
                 }
 
+                /// <inheritdoc />
                 public void Dispose() => _owner.Cancel(this);
 
+                /// <inheritdoc />
                 public ValueTask DisposeAsync()
                 {
                     Dispose();

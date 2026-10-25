@@ -8,50 +8,133 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// <summary>Thread-safe counters and latency samples for one stress run.</summary>
     public sealed class StressMetrics
     {
+        /// <summary>End-to-end success latency samples (schedule to NNTP complete).</summary>
         private readonly ConcurrentBag<long> _endToEndSuccessLatenciesMs = [];
+
+        /// <summary>End-to-end failure latency samples.</summary>
         private readonly ConcurrentBag<long> _endToEndFailureLatenciesMs = [];
+
+        /// <summary>Harness enqueue-to-publish-complete samples.</summary>
         private readonly ConcurrentBag<long> _scheduleToPublishMs = [];
+
+        /// <summary>BasicPublishAsync duration samples.</summary>
         private readonly ConcurrentBag<long> _publishCallMs = [];
+
+        /// <summary>Publish-complete to reply-received samples.</summary>
         private readonly ConcurrentBag<long> _publishToReplyMs = [];
+
+        /// <summary>Success reply to ARTICLE-start samples.</summary>
         private readonly ConcurrentBag<long> _replyToNntpStartMs = [];
+
+        /// <summary>NNTP ARTICLE multiline consume duration samples.</summary>
         private readonly ConcurrentBag<long> _nntpDeliveryLatenciesMs = [];
+
+        /// <summary>Logical article byte sizes for delivered articles.</summary>
         private readonly ConcurrentBag<long> _articleSizeBytes = [];
+
+        /// <summary>Counts keyed by <see cref="StressFailureClass"/> name.</summary>
         private readonly ConcurrentDictionary<string, long> _failureBuckets = new(StringComparer.Ordinal);
+
+        /// <summary>Per-backbone counter shards.</summary>
         private readonly ConcurrentDictionary<string, BackboneCounters> _byBackbone = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Time series of throughput snapshots.</summary>
         private readonly ConcurrentQueue<ThroughputSample> _throughputSamples = new();
+
+        /// <summary>Time series of queue depth snapshots.</summary>
         private readonly ConcurrentQueue<QueueDepthSample> _queueDepthSamples = new();
+
+        /// <summary>Total work requests started.</summary>
         private long _requestsStarted;
+
+        /// <summary>Article Work replies with success outcome.</summary>
         private long _workSuccess;
+
+        /// <summary>Article Work article-not-found outcomes.</summary>
         private long _workNotFound;
+
+        /// <summary>Other Article Work failure outcomes.</summary>
         private long _workOtherFailure;
+
+        /// <summary>Successful NNTP listener deliveries.</summary>
         private long _articlesDelivered;
+
+        /// <summary>Sum of logical payload bytes delivered.</summary>
         private long _logicalPayloadBytes;
+
+        /// <summary>Sum of on-wire payload bytes delivered.</summary>
         private long _wirePayloadBytes;
+
+        /// <summary>NNTP 430/404 class not-found deliveries.</summary>
         private long _nntpNotFound;
+
+        /// <summary>NNTP errors excluding clean not-found.</summary>
         private long _nntpErrors;
+
+        /// <summary>Work or delivery timeouts recorded.</summary>
         private long _timeouts;
+
+        /// <summary>Disconnect failures during delivery.</summary>
         private long _disconnects;
+
+        /// <summary>Current publisher-side outstanding requests.</summary>
         private long _outstanding;
+
+        /// <summary>Peak publisher-side outstanding.</summary>
         private long _peakOutstanding;
+
+        /// <summary>Current NNTP deliveries in flight.</summary>
         private long _deliveryOutstanding;
+
+        /// <summary>Peak NNTP deliveries in flight.</summary>
         private long _peakDeliveryOutstanding;
+
+        /// <summary>Running sum of outstanding for mean calculation.</summary>
         private long _outstandingSum;
+
+        /// <summary>Number of outstanding samples taken.</summary>
         private long _outstandingSamples;
+
+        /// <summary>Active pooled NNTP connections.</summary>
         private long _activeConnections;
+
+        /// <summary>Peak active pooled connections.</summary>
         private long _peakConnections;
+
+        /// <summary>Incomplete multiline NNTP responses.</summary>
         private long _incompleteResponses;
+
+        /// <summary>ReplyTo dispose drain duration in milliseconds.</summary>
         private long _drainMilliseconds;
+
+        /// <summary>Late replies after caller timeout (from stress client).</summary>
         private long _lateRepliesAfterTimeout;
+
+        /// <summary>Broker outstanding at dispose when drain timed out.</summary>
         private long _unresolvedAtDispose;
+
+        /// <summary>Broker outstanding recorded at end of drain window.</summary>
         private long _brokerOutstandingAtDrainEnd;
 
+        /// <summary>Human-readable run label (phase, backbone, concurrency).</summary>
         public required string RunName { get; init; }
+
+        /// <summary>Provider backbone under test, when single-backbone.</summary>
         public string? Backbone { get; init; }
+
+        /// <summary>Configured publisher worker count for this run.</summary>
         public int ConfiguredConcurrency { get; init; }
+
+        /// <summary>Configured in-flight request cap (semaphore limit).</summary>
         public int ConfiguredMaxInFlight { get; init; }
+
+        /// <summary><see cref="Stopwatch"/> timestamp marking steady-state measurement start.</summary>
         public long SteadyStateStartTimestamp { get; set; }
+
+        /// <summary><see cref="Stopwatch"/> timestamp marking steady-state measurement end.</summary>
         public long SteadyStateEndTimestamp { get; set; }
 
+        /// <summary>Increments started count and current outstanding; updates peak outstanding.</summary>
         public void RequestStarted()
         {
             Interlocked.Increment(ref _requestsStarted);
@@ -59,28 +142,36 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             UpdatePeak(ref _peakOutstanding, outstanding);
         }
 
+        /// <summary>Decrements publisher-side outstanding when a work request completes.</summary>
         public void RequestFinished() => Interlocked.Decrement(ref _outstanding);
 
+        /// <summary>Current in-flight work requests (publisher side).</summary>
         public long Outstanding => Interlocked.Read(ref _outstanding);
 
+        /// <summary>Increments NNTP delivery outstanding and peak.</summary>
         public void DeliveryStarted()
         {
             var value = Interlocked.Increment(ref _deliveryOutstanding);
             UpdatePeak(ref _peakDeliveryOutstanding, value);
         }
 
+        /// <summary>Decrements NNTP delivery outstanding after ARTICLE completes.</summary>
         public void DeliveryFinished() => Interlocked.Decrement(ref _deliveryOutstanding);
 
+        /// <summary>Current in-flight NNTP ARTICLE deliveries.</summary>
         public long DeliveryOutstanding => Interlocked.Read(ref _deliveryOutstanding);
 
+        /// <summary>Increments active pooled NNTP connections and peak.</summary>
         public void ConnectionOpened()
         {
             var active = Interlocked.Increment(ref _activeConnections);
             UpdatePeak(ref _peakConnections, active);
         }
 
+        /// <summary>Decrements active pooled NNTP connections when a session is disposed.</summary>
         public void ConnectionClosed() => Interlocked.Decrement(ref _activeConnections);
 
+        /// <summary>Records ReplyTo dispose drain duration for the run summary.</summary>
         public void SetDrainMilliseconds(long milliseconds) =>
             Interlocked.Exchange(ref _drainMilliseconds, milliseconds);
 
@@ -98,6 +189,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Interlocked.Exchange(ref _brokerOutstandingAtDrainEnd, brokerOutstandingAtDrainEnd);
         }
 
+        /// <summary>Increments aggregate and per-backbone Article Work outcome counters.</summary>
         public void RecordWorkReply(string backbone, ArticleWorkStressOutcome outcome)
         {
             var counters = _byBackbone.GetOrAdd(backbone, static _ => new BackboneCounters());
@@ -118,6 +210,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Appends harness stage latency samples for later percentile aggregation.</summary>
         public void RecordStageTimings(
             long scheduleToPublishMs,
             long publishCallMs,
@@ -155,6 +248,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Counts a successful listener delivery and payload byte totals.</summary>
         public void RecordArticleDelivered(
             string backbone,
             long logicalBytes,
@@ -173,6 +267,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             _ = nntpDeliveryMs;
         }
 
+        /// <summary>Increments failure buckets, timeout/disconnect counters, and per-backbone failures.</summary>
         public void RecordFailure(
             string backbone,
             StressFailureClass failure,
@@ -212,6 +307,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Interlocked.Increment(ref counters.Failures);
         }
 
+        /// <summary>Enqueues a throughput snapshot with current counters and outstanding counts.</summary>
         public void SampleThroughput(long timestamp)
         {
             var outstanding = Interlocked.Read(ref _outstanding);
@@ -225,11 +321,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 Interlocked.Read(ref _deliveryOutstanding)));
         }
 
+        /// <summary>Enqueues one Management API queue depth observation.</summary>
         public void SampleQueueDepth(long timestamp, string queueName, long messages, long ready, long unacked, long consumers)
         {
             _queueDepthSamples.Enqueue(new QueueDepthSample(timestamp, queueName, messages, ready, unacked, consumers));
         }
 
+        /// <summary>Materializes immutable run summary with percentiles, stages, and optional process stats.</summary>
         public StressRunSummary BuildSummary(Process? process = null)
         {
             var start = SteadyStateStartTimestamp;
@@ -333,6 +431,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 process?.TotalProcessorTime.TotalSeconds);
         }
 
+        /// <summary>Writes <see cref="BuildSummary"/> JSON to <paramref name="path"/> using source-generated context.</summary>
         public void WriteJson(string path, Process? process = null)
         {
             var summary = BuildSummary(process);
@@ -341,6 +440,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             File.WriteAllText(path, json);
         }
 
+        /// <summary>Lock-free max update for peak counters.</summary>
         private static void UpdatePeak(ref long peak, long candidate)
         {
             while (true)
@@ -358,16 +458,31 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Per-backbone counter shard updated concurrently during a run.</summary>
         private sealed class BackboneCounters
         {
+            /// <summary>Successful work replies for this backbone.</summary>
             public long WorkSuccess;
+
+            /// <summary>Article-not-found work replies.</summary>
             public long WorkNotFound;
+
+            /// <summary>Other work reply failures.</summary>
             public long WorkOtherFailure;
+
+            /// <summary>NNTP deliveries completed.</summary>
             public long ArticlesDelivered;
+
+            /// <summary>Logical bytes delivered on this backbone.</summary>
             public long LogicalPayloadBytes;
+
+            /// <summary>Wire bytes delivered on this backbone.</summary>
             public long WirePayloadBytes;
+
+            /// <summary>Delivery or work failures attributed to this backbone.</summary>
             public long Failures;
 
+            /// <summary>Volatile read snapshot for summary aggregation.</summary>
             public BackboneSummary Snapshot() =>
                 new(
                     Interlocked.Read(ref WorkSuccess),
@@ -380,6 +495,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         }
     }
 
+    /// <summary>Point-in-time throughput counters sampled during a run.</summary>
     public readonly record struct ThroughputSample(
         long Timestamp,
         long ArticlesDelivered,
@@ -387,6 +503,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         long Outstanding,
         long DeliveryOutstanding);
 
+    /// <summary>One RabbitMQ queue depth observation from the Management API.</summary>
     public readonly record struct QueueDepthSample(
         long Timestamp,
         string QueueName,
@@ -395,8 +512,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         long Unacked,
         long Consumers);
 
+    /// <summary>Order statistics for a latency or size sample bag.</summary>
     public sealed record Percentiles(long Count, double Mean, double P50, double P90, double P95, double P99, double Max)
     {
+        /// <summary>Computes percentiles from unsorted samples; empty bag yields zeros.</summary>
         public static Percentiles From(ConcurrentBag<long> bag)
         {
             if (bag.IsEmpty)
@@ -422,6 +541,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 values[^1]);
         }
 
+        /// <summary>Quantile on sorted ascending values.</summary>
         private static double At(long[] sorted, double quantile)
         {
             var index = (int)Math.Clamp(Math.Ceiling(quantile * sorted.Length) - 1, 0, sorted.Length - 1);
@@ -429,6 +549,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         }
     }
 
+    /// <summary>Aggregate counters for one provider backbone.</summary>
     public sealed record BackboneSummary(
         long WorkSuccess,
         long WorkNotFound,
@@ -438,6 +559,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         long WirePayloadBytes,
         long Failures);
 
+    /// <summary>Immutable end-of-run report for one stress execution.</summary>
     public sealed record StressRunSummary(
         string RunName,
         string? Backbone,
@@ -482,6 +604,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         long? WorkingSetBytes,
         double? ProcessCpuSeconds)
     {
+        /// <summary>Single-line console/table row for sweep comparisons.</summary>
         public string FormatTableRow()
         {
             return string.Create(
@@ -490,6 +613,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         }
     }
 
+    /// <summary>Source-generated JSON serializer context for stress report types.</summary>
     [System.Text.Json.Serialization.JsonSerializable(typeof(StressRunSummary))]
     [System.Text.Json.Serialization.JsonSerializable(typeof(StageLatencyStats))]
     [System.Text.Json.Serialization.JsonSerializable(typeof(Percentiles))]

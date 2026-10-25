@@ -416,14 +416,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// </summary>
         private sealed class EstablishmentAttemptLog : ILogger
         {
+            /// <summary>Structured event id for establishment waiting.</summary>
             private const int WaitingEventId = 5412;
+
+            /// <summary>Structured event id for establishment started.</summary>
             private const int StartedEventId = 5413;
+
+            /// <summary>Structured event id for establishment completed.</summary>
             private const int CompletedEventId = 5414;
+
+            /// <summary>Structured event id for establishment cancelled.</summary>
             private const int CancelledEventId = 5415;
+
+            /// <summary>Structured event id for establishment failed.</summary>
             private const int FailedEventId = 5416;
 
+            /// <summary>Protects <see cref="_events"/>.</summary>
             private readonly object _gate = new();
+
+            /// <summary>Elapsed time origin for recorded observations.</summary>
             private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+            /// <summary>Structured establishment events captured from debug logging.</summary>
             private readonly List<Observation> _events = [];
 
             /// <inheritdoc />
@@ -498,6 +512,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return builder.ToString();
             }
 
+            /// <summary>Reads one named value from structured logging state when present.</summary>
             private static bool TryRead(object? state, string name, out object? value)
             {
                 if (state is IEnumerable<KeyValuePair<string, object?>> pairs)
@@ -516,12 +531,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return false;
             }
 
+            /// <summary>Redacts AUTHINFO USER and PASS secrets from failure reason text.</summary>
             private static string Scrub(string reason)
             {
                 reason = ScrubCommand(reason, "AUTHINFO USER ");
                 return ScrubCommand(reason, "AUTHINFO PASS ");
             }
 
+            /// <summary>Redacts the token following <paramref name="marker"/> when not already masked.</summary>
             private static string ScrubCommand(string reason, string marker)
             {
                 var index = reason.IndexOf(marker, StringComparison.Ordinal);
@@ -545,15 +562,29 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return string.Concat(reason.AsSpan(0, valueStart), "***", reason.AsSpan(valueEnd));
             }
 
+            /// <summary>One structured establishment log event for a connection number.</summary>
+            /// <param name="Elapsed">Stopwatch elapsed when the event was logged.</param>
+            /// <param name="EventId">Structured log event identifier.</param>
+            /// <param name="Connection">Provider connection number from log state.</param>
+            /// <param name="Reason">Scrubbed failure reason when the event is a failure.</param>
             private readonly record struct Observation(TimeSpan Elapsed, int EventId, int Connection, string? Reason);
 
+            /// <summary>Aggregates observations for one connection into a terminal result line.</summary>
             private sealed class Attempt(int connection)
             {
+                /// <summary>Elapsed time of the first observed event for this connection.</summary>
                 private TimeSpan? _origin;
+
+                /// <summary>Elapsed time when a terminal result was recorded.</summary>
                 private TimeSpan? _terminal;
+
+                /// <summary>Terminal result label (ready, cancelled, failed, or incomplete).</summary>
                 private string _result = "incomplete";
+
+                /// <summary>Scrubbed failure reason when the attempt failed.</summary>
                 private string? _reason;
 
+                /// <summary>Formats connection, result, optional reason, and elapsed milliseconds.</summary>
                 internal string Summarize(TimeSpan now)
                 {
                     var end = _terminal ?? now;
@@ -570,6 +601,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     return text.ToString();
                 }
 
+                /// <summary>Records terminal state from one observation; first terminal event wins.</summary>
                 internal void Apply(Observation observation)
                 {
                     _origin ??= observation.Elapsed;
@@ -587,6 +619,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     }
                 }
 
+                /// <summary>Sets terminal fields once; ignores subsequent terminal events.</summary>
                 private void SetTerminal(string result, TimeSpan elapsed, string? reason)
                 {
                     if (_terminal is not null)
@@ -600,6 +633,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 }
             }
 
+            /// <summary>Rounds elapsed time to a non-negative millisecond count for log lines.</summary>
             private static string FormatMilliseconds(TimeSpan elapsed)
             {
                 var milliseconds = elapsed.TotalMilliseconds;
@@ -611,10 +645,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return Math.Round(milliseconds).ToString("0", CultureInfo.InvariantCulture);
             }
 
+            /// <summary>Empty logging scope returned from <see cref="BeginScope{TState}"/>.</summary>
             private sealed class NoScope : IDisposable
             {
+                /// <summary>Shared singleton scope instance.</summary>
                 internal static NoScope Instance { get; } = new();
 
+                /// <inheritdoc />
                 public void Dispose()
                 {
                 }

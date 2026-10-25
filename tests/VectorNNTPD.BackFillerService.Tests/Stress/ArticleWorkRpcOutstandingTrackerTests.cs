@@ -5,6 +5,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class ArticleWorkRpcOutstandingTrackerTests
     {
+        /// <summary>Caller timeout zeroes waiting count; broker outstanding clears only when the late reply arrives.</summary>
         [Fact]
         public void Timeout_clears_waiter_but_keeps_broker_outstanding_until_late_reply()
         {
@@ -23,6 +24,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(1, tracker.LateRepliesAfterTimeout);
         }
 
+        /// <summary>OnReply while caller waits clears both counters with zero late replies.</summary>
         [Fact]
         public void Normal_reply_clears_waiter_and_broker_outstanding()
         {
@@ -34,6 +36,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(0, tracker.LateRepliesAfterTimeout);
         }
 
+        /// <summary>Mixed timeout and replies on two correlations leave correct independent counts.</summary>
         [Fact]
         public void Concurrent_requests_are_independent()
         {
@@ -56,6 +59,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(1, tracker.LateRepliesAfterTimeout);
         }
 
+        /// <summary>OnPublishFailed zeroes waiter and broker outstanding.</summary>
         [Fact]
         public void Publish_failure_clears_both_counters()
         {
@@ -66,6 +70,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(0, tracker.BrokerOutstandingCount);
         }
 
+        /// <summary>New tracker starts with zero outstanding without requiring dispose.</summary>
         [Fact]
         public void Dispose_is_safe_when_broker_outstanding_already_zero()
         {

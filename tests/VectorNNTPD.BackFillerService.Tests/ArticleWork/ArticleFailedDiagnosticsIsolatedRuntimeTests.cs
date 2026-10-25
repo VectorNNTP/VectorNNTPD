@@ -157,6 +157,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Null(entry.Exception);
         }
 
+        /// <summary>Builds a minimal work item with a fake settlement lease for isolated-runtime diagnostics tests.</summary>
+        /// <param name="messageId">NNTP Message-ID header value.</param>
+        /// <param name="backbone">Provider backbone name on the request.</param>
         private static ArticleWorkItem Item(string messageId, string backbone) =>
             new(
                 new ArticleWorkRequest(1, Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId), messageId, backbone),
@@ -164,6 +167,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 "reply",
                 new ArticleWorkSettlementLease(new FakeBackFillerRabbitMqChannel(1), 1, 1));
 
+        /// <summary>Creates a small in-memory retention authority for Article Work handler tests.</summary>
         private static ArticleRetentionAuthority CreateRetention() =>
             new(
                 new BackFillerArticleRetentionRuntimeOptions(1024 * 1024, TimeSpan.FromHours(1), TimeSpan.FromMinutes(1), 256),
@@ -172,8 +176,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 TimeProvider.System,
                 NullLogger<ArticleRetentionAuthority>.Instance);
 
+        /// <summary><see cref="INntpArticleRetriever"/> that completes with a fault carrying the configured exception.</summary>
         private sealed class ThrowingRetriever(Exception exception) : INntpArticleRetriever
         {
+            /// <inheritdoc />
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
                 int maxArticleBytes,
@@ -182,10 +188,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Task.FromException<ArticleRetrievalResult>(exception);
         }
 
+        /// <summary>Captures Serilog events in memory for assertion.</summary>
         private sealed class ListSink : ILogEventSink
         {
+            /// <summary>Events emitted through <see cref="Emit"/>.</summary>
             public List<LogEvent> Events { get; } = new();
 
+            /// <inheritdoc />
             public void Emit(LogEvent logEvent) => Events.Add(logEvent);
         }
     }

@@ -12,6 +12,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </remarks>
     public sealed class BackFillerE2EStressBench
     {
+        /// <summary>When stress is enabled, discovers ids from the configured corpus and asserts non-zero valid/unique counts.</summary>
         [Fact]
         public async Task Discover_workload_from_newslogs_when_enabled()
         {
@@ -34,6 +35,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 $"discovery files={stats.FileCount} entries={stats.TotalLogEntries} valid={stats.ValidIds} unique={stats.UniqueIds} malformed={stats.MalformedEntries} dupRate={stats.DuplicateRatePercent:F2}% giganews={stats.ProviderGiganews} eweka={stats.ProviderEweka}");
         }
 
+        /// <summary>Phase A: low concurrency baseline run completes with zero outstanding at end.</summary>
         [Fact]
         public async Task PhaseA_functional_baseline_when_enabled()
         {
@@ -61,6 +63,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(0, summary.OutstandingAtEnd);
         }
 
+        /// <summary>Phase B: ramps concurrency levels until timeout rate exceeds 25% of started requests.</summary>
         [Fact]
         public async Task PhaseB_concurrency_ramp_when_enabled()
         {
@@ -104,6 +107,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Phase C: sustained main workload run logs whether 1 Gbps logical payload target is met.</summary>
         [Fact]
         public async Task PhaseC_sustained_throughput_when_enabled()
         {
@@ -140,6 +144,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Console.WriteLine($"phaseC payloadGbps={summary.PayloadGbps:F3} target=1.0 achieved={(summary.PayloadGbps >= 1.0 ? "yes" : "no")}");
         }
 
+        /// <summary>Phase D: repeatable workload soak asserts drain completes or timeouts were recorded.</summary>
         [Fact]
         public async Task PhaseD_stability_soak_when_enabled()
         {
@@ -175,6 +180,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(summary.OutstandingAtEnd == 0 || summary.Timeouts > 0);
         }
 
+        /// <summary>Provider phase: runs warmup workload separately for Giganews and Eweka backbones.</summary>
         [Fact]
         public async Task Isolated_backbone_runs_when_enabled()
         {
@@ -517,6 +523,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Appends one tab-separated concurrency sweep row to the report directory table file.</summary>
         private static void WriteSweepRow(string reportDirectory, StressRunSummary summary, int knownMaxSessions)
         {
             var path = Path.Join(reportDirectory, "concurrency-sweep-table.txt");
@@ -525,6 +532,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             File.AppendAllText(path, line + Environment.NewLine);
         }
 
+        /// <summary>Blocks until workload manifest and SHA provenance checks pass.</summary>
         private static void EnsureWorkload(StressHarnessOptions options)
         {
             // Synchronous gate used by opt-in benches; provenance check is authoritative.
@@ -533,6 +541,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 .GetResult();
         }
 
+        /// <summary>Parses phase-B concurrency list from env or returns default ramp steps.</summary>
         private static int[] ParseConcurrencyLevels()
         {
             var raw = Environment.GetEnvironmentVariable(StressHarnessOptions.ConcurrencyEnvironmentVariable);

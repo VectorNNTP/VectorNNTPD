@@ -10,7 +10,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
     /// <param name="Requeue">NACK requeue flag. Ignored when <see cref="Acknowledge"/> is <see langword="true"/>.</param>
     /// <param name="PublishResponse">
     /// Whether a terminal RPC response should be attempted before settlement.
-    /// Retryable outcomes are never published.
+    /// <see cref="ArticleWorkOutcome.Cancelled"/> and publish-path retry dispositions keep this
+    /// <see langword="false"/>; terminal failure replies (ProviderFailure, UnexpectedFailure, RetentionRejected)
+    /// set it <see langword="true"/> with <see cref="Acknowledge"/>.
     /// </param>
     internal readonly record struct ArticleWorkDisposition(
         bool Acknowledge,

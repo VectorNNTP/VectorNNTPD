@@ -19,6 +19,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         double P99Ms,
         double MaxMs)
     {
+        /// <summary>Builds stage statistics from unsorted millisecond samples; empty bag yields zeros.</summary>
+        /// <param name="name">Short stage identifier used in reports.</param>
+        /// <param name="description">Human-readable scope of what the samples measure.</param>
+        /// <param name="bag">Concurrent sample bag populated during the run.</param>
         public static StageLatencyStats From(string name, string description, ConcurrentBag<long> bag)
         {
             if (bag.IsEmpty)
@@ -46,6 +50,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 values[^1]);
         }
 
+        /// <summary>Order-statistic at <paramref name="quantile"/> on a sorted ascending array.</summary>
         private static double At(long[] sorted, double quantile)
         {
             var index = (int)Math.Clamp(Math.Ceiling(quantile * sorted.Length) - 1, 0, sorted.Length - 1);

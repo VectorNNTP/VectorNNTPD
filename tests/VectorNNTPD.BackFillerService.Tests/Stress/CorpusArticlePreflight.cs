@@ -144,16 +144,31 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         }
     }
 
+    /// <summary>Classification for one Message-ID in corpus or live preflight.</summary>
     public enum CorpusIdPreflightKind
     {
+        /// <summary>Id appears in the discovered corpus set.</summary>
         InCorpus,
+
+        /// <summary>Id is canonical but not present in the corpus set.</summary>
         NotInCorpus,
+
+        /// <summary>Id failed canonical Message-ID validation.</summary>
         InvalidMessageId,
+
+        /// <summary>Live Article Work preflight retrieved the article successfully.</summary>
         Retrieved,
+
+        /// <summary>Live preflight completed but article was not found upstream.</summary>
         NotFound,
+
+        /// <summary>Live preflight timed out waiting for work reply.</summary>
         Timeout,
+
+        /// <summary>Live preflight failed with a non-timeout error.</summary>
         RetrievalFailed,
     }
 
+    /// <summary>One preflight row for a selected Message-ID.</summary>
     public sealed record CorpusIdPreflightResult(string MessageId, CorpusIdPreflightKind Kind, string? Detail);
 }

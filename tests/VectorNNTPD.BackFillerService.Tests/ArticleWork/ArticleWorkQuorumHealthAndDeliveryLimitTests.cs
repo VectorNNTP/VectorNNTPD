@@ -19,7 +19,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
     /// </summary>
     public sealed class ArticleWorkQuorumHealthAndDeliveryLimitTests
     {
+        /// <summary>Structured log event id for quorum membership not ready.</summary>
         private const int QuorumMembershipNotReadyEventId = 5325;
+
+        /// <summary>Structured log event id for quorum membership healthy.</summary>
         private const int QuorumMembershipHealthyEventId = 5326;
 
         /// <summary>
@@ -744,6 +747,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             }
         }
 
+        /// <summary>Builds a healthy quorum probe result for stubbed management responses.</summary>
         private static ArticleWorkQuorumHealthResult Healthy(int required, int observed, int online) =>
             new(
                 ArticleWorkQuorumHealthKind.Healthy,
@@ -753,6 +757,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Leader: "rabbit@node-a",
                 Reason: "Quorum membership and online availability meet the configured policy.");
 
+        /// <summary>Builds an insufficient-members quorum probe result for stubbed management responses.</summary>
         private static ArticleWorkQuorumHealthResult Deficient(int required, int observed, int online) =>
             new(
                 ArticleWorkQuorumHealthKind.InsufficientMembers,
@@ -762,6 +767,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Leader: "rabbit@node-a",
                 Reason: "Configured quorum membership is below the required group size. Operator membership growth is required for pre-existing queues.");
 
+        /// <summary>Creates runtime options with the given RabbitMQ host count and Article Work delivery limit.</summary>
         private static BackFillerRuntimeOptions CreateRuntime(int hostCount, int deliveryLimit)
         {
             var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(hostCount);
@@ -773,6 +779,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 rabbit);
         }
 
+        /// <summary>Constructs a consumer with deferred handler, recording publisher, and optional quorum probe.</summary>
         private static ArticleWorkConsumerService CreateConsumer(
             IRabbitMqService connections,
             IBackFillerProviderCatalog catalog,
@@ -790,6 +797,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 capacity,
                 quorumHealth: quorumHealth);
 
+        /// <summary>Builds a static provider catalog from backbone and max-session pairs.</summary>
         private static StaticBackFillerProviderCatalog CreateCatalog(
             IReadOnlyList<(string Backbone, int MaxSessions)> providers) =>
             new(
@@ -805,6 +813,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                     p.MaxSessions)),
             ]);
 
+        /// <summary>Publishes a usable-capacity snapshot omitting backbones with zero active sessions.</summary>
         private static BackboneUsableCapacityState CreateCapacity(
             IReadOnlyList<(string Backbone, int Active)> capacities)
         {
@@ -823,6 +832,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             return state;
         }
 
+        /// <summary>Wires a management health probe to a single-handler HTTP client factory.</summary>
+        /// <returns>Probe and disposable factory lifetime.</returns>
         private static (ArticleWorkQuorumManagementHealthProbe Probe, IDisposable Lifetime) CreateManagementProbe(
             HttpMessageHandler handler,
             string baseUrl)
@@ -847,10 +858,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         /// <summary>Controllable Management stand-in for membership readiness tests.</summary>
         private sealed class ControllableArticleWorkQuorumHealthProbe : IArticleWorkQuorumHealthProbe
         {
+            /// <summary>Result returned from the next <see cref="InspectAsync"/> call.</summary>
             internal ArticleWorkQuorumHealthResult Next { get; set; }
 
+            /// <summary>Number of completed inspect calls.</summary>
             internal int InspectCount;
 
+            /// <inheritdoc />
             public Task<ArticleWorkQuorumHealthResult> InspectAsync(
                 string queueName,
                 int requiredMembers,
@@ -862,29 +876,43 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             }
         }
 
+        /// <summary>Returns one shared <see cref="HttpClient"/> backed by the injected handler.</summary>
         private sealed class SingleHandlerHttpClientFactory : IHttpClientFactory, IDisposable
         {
+            /// <summary>Client disposed with the factory.</summary>
             private readonly HttpClient _client;
 
+            /// <summary>Creates a client that owns <paramref name="handler"/>.</summary>
+            /// <param name="handler">Handler used for all management API requests.</param>
             public SingleHandlerHttpClientFactory(HttpMessageHandler handler) =>
                 _client = new HttpClient(handler, disposeHandler: true);
 
+            /// <inheritdoc />
             public HttpClient CreateClient(string name) => _client;
 
+            /// <summary>Disposes the shared client.</summary>
             public void Dispose() => _client.Dispose();
         }
 
+        /// <summary>Returns a fixed status code and JSON body for every HTTP request.</summary>
         private sealed class StubHttpMessageHandler : HttpMessageHandler
         {
+            /// <summary>HTTP status returned from <see cref="SendAsync"/>.</summary>
             private readonly HttpStatusCode _statusCode;
+
+            /// <summary>UTF-8 response body bytes.</summary>
             private readonly byte[] _bodyBytes;
 
+            /// <summary>Captures the scripted management API response.</summary>
+            /// <param name="statusCode">HTTP status for every request.</param>
+            /// <param name="body">Response body text encoded as UTF-8.</param>
             public StubHttpMessageHandler(HttpStatusCode statusCode, string body)
             {
                 _statusCode = statusCode;
                 _bodyBytes = Encoding.UTF8.GetBytes(body);
             }
 
+            /// <inheritdoc />
             protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)

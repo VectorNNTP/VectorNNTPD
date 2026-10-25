@@ -7,6 +7,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class ArticleWorkRpcLifecycleContractTests
     {
+        /// <summary>
+        /// Asserts the publish path registers a correlation in <c>_pending</c> before publish so an immediate reply cannot miss the waiter.
+        /// </summary>
         [Fact]
         public void Waiter_registration_before_publish_prevents_immediate_reply_race()
         {
@@ -20,6 +23,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(pending.ContainsKey(correlationId));
         }
 
+        /// <summary>
+        /// Two published correlations decrement independent waiter and broker-outstanding counts as replies arrive.
+        /// </summary>
         [Fact]
         public void Concurrent_correlations_complete_independent_waiters()
         {
@@ -36,6 +42,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(0, tracker.BrokerOutstandingCount);
         }
 
+        /// <summary>Caller timeout clears <see cref="ArticleWorkRpcOutstandingTracker.WaitingCount"/> but leaves broker outstanding at one.</summary>
         [Fact]
         public void Caller_timeout_does_not_clear_broker_outstanding()
         {
@@ -46,6 +53,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(1, tracker.BrokerOutstandingCount);
         }
 
+        /// <summary>Late reply increments <see cref="ArticleWorkRpcOutstandingTracker.LateRepliesAfterTimeout"/> without disturbing an still-waiting correlation.</summary>
         [Fact]
         public void Late_reply_after_timeout_is_accounted_without_corrupting_other_waiters()
         {
@@ -65,6 +73,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(1, tracker.LateRepliesAfterTimeout);
         }
 
+        /// <summary>After timeout, broker outstanding remains positive—the value recorded as unresolved when dispose drain expires.</summary>
         [Fact]
         public void Bounded_drain_reports_unresolved_when_broker_outstanding_remains()
         {
@@ -78,6 +87,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(unresolved > 0);
         }
 
+        /// <summary><see cref="ArticleWorkStressClient.CreateRequestProperties"/> omits AMQP <c>Expiration</c> on work requests.</summary>
         [Fact]
         public void Stress_work_requests_do_not_carry_per_message_expiration()
         {
@@ -88,6 +98,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(string.IsNullOrEmpty(props.Expiration));
         }
 
+        /// <summary><see cref="StressMetrics.BuildSummary"/> and <see cref="StressRunSummary.FormatTableRow"/> expose reply lifecycle counters.</summary>
         [Fact]
         public void Stress_summary_surfaces_reply_lifecycle_counters()
         {

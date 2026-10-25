@@ -51,7 +51,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>
         /// Creates the settlement plan for one classified result.
         /// </summary>
-        /// <param name="outcome">Processing or parse the outcome.</param>
+        /// <param name="outcome">Classified processing or parse outcome.</param>
         /// <param name="replyable">
         /// Whether AMQP <c>CorrelationId</c> and <c>ReplyTo</c> are both present.
         /// Only <see cref="ArticleWorkOutcome.InvalidRequest"/> uses this to decide publication.
@@ -121,7 +121,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             };
         }
 
-        /// <summary>NACK requeue while retries remain; NACK without requeue when the delivery limit is exhausted.</summary>
+        /// <summary>
+        /// Builds a non-publishing NACK disposition for cooperative cancel or unrecognized outcomes.
+        /// </summary>
+        /// <param name="retriesExhausted">
+        /// When <see langword="true"/>, NACK without requeue; otherwise NACK with requeue.
+        /// </param>
+        /// <returns>ACK false, <see cref="ArticleWorkDisposition.PublishResponse"/> false, and requeue inverted from exhaustion.</returns>
         private static ArticleWorkDisposition CreateRetryable(bool retriesExhausted) =>
             new(Acknowledge: false, Requeue: !retriesExhausted, PublishResponse: false);
     }

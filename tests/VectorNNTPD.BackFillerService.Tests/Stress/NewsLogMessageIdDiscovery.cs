@@ -276,6 +276,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return new WorkloadPartitionCounts(warmup.Length, main.Length, repeatable.Length, seed);
         }
 
+        /// <summary>Copies up to <paramref name="count"/> ids starting at <paramref name="start"/>.</summary>
         private static string[] TakeSlice(string[] ids, int start, int count)
         {
             if (start >= ids.Length || count <= 0)
@@ -289,6 +290,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return slice;
         }
 
+        /// <summary>Fisher–Yates shuffle using <paramref name="seed"/> for reproducible workloads.</summary>
         private static void Shuffle(string[] ids, int seed)
         {
             var rng = new Random(seed);
@@ -299,6 +301,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Streams lines from a large log file asynchronously with shared read access.</summary>
         private static async IAsyncEnumerable<string> ReadLinesAsync(
             string path,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

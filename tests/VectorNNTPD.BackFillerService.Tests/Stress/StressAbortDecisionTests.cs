@@ -5,6 +5,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class StressAbortDecisionTests
     {
+        /// <summary>High started count with few completions must not trigger abort (DualSoak regression).</summary>
         [Fact]
         public void ShouldAbort_false_during_flood_ramp_when_few_rpcs_completed()
         {
@@ -23,6 +24,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     abortOnFailureRate: 0.50));
         }
 
+        /// <summary>Abort when completed failure rate exceeds threshold after minimum completions.</summary>
         [Fact]
         public void ShouldAbort_true_when_completed_failure_rate_exceeds_threshold()
         {
@@ -39,6 +41,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     abortOnFailureRate: 0.50));
         }
 
+        /// <summary>Abort when completed timeout rate exceeds threshold.</summary>
         [Fact]
         public void ShouldAbort_true_when_completed_timeout_rate_exceeds_threshold()
         {
@@ -55,6 +58,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     abortOnFailureRate: 0.50));
         }
 
+        /// <summary>Abort thresholds are ignored until AbortAfterRequests completions exist.</summary>
         [Fact]
         public void ShouldAbort_false_when_below_completed_threshold()
         {

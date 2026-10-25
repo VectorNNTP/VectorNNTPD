@@ -915,6 +915,9 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </remarks>
         private struct PermitWaitLink : IDisposable
         {
+            /// <summary>
+            /// Linked caller-and-shutdown source created on the first blocking wait; null on the fast path.
+            /// </summary>
             private CancellationTokenSource? _linked;
 
             /// <summary>Returns <paramref name="shutdown"/> when the caller token does not need a separate link. Otherwise returns the linked token.</summary>

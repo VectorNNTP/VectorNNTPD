@@ -111,8 +111,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.DoesNotContain("level-5", reason, StringComparison.Ordinal);
         }
 
+        /// <summary>Exception type with a controllable message for blank-message format tests.</summary>
         private sealed class BlankMessageException : Exception
         {
+            /// <summary>Creates an exception with the given message text.</summary>
+            /// <param name="message">Message passed to the base exception.</param>
             public BlankMessageException(string message)
                 : base(message)
             {

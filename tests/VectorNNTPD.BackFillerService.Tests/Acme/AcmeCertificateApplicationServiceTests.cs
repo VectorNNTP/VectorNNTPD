@@ -459,6 +459,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
             return store.Load();
         }
 
+        /// <summary>
+        /// Builds a started-ready <see cref="ObservedRenewal"/> harness with manual clock, injectable issuer, and optional on-disk certificate seed.
+        /// </summary>
+        /// <param name="clock">Initial UTC instant for <see cref="ManualTimeProvider"/>.</param>
+        /// <param name="issuer">Issuer used by the wired <see cref="CertificateManager"/>.</param>
+        /// <param name="notAfter">Certificate validity end when <paramref name="seedDisk"/> is true; defaults to ninety days after <paramref name="clock"/>.</param>
+        /// <param name="seedDisk">When true, writes exportable PFX material into the temp ACME directory before constructing the manager.</param>
+        /// <returns>Harness whose <see cref="ObservedRenewal.Service"/> is constructed but not started.</returns>
         private static ObservedRenewal CreateObservedRenewal(
             DateTimeOffset clock,
             ICertificateIssuer issuer,
@@ -814,6 +822,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         /// <summary>Manual-clock renewal service, watchdog health, and the publisher used to swap certificate leases.</summary>
         private sealed class ObservedRenewal : IAsyncDisposable
         {
+            /// <summary>Temp ACME state directory disposed after the service and publisher stop.</summary>
             private readonly TempAcmeDir _directory;
 
             /// <summary>Stores the started collaborators. The caller starts the service.</summary>
@@ -856,7 +865,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Acme
         /// <summary>Issuer whose result depends on the 1-based call count.</summary>
         private sealed class ScriptedIssuer : ICertificateIssuer
         {
+            /// <summary>Produces material for the 1-based <see cref="IssueAsync"/> invocation number.</summary>
             private readonly Func<int, IReadOnlyList<string>, string, CertificateMaterial> _next;
+
+            /// <summary>Number of completed <see cref="IssueAsync"/> calls.</summary>
             private int _calls;
 
             /// <summary>Stores the script. Call 1 is the first <see cref="IssueAsync"/>.</summary>

@@ -745,8 +745,19 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>
-        /// True when a retryable outcome was settled after the broker delivery count reached the configured limit.
+        /// Whether <paramref name="outcome"/> is one of the failure classifications that participates in
+        /// delivery-limit exhaustion logging when the effective broker count is at or above the configured limit.
         /// </summary>
+        /// <param name="delivery">Delivery whose count and redelivered flag feed the effective count.</param>
+        /// <param name="outcome">Handler/pipeline outcome observed for this delivery.</param>
+        /// <returns>
+        /// <see langword="true"/> when the effective count is exhausted and <paramref name="outcome"/> is
+        /// ProviderFailure, Cancelled, UnexpectedFailure, or RetentionRejected.
+        /// </returns>
+        /// <remarks>
+        /// Used for structured logging only. Settlement itself follows <see cref="ArticleWorkDispositionPlanner"/>;
+        /// ProviderFailure, UnexpectedFailure, and RetentionRejected ACK with a reply rather than NACK-requeue.
+        /// </remarks>
         private bool IsDeliveryLimitExhausted(RabbitMqManualAckDelivery delivery, ArticleWorkOutcome outcome)
         {
             var effectiveCount = ArticleWorkDispositionPlanner.ResolveEffectiveDeliveryCount(

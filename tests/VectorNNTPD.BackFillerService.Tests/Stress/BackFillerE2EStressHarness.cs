@@ -19,13 +19,16 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </remarks>
     public sealed class BackFillerE2EStressHarness
     {
+        /// <summary>Immutable harness configuration for this orchestrator instance.</summary>
         private readonly StressHarnessOptions _options;
 
+        /// <summary>Captures harness options; does not connect to broker until run methods execute.</summary>
         public BackFillerE2EStressHarness(StressHarnessOptions options)
         {
             _options = options ?? throw new ArgumentNullException(nameof(options));
         }
 
+        /// <summary>Discovers Message-IDs from the configured corpus, writes workload files and manifest.</summary>
         public async Task<NewsLogDiscoveryStats> DiscoverAndWriteWorkloadAsync(
             CancellationToken cancellationToken)
         {
@@ -100,6 +103,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return stats;
         }
 
+        /// <summary>Executes one end-to-end stress run with publish, reply, and NNTP delivery workers.</summary>
         public async Task<StressRunSummary> RunAsync(
             string runName,
             string backbone,
@@ -626,6 +630,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Best-effort Management API queue sample; swallows errors so observability never fails the run.</summary>
         private async Task SampleQueueDepthSafeAsync(
             StressMetrics metrics,
             string queueName,
@@ -688,6 +693,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Records publisher-side fault and may cancel the run via abort thresholds.</summary>
         private void RecordPublisherWorkerFault(
             StressMetrics metrics,
             WorkItem item,
@@ -700,6 +706,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             MaybeAbort(metrics, runCts);
         }
 
+        /// <summary>Records NNTP delivery disconnect fault and may cancel the run.</summary>
         private void RecordDeliveryWorkerFault(
             StressMetrics metrics,
             DeliveryItem item,
@@ -712,6 +719,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             MaybeAbort(metrics, runCts);
         }
 
+        /// <summary>Cancels the run token when completed-reply abort thresholds are exceeded.</summary>
         private void MaybeAbort(StressMetrics metrics, CancellationTokenSource runCts)
         {
             var summary = metrics.BuildSummary();
@@ -730,6 +738,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Loads non-empty angle-bracket Message-ID lines from a workload file.</summary>
         private static async Task<IReadOnlyList<string>> LoadMessageIdsAsync(
             string path,
             CancellationToken cancellationToken)
@@ -740,6 +749,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 .ToArray();
         }
 
+        /// <summary>Replaces invalid path characters in <paramref name="runName"/> for report filenames.</summary>
         private static string SanitizeFileName(string runName)
         {
             var invalid = Path.GetInvalidFileNameChars();
@@ -747,8 +757,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return new string(chars);
         }
 
+        /// <summary>One scheduled Article Work publish item.</summary>
         private readonly record struct WorkItem(string MessageId, string Backbone, long StartedTimestamp);
 
+        /// <summary>One NNTP delivery item after a successful work reply.</summary>
         private readonly record struct DeliveryItem(
             string MessageId,
             string Backbone,

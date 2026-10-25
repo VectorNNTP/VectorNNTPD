@@ -19,6 +19,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal("1000", ArticleWorkResponseWireProtocol.ExpirationMilliseconds);
         }
 
+        /// <summary>
+        /// Verifies the response AMQP expiration constant is non-empty, fixed at one second, and not treated as a work-request TTL.
+        /// </summary>
         [Fact]
         public void Response_expiration_is_distinct_from_omitted_work_request_ttl()
         {

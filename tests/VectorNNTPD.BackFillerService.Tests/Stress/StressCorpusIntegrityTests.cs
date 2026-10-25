@@ -5,6 +5,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </summary>
     public sealed class StressCorpusIntegrityTests
     {
+        /// <summary>RequiredNewsLogDirectory matches the committed absolute VectorNNTP corpus path.</summary>
         [Fact]
         public void Required_corpus_path_is_the_vectornntp_newslogs_directory()
         {
@@ -13,6 +14,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 StressCorpusPaths.RequiredNewsLogDirectory);
         }
 
+        /// <summary>When the corpus exists locally, discovery finds log files including news-20261019.log.</summary>
         [Fact]
         public void Required_corpus_path_resolves_to_usable_logs_on_this_host()
         {
@@ -31,6 +33,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     Path.Join(StressCorpusPaths.RequiredNewsLogDirectory, "news-20261019.log")));
         }
 
+        /// <summary>NotInCorpus preflight row causes ThrowIfPreflightBlocksPublish to throw.</summary>
         [Fact]
         public void Preflight_blocks_publish_on_invalid_or_non_corpus_ids()
         {
@@ -43,6 +46,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Contains("blocked publish", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>All failed live preflight rows block publish.</summary>
         [Fact]
         public void Preflight_blocks_publish_when_zero_ids_retrieved()
         {
@@ -56,6 +60,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Contains("none of the", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>A single Retrieved row allows the publish gate to pass.</summary>
         [Fact]
         public void Preflight_allows_publish_when_at_least_one_retrieved()
         {
@@ -67,6 +72,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             CorpusArticlePreflight.ThrowIfPreflightBlocksPublish(results);
         }
 
+        /// <summary>Manifest SHA mismatch fails the provenance guard.</summary>
         [Fact]
         public async Task Workload_guard_rejects_hash_mismatch()
         {
@@ -114,6 +120,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>FromEnvironment uses RequiredNewsLogDirectory when NEWSLOGS env is unset.</summary>
         [Fact]
         public void FromEnvironment_defaults_to_required_corpus_path()
         {
@@ -145,6 +152,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>NEWSLOGS environment override is reflected in options.</summary>
         [Fact]
         public void FromEnvironment_honours_explicit_newslog_override_for_fixtures()
         {
@@ -174,6 +182,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Workload without manifest fails provenance check.</summary>
         [Fact]
         public async Task Workload_guard_rejects_missing_manifest_stale_cache()
         {
@@ -201,6 +210,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Manifest corpus directory must match configured NewsLogDirectory.</summary>
         [Fact]
         public async Task Workload_guard_rejects_cross_corpus_manifest()
         {
@@ -248,6 +258,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>ValidateSelectedAgainstCorpus marks missing ids NotInCorpus without substitution.</summary>
         [Fact]
         public void Preflight_flags_ids_not_in_corpus_without_replacement()
         {
@@ -259,6 +270,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal("<missing@host>", results[1].MessageId);
         }
 
+        /// <summary>RequireSelectedIdsSubset throws when selection is not a subset of the allowed set.</summary>
         [Fact]
         public void Selected_ids_must_be_subset_of_corpus()
         {
@@ -267,6 +279,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 () => StressWorkloadGuard.RequireSelectedIdsSubset(["<a@host>", "<b@host>"], allowed));
         }
 
+        /// <summary>Request properties carry correlation, reply-to, RequestId, and StressRunId without Expiration.</summary>
         [Fact]
         public void CreateRequestProperties_preserves_exact_message_path_headers_without_request_ttl()
         {
@@ -284,6 +297,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(runId, props.Headers["StressRunId"]);
         }
 
+        /// <summary>WriteWorkloadSets deduplicates ids before partitioning.</summary>
         [Fact]
         public void Duplicate_ids_are_collapsed_before_workload_write()
         {

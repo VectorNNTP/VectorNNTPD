@@ -21,7 +21,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Named <see cref="IHttpClientFactory"/> client for Management calls.</summary>
         internal const string HttpClientName = "VectorNNTPD.ArticleWork.QuorumManagement";
 
+        /// <summary>Factory that creates the named Management HTTP client for each inspection.</summary>
         private readonly IHttpClientFactory _httpClientFactory;
+
+        /// <summary>Bound RabbitMQ options, including Management base URL, vhost, and credentials.</summary>
         private readonly IOptions<RabbitMqOptions> _options;
 
         /// <summary>
@@ -155,6 +158,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>Maps a Management queue document to a health result.</summary>
+        /// <param name="document">Deserialized Management queue payload for the provider queue.</param>
+        /// <param name="requiredMembers">Configured membership floor compared to observed members and online counts.</param>
+        /// <returns>Healthy, insufficient, missing, or unverifiable classification with a non-secret reason.</returns>
         private static ArticleWorkQuorumHealthResult Evaluate(
             ArticleWorkQuorumManagementQueueDocument document,
             int requiredMembers)
@@ -217,6 +223,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>Builds an absolute Management queue URL without credentials.</summary>
+        /// <param name="baseUrl">Management HTTP base URL (scheme and authority; trailing slash optional).</param>
+        /// <param name="vhost">AMQP virtual host; URI-encoded into the path.</param>
+        /// <param name="queueName">Queue name; URI-encoded into the path.</param>
+        /// <returns>Absolute <c>/api/queues/{vhost}/{queue}</c> URI under <paramref name="baseUrl"/>.</returns>
         internal static Uri BuildQueueUri(string baseUrl, string vhost, string queueName)
         {
             var root = baseUrl.TrimEnd('/');
@@ -225,6 +235,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             return new Uri($"{root}/api/queues/{encodedVhost}/{encodedQueue}");
         }
 
+        /// <summary>
+        /// Builds an <see cref="ArticleWorkQuorumHealthKind.Unverifiable"/> result with null membership observations.
+        /// </summary>
+        /// <param name="requiredMembers">Configured membership floor copied onto the result.</param>
+        /// <param name="reason">Operator-facing explanation of why membership could not be verified.</param>
+        /// <returns>An unverifiable health result with no observed member, online, or leader counts.</returns>
         private static ArticleWorkQuorumHealthResult Unverifiable(int requiredMembers, string reason) =>
             new(
                 ArticleWorkQuorumHealthKind.Unverifiable,

@@ -26,6 +26,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             await MeasureLeaseAsync();
         }
 
+        /// <summary>Prints per-operation allocation for status parsing and a manual builder baseline.</summary>
         private static void MeasureStatusParse()
         {
             var manualBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -63,6 +64,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 $"after status-parse n={iterations} alloc/op={allocated / iterations} gen0={GC.CollectionCount(0) - g0}");
         }
 
+        /// <summary>Prints allocation and throughput for repeated status-line reads on a cycling wire buffer.</summary>
         private static async Task MeasureStatusLineAsync()
         {
             var wire = "220 0 <id@example.invalid> article follows\n"u8.ToArray();
@@ -98,6 +100,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 $"after status-line n={iterations} alloc/op={allocated / iterations} lines/s={iterations / elapsed.TotalSeconds:F0} gen0={GC.CollectionCount(0) - g0} capacity={reader.LineBufferCapacity}");
         }
 
+        /// <summary>Prints caller and process allocation for scripted ARTICLE downloads on an immediate in-memory peer.</summary>
         private static async Task MeasureArticleAsync()
         {
             // The pipe-backed scripted peer completes reads on the thread pool. GetResult keeps this
@@ -174,6 +177,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 $"after article-debug-text-disabled n={iterations} alloc/op={allocated / iterations} gen0={GC.CollectionCount(0) - g0}");
         }
 
+        /// <summary>Prints allocation for repeated session-pool acquire and dispose cycles.</summary>
         private static async Task MeasureLeaseAsync()
         {
             var factory = new ScriptedNntpTransportFactory();
@@ -207,6 +211,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// <summary>Returns the already constructed stream. The article measurement owns its lifetime.</summary>
         private sealed class ImmediateNntpTransportFactory(ImmediateScriptedNntpStream stream) : INntpTransportFactory
         {
+            /// <inheritdoc />
             public Task<Stream> ConnectAsync(
                 BackFillerProviderDefinition provider,
                 NntpSessionOptions options,
@@ -224,57 +229,76 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         /// </summary>
         private sealed class ImmediateScriptedNntpStream : Stream
         {
+            /// <summary>Initial server greeting appended in the constructor.</summary>
             private static readonly byte[] Greeting = "200 posting allowed\r\n"u8.ToArray();
 
+            /// <summary>CAPABILITIES multiline response.</summary>
             private static readonly byte[] Capabilities =
                 "101 Capability list follows\r\nVERSION 2\r\nREADER\r\n.\r\n"u8.ToArray();
 
+            /// <summary>ARTICLE success multiline payload.</summary>
             private static readonly byte[] Article =
                 "220 0 <id@example.invalid> article follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n"u8.ToArray();
 
+            /// <summary>Default positive single-line response for non-ARTICLE commands.</summary>
             private static readonly byte[] Ready = "201 ready\r\n"u8.ToArray();
 
+            /// <summary>Buffered outbound bytes not yet consumed by reads.</summary>
             private readonly byte[] _inbound = new byte[1024];
 
+            /// <summary>Accumulates the current client command line before dispatch.</summary>
             private readonly byte[] _command = new byte[256];
 
+            /// <summary>Start offset of unread bytes in <see cref="_inbound"/>.</summary>
             private int _inboundOffset;
 
+            /// <summary>Number of unread bytes in <see cref="_inbound"/>.</summary>
             private int _inboundCount;
 
+            /// <summary>Length of the partial command accumulated in <see cref="_command"/>.</summary>
             private int _commandCount;
 
+            /// <summary>Buffers the server greeting for the first client read.</summary>
             public ImmediateScriptedNntpStream()
             {
                 Append(Greeting);
             }
 
+            /// <inheritdoc />
             public override bool CanRead => true;
 
+            /// <inheritdoc />
             public override bool CanSeek => false;
 
+            /// <inheritdoc />
             public override bool CanWrite => true;
 
+            /// <inheritdoc />
             public override long Length => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override long Position
             {
                 get => throw new NotSupportedException();
                 set => throw new NotSupportedException();
             }
 
+            /// <inheritdoc />
             public override void Flush()
             {
             }
 
+            /// <inheritdoc />
             public override Task FlushAsync(CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 return Task.CompletedTask;
             }
 
+            /// <inheritdoc />
             public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -295,6 +319,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return new ValueTask<int>(n);
             }
 
+            /// <inheritdoc />
             public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -316,12 +341,16 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return ValueTask.CompletedTask;
             }
 
+            /// <inheritdoc />
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void SetLength(long value) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+            /// <summary>Appends a command fragment into <see cref="_command"/>.</summary>
             private void CopyCommand(ReadOnlySpan<byte> data)
             {
                 if (_commandCount + data.Length > _command.Length)
@@ -333,6 +362,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 _commandCount += data.Length;
             }
 
+            /// <summary>Maps a completed command line to a scripted response appended to the inbound buffer.</summary>
             private void DispatchCommand()
             {
                 var line = _command.AsSpan(0, _commandCount);
@@ -360,6 +390,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 }
             }
 
+            /// <summary>Appends response bytes to the read-side buffer, compacting when necessary.</summary>
             private void Append(ReadOnlySpan<byte> data)
             {
                 if (_inboundOffset > 0 && _inboundOffset + _inboundCount + data.Length > _inbound.Length)
@@ -378,30 +409,40 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             }
         }
 
+        /// <summary>Read-only stream that rewinds to the start after each full pass over <paramref name="data"/>.</summary>
         private sealed class CyclingByteStream(byte[] data) : Stream
         {
+            /// <summary>Current read offset; wraps to zero at end of <paramref name="data"/>.</summary>
             private int _pos;
 
+            /// <inheritdoc />
             public override bool CanRead => true;
 
+            /// <inheritdoc />
             public override bool CanSeek => false;
 
+            /// <inheritdoc />
             public override bool CanWrite => false;
 
+            /// <inheritdoc />
             public override long Length => data.Length;
 
+            /// <inheritdoc />
             public override long Position
             {
                 get => _pos;
                 set => throw new NotSupportedException();
             }
 
+            /// <inheritdoc />
             public override void Flush()
             {
             }
 
+            /// <inheritdoc />
             public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
+            /// <inheritdoc />
             public override int Read(Span<byte> buffer)
             {
                 if (_pos >= data.Length)
@@ -415,16 +456,20 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return n;
             }
 
+            /// <inheritdoc />
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 return new ValueTask<int>(Read(buffer.Span));
             }
 
+            /// <inheritdoc />
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void SetLength(long value) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
     }

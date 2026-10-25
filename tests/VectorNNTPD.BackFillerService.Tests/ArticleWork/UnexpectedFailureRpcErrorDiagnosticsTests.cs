@@ -299,6 +299,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal(pipeline.LastEscapedHandlerFailureError, Assert.Single(publisher.Published).Error);
         }
 
+        /// <summary>Creates a small in-memory retention authority for RPC error diagnostics tests.</summary>
         private static ArticleRetentionAuthority CreateRetention() =>
             new(
                 new BackFillerArticleRetentionRuntimeOptions(1024 * 1024, TimeSpan.FromHours(1), TimeSpan.FromMinutes(1), 256),
@@ -307,15 +308,20 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 TimeProvider.System,
                 NullLogger<ArticleRetentionAuthority>.Instance);
 
+        /// <summary><see cref="INntpArticleRetriever"/> that synchronously throws the configured exception.</summary>
         private sealed class ThrowingRetriever : INntpArticleRetriever
         {
+            /// <summary>Exception propagated from <see cref="RetrieveAsync"/>.</summary>
             private readonly Exception _exception;
 
+            /// <summary>Stores the exception to throw on retrieve.</summary>
+            /// <param name="exception">Fault surfaced to the Article Work pipeline.</param>
             internal ThrowingRetriever(Exception exception)
             {
                 _exception = exception;
             }
 
+            /// <inheritdoc />
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
                 int maxArticleBytes,

@@ -24,23 +24,53 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
     /// </remarks>
     public sealed class ArticleWorkStressClient : IAsyncDisposable
     {
+        /// <summary>Owns the exclusive ReplyTo queue; disposed last after drain.</summary>
         private readonly IConnection _connection;
+
+        /// <summary>Channel used for BasicPublish to provider fanout exchanges.</summary>
         private readonly IChannel _publishChannel;
+
+        /// <summary>Channel that declares ReplyTo and runs the auto-ack reply consumer.</summary>
         private readonly IChannel _consumeChannel;
+
+        /// <summary>Exclusive auto-delete queue name passed as AMQP ReplyTo.</summary>
         private readonly string _replyQueue;
+
+        /// <summary>Outstanding correlations keyed by AMQP CorrelationId.</summary>
         private readonly ConcurrentDictionary<string, PendingRpc> _pending =
             new(StringComparer.Ordinal);
+
+        /// <summary>Per-request waiter timeout configured from harness options.</summary>
         private readonly TimeSpan _replyTimeout;
+
+        /// <summary>Maximum time to wait for broker-outstanding replies before closing ReplyTo.</summary>
         private readonly TimeSpan _disposeDrainTimeout;
+
+        /// <summary>Non-zero after <see cref="DisposeAsync"/> begins.</summary>
         private int _disposed;
+
+        /// <summary>Active caller waiters (mirrors publish-side lifecycle accounting).</summary>
         private int _waitingCount;
+
+        /// <summary>Published correlations not yet settled by reply, timeout path, or publish failure.</summary>
         private int _brokerOutstandingCount;
+
+        /// <summary>Broker outstanding remaining when dispose drain timed out.</summary>
         private int _unresolvedAtDispose;
+
+        /// <summary>Late replies received after caller timeout.</summary>
         private int _lateRepliesAfterTimeout;
+
+        /// <summary>Set to 1 after ReplyTo consumer is registered in <see cref="ConnectAsync"/>.</summary>
         private int _replyConsumerReady;
+
+        /// <summary>Replies with unknown or stale CorrelationId.</summary>
         private int _unknownCorrelationReplies;
+
+        /// <summary>Optional run id propagated on request headers when set.</summary>
         private string? _stressRunId;
 
+        /// <summary>Private ctor; use <see cref="ConnectAsync"/> to construct a connected client.</summary>
         private ArticleWorkStressClient(
             IConnection connection,
             IChannel publishChannel,
@@ -292,6 +322,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Maps a backbone label to the fanout exchange/queue entity name <c>backfiller.{backbone}</c>.</summary>
         public static string ComposeProviderEntity(string backbone)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
@@ -334,6 +365,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             };
         }
 
+        /// <summary>Auto-ack reply handler: completes waiters or counts late/unknown correlations.</summary>
         private async Task OnReplyAsync(object sender, BasicDeliverEventArgs args)
         {
             await Task.Yield();
@@ -386,6 +418,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Rolls back outstanding state and returns a synthetic <see cref="ArticleWorkStressOutcome.BrokerError"/> reply.</summary>
         private ArticleWorkReply PublishBrokerError(
             Exception ex,
             string correlationId,
@@ -411,6 +444,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             };
         }
 
+        /// <summary>Completes a still-waiting caller with broker-error when JSON parsing fails.</summary>
         private static void CompleteReplyParseFault(
             bool wasWaiting,
             PendingRpc pending,
@@ -436,6 +470,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             });
         }
 
+        /// <summary>Removes a pending correlation and decrements lifecycle counters (timeout/cancel/publish fault).</summary>
         private void CompleteBrokerOutstanding(string correlationId, bool clearWaiting)
         {
             if (!_pending.TryRemove(correlationId, out var pending))
@@ -451,6 +486,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Interlocked.Decrement(ref _brokerOutstandingCount);
         }
 
+        /// <summary>UTF-8 JSON body for version-1 Article Work request (no article bytes).</summary>
         private static byte[] BuildRequestJson(Guid requestId, string messageId, string backbone)
         {
             var json =
@@ -464,6 +500,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return Encoding.UTF8.GetBytes(json);
         }
 
+        /// <summary>Deserializes compact JSON reply metadata into <see cref="ArticleWorkReply"/>.</summary>
         private static ArticleWorkReply ParseReply(ReadOnlySpan<byte> body)
         {
             using var doc = JsonDocument.Parse(body.ToArray());
@@ -513,6 +550,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return new ArticleWorkReply(outcome, backbone, messageId, requestId, fqdn, port, articleId, error);
         }
 
+        /// <summary>
+        /// Bounded drain on broker-outstanding work, then closes channels and cancels remaining waiters.
+        /// </summary>
         public async ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -554,6 +594,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             await _connection.DisposeAsync().ConfigureAwait(false);
         }
 
+        /// <summary>Best-effort channel close during dispose; transport faults are ignored.</summary>
         private static async Task CloseIgnoreFaultsAsync(IChannel channel)
         {
             try
@@ -590,6 +631,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Best-effort connection close during dispose; transport faults are ignored.</summary>
         private static async Task CloseIgnoreFaultsAsync(IConnection connection)
         {
             try
@@ -626,8 +668,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
+        /// <summary>Per-correlation waiter state for one in-flight RPC.</summary>
         private sealed class PendingRpc(TaskCompletionSource<ArticleWorkReply> waiter)
         {
+            /// <summary>Task completed when a reply arrives or parse fault is synthesized.</summary>
             public TaskCompletionSource<ArticleWorkReply> Waiter { get; } = waiter;
 
             /// <summary>1 while a caller is awaiting <see cref="Waiter"/>; 0 after timeout or completion.</summary>
@@ -658,8 +702,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         /// <summary>Milliseconds for the local BasicPublishAsync call.</summary>
         public long PublishMilliseconds { get; init; }
 
+        /// <summary><see cref="Stopwatch"/> timestamp when publish began.</summary>
         public long PublishStartedTimestamp { get; init; }
+
+        /// <summary><see cref="Stopwatch"/> timestamp when BasicPublish completed.</summary>
         public long PublishCompletedTimestamp { get; init; }
+
+        /// <summary><see cref="Stopwatch"/> timestamp when the reply was received (or timeout path taken).</summary>
         public long ReplyReceivedTimestamp { get; init; }
     }
 }

@@ -2,8 +2,10 @@ using System.Text;
 
 namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
+    /// <summary>Unit tests for NNTP multiline read, failure classification, and provider entity naming.</summary>
     public sealed class NntpArticleResponseReaderTests
     {
+        /// <summary>220 multiline path counts wire vs logical bytes after dot-stuffing.</summary>
         [Fact]
         public async Task ReadArticleExchange_counts_destuffed_payload_without_framing()
         {
@@ -25,6 +27,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(5, result.LogicalArticleBytes); // ".hi\r\n"
         }
 
+        /// <summary>430 response yields zero payload bytes.</summary>
         [Fact]
         public async Task ReadArticleExchange_not_found_has_zero_payload()
         {
@@ -39,6 +42,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(0, result.WireArticleBytes);
         }
 
+        /// <summary>Body read without terminator yields <see cref="NntpResponseKind.Incomplete"/>.</summary>
         [Fact]
         public async Task ConsumeArticleBody_incomplete_when_peer_closes()
         {
@@ -51,6 +55,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.True(result.WireArticleBytes > 0);
         }
 
+        /// <summary>ClassifyFailure maps work, NNTP, timeout, and disconnect inputs to <see cref="StressFailureClass"/>.</summary>
         [Theory]
         [InlineData(ArticleWorkStressOutcome.ArticleNotFound, null, false, false, StressFailureClass.MissingOrExpired)]
         [InlineData(ArticleWorkStressOutcome.ProviderFailure, null, false, false, StressFailureClass.UpstreamOrValidation)]
@@ -71,6 +76,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Assert.Equal(expected, actual);
         }
 
+        /// <summary>ComposeProviderEntity lowercases backbone in the backfiller entity name.</summary>
         [Fact]
         public void ComposeProviderEntity_normalizes_backbone()
         {

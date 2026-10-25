@@ -262,51 +262,109 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             };
         }
 
+        /// <summary>Returns whether <paramref name="value"/> is an ASCII decimal digit.</summary>
         private static bool IsDigit(byte value) => value is >= (byte)'0' and <= (byte)'9';
     }
 
     /// <summary>Listener ARTICLE / multiline outcome kinds used by the stress harness.</summary>
     public enum NntpResponseKind
     {
+        /// <summary>220/221 style status before multiline body consumption.</summary>
         ArticleFollows,
+
+        /// <summary>Complete multiline article received and destuffed.</summary>
         ArticleDelivered,
+
+        /// <summary>430-class article not found on listener.</summary>
         NotFound,
+
+        /// <summary>435-class article temporarily unavailable.</summary>
         NotAvailable,
+
+        /// <summary>411-class newsgroup missing (not used for ARTICLE-by-message-id success path).</summary>
         NoNewsgroup,
+
+        /// <summary>502 unknown command response.</summary>
         UnknownCommand,
+
+        /// <summary>501 syntax error response.</summary>
         SyntaxError,
+
+        /// <summary>Unrecognized numeric status code.</summary>
         UnexpectedStatus,
+
+        /// <summary>Framing or parsing violation while reading NNTP.</summary>
         ProtocolError,
+
+        /// <summary>Peer closed before multiline terminator.</summary>
         Incomplete,
+
+        /// <summary>Transport closed unexpectedly.</summary>
         Disconnect,
     }
 
     /// <summary>Article Work reply outcomes observable by the stress publisher (wire names).</summary>
     public enum ArticleWorkStressOutcome
     {
+        /// <summary>Work reply indicates listener routing metadata for delivery.</summary>
         Success,
+
+        /// <summary>Upstream/article missing for the requested Message-ID.</summary>
         ArticleNotFound,
+
+        /// <summary>Article failed validation/retention rules.</summary>
         InvalidArticle,
+
+        /// <summary>Malformed work request rejected by BackFiller.</summary>
         InvalidRequest,
+
+        /// <summary>Provider/upstream failure reported in reply JSON.</summary>
         ProviderFailure,
+
+        /// <summary>Unexpected BackFiller failure outcome.</summary>
         UnexpectedFailure,
+
+        /// <summary>Retention policy rejected the article.</summary>
         RetentionRejected,
+
+        /// <summary>Harness waiter timed out (synthetic outcome).</summary>
         NoResponse,
+
+        /// <summary>Publish/parse/broker fault on the stress client path.</summary>
         BrokerError,
     }
 
     /// <summary>Stable failure buckets for reports.</summary>
     public enum StressFailureClass
     {
+        /// <summary>Not a failure (success path).</summary>
         None,
+
+        /// <summary>Article missing or expired (work or NNTP 430/404 class).</summary>
         MissingOrExpired,
+
+        /// <summary>435 not available.</summary>
         NotAvailable,
+
+        /// <summary>Harness or work reply timeout.</summary>
         Timeout,
+
+        /// <summary>NNTP transport disconnect during delivery.</summary>
         Disconnect,
+
+        /// <summary>Multiline body ended early.</summary>
         IncompleteResponse,
+
+        /// <summary>NNTP protocol/framing error.</summary>
         ProtocolError,
+
+        /// <summary>BackFiller validation/provider failures.</summary>
         UpstreamOrValidation,
+
+        /// <summary>RabbitMQ publish/reply/client faults.</summary>
         RabbitMqError,
+
+        /// <summary>Uncategorized failure bucket.</summary>
         Other,
     }
 

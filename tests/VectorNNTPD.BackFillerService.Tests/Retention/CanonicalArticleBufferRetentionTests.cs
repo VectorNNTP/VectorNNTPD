@@ -662,10 +662,19 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         /// </summary>
         private sealed class BlockingBodyTransport : ICacheListenerTransport
         {
+            /// <summary>Client command bytes returned from reads.</summary>
             private readonly byte[] _inbound;
+
+            /// <summary>Outbound bytes copied from completed writes.</summary>
             private readonly List<byte> _written = [];
+
+            /// <summary>1-based write index that waits on <see cref="ReleaseBody"/>.</summary>
             private readonly int _blockOnWrite;
+
+            /// <summary>Next read offset into <see cref="_inbound"/>.</summary>
             private int _offset;
+
+            /// <summary>Number of completed write calls.</summary>
             private int _writeCalls;
 
             /// <summary>Feeds <paramref name="inbound"/> as the client command and pauses write number <paramref name="blockOnWrite"/>.</summary>
@@ -725,10 +734,19 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         /// <summary>Accepts the first half of the retained body only after <see cref="ReleaseBody"/>, then the remainder.</summary>
         private sealed class PartialBodyTransport : ICacheListenerTransport
         {
+            /// <summary>Client command bytes returned from reads.</summary>
             private readonly byte[] _inbound;
+
+            /// <summary>Retained body prefix that triggers the partial-write pause.</summary>
             private readonly byte[] _body;
+
+            /// <summary>Outbound bytes copied from completed writes.</summary>
             private readonly List<byte> _written = [];
+
+            /// <summary>Next read offset into <see cref="_inbound"/>.</summary>
             private int _offset;
+
+            /// <summary>True after the body write has entered the pause path.</summary>
             private bool _pausedBody;
 
             /// <summary>Feeds <paramref name="inbound"/> and pauses the write that begins with <paramref name="body"/>.</summary>
@@ -804,8 +822,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         /// <summary>Pool that rents a longer array and throws if an array is returned twice.</summary>
         private sealed class TrackingBytePool : ArrayPool<byte>
         {
+            /// <summary>Rented arrays not yet returned, keyed by reference identity.</summary>
             private readonly ConcurrentDictionary<byte[], byte> _outstanding = new(ReferenceEqualityComparer.Instance);
+
+            /// <summary>Total rent count.</summary>
             private int _rents;
+
+            /// <summary>Total successful return count.</summary>
             private int _returns;
 
             /// <summary>Number of <see cref="Rent"/> calls.</summary>

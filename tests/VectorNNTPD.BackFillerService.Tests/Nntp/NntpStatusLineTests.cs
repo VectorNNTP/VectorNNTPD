@@ -293,10 +293,15 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(text, NntpProtocolIo.DecodeStatusText(bytes));
         }
 
+        /// <summary>Builds a reader over an in-memory wire buffer.</summary>
+        /// <param name="wire">Bytes fed to the underlying stream.</param>
         private static NntpStreamReader Reader(byte[] wire) => Reader(new MemoryStream(wire, writable: false));
 
+        /// <summary>Builds a reader with the default 1 KiB line scratch capacity.</summary>
+        /// <param name="stream">Transport supplying protocol bytes.</param>
         private static NntpStreamReader Reader(Stream stream) => new(stream, 1024);
 
+        /// <summary>Reads one line using test defaults for max length and timeout.</summary>
         private static Task<int> ReadAsync(
             NntpStreamReader reader,
             int maxBytes = 16 * 1024,
@@ -304,30 +309,40 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             CancellationToken cancellationToken = default) =>
             reader.ReadLineAsync(maxBytes, timeout ?? TimeSpan.FromSeconds(2), cancellationToken);
 
+        /// <summary>Returns successive read chunks exactly once, then EOF.</summary>
         private sealed class ChunkedStream(byte[][] chunks) : Stream
         {
+            /// <summary>Index of the next chunk to copy on read.</summary>
             private int _index;
 
+            /// <inheritdoc />
             public override bool CanRead => true;
 
+            /// <inheritdoc />
             public override bool CanSeek => false;
 
+            /// <inheritdoc />
             public override bool CanWrite => false;
 
+            /// <inheritdoc />
             public override long Length => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override long Position
             {
                 get => throw new NotSupportedException();
                 set => throw new NotSupportedException();
             }
 
+            /// <inheritdoc />
             public override void Flush()
             {
             }
 
+            /// <inheritdoc />
             public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
+            /// <inheritdoc />
             public override int Read(Span<byte> buffer)
             {
                 if (_index >= chunks.Length)
@@ -340,42 +355,57 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return chunk.Length;
             }
 
+            /// <inheritdoc />
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) =>
                 new(Read(buffer.Span));
 
+            /// <inheritdoc />
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void SetLength(long value) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
 
+        /// <summary>Read-only stream that counts synchronous and asynchronous read calls.</summary>
         private sealed class CountingStream(byte[] data) : Stream
         {
+            /// <summary>Current offset into <paramref name="data"/>.</summary>
             private int _pos;
 
+            /// <summary>Number of completed read operations.</summary>
             public int Reads { get; private set; }
 
+            /// <inheritdoc />
             public override bool CanRead => true;
 
+            /// <inheritdoc />
             public override bool CanSeek => false;
 
+            /// <inheritdoc />
             public override bool CanWrite => false;
 
+            /// <inheritdoc />
             public override long Length => data.Length;
 
+            /// <inheritdoc />
             public override long Position
             {
                 get => _pos;
                 set => throw new NotSupportedException();
             }
 
+            /// <inheritdoc />
             public override void Flush()
             {
             }
 
+            /// <inheritdoc />
             public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
 
+            /// <inheritdoc />
             public override int Read(Span<byte> buffer)
             {
                 Reads++;
@@ -390,43 +420,60 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return n;
             }
 
+            /// <inheritdoc />
             public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) =>
                 new(Read(buffer.Span));
 
+            /// <inheritdoc />
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void SetLength(long value) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
 
+        /// <summary>Blocks the first asynchronous read until <paramref name="release"/> completes, then serves <paramref name="data"/>.</summary>
         private sealed class HoldThenDataStream(byte[] data, TaskCompletionSource release) : Stream
         {
+            /// <summary>0 before the first read enters; 1 afterward.</summary>
             private int _phase;
+
+            /// <summary>Current offset into <paramref name="data"/> after the hold phase.</summary>
             private int _pos;
 
+            /// <summary>Signaled when the first read enters the hold path.</summary>
             public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            /// <inheritdoc />
             public override bool CanRead => true;
 
+            /// <inheritdoc />
             public override bool CanSeek => false;
 
+            /// <inheritdoc />
             public override bool CanWrite => false;
 
+            /// <inheritdoc />
             public override long Length => data.Length;
 
+            /// <inheritdoc />
             public override long Position
             {
                 get => _pos;
                 set => throw new NotSupportedException();
             }
 
+            /// <inheritdoc />
             public override void Flush()
             {
             }
 
+            /// <inheritdoc />
             public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken)
             {
                 if (_phase == 0)
@@ -449,10 +496,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 return n;
             }
 
+            /// <inheritdoc />
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void SetLength(long value) => throw new NotSupportedException();
 
+            /// <inheritdoc />
             public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         }
     }

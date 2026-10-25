@@ -233,6 +233,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         /// <summary>Hosts ProviderAccountConfigurationService for FQDN projection assertions.</summary>
         private sealed class ProjectionHarness : IAsyncDisposable
         {
+            /// <summary>Retains account configuration and provider registry for FQDN projection tests.</summary>
+            /// <param name="service">Started or constructed account configuration service.</param>
+            /// <param name="registry">Provider registry disposed with the harness.</param>
             internal ProjectionHarness(
                 ProviderAccountConfigurationService service,
                 NntpProviderRegistry registry)
@@ -241,10 +244,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 Registry = registry;
             }
 
+            /// <summary>Account configuration service under test.</summary>
             internal ProviderAccountConfigurationService Service { get; }
 
+            /// <summary>Provider registry wired to the service.</summary>
             internal NntpProviderRegistry Registry { get; }
 
+            /// <summary>Disposes the service and registry in order.</summary>
             public async ValueTask DisposeAsync()
             {
                 await Service.DisposeAsync().ConfigureAwait(false);
@@ -255,8 +261,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
         /// <summary>Shared-configuration stub with a replaceable snapshot.</summary>
         private sealed class FixedSharedConfigurationSource : IBackFillerSharedConfigurationSource
         {
+            /// <summary>Snapshot returned from every <see cref="ReadAsync"/> call.</summary>
             public required NntpSharedConfiguration Value { get; set; }
 
+            /// <inheritdoc />
             public ValueTask<NntpSharedConfiguration> ReadAsync(CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();

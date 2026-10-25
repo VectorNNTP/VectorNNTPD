@@ -160,6 +160,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             return last!;
         }
 
+        /// <summary>Reads a Management API <c>message_stats.*_details.rate</c> value when present; otherwise zero.</summary>
         private static double TryRate(JsonElement root, string detailsName)
         {
             if (!root.TryGetProperty("message_stats", out var stats))
