@@ -518,5 +518,58 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             int deliveryCount,
             int deliveryLimit,
             string outcome);
+
+        /// <summary>
+        /// Writes a Warning when a running consumer with active pipeline work has made no progress beyond the stall threshold.
+        /// Membership reconcile retires and replaces the session.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="backbone">Provider backbone of the stalled session.</param>
+        /// <param name="generation">Connection generation of the consumer channel.</param>
+        /// <param name="activeCount">Active pipeline deliveries observed at detection.</param>
+        /// <param name="stallThreshold">Configured stall age that was exceeded.</param>
+        [LoggerMessage(
+            EventId = 5328,
+            Level = LogLevel.Warning,
+            Message = "Article Work consumer processing stalled backbone={Backbone} generation={Generation} activeCount={ActiveCount} stallThreshold={StallThreshold}; retiring session for rebuild")]
+        internal static partial void ConsumerProcessingStalled(
+            ILogger logger,
+            string backbone,
+            long generation,
+            int activeCount,
+            TimeSpan stallThreshold);
+
+        /// <summary>
+        /// Writes a Warning when desired consume slots cannot start because provider topology or quorum membership is not ready.
+        /// Fail-closed policy is unchanged; the reconcile loop continues with backoff.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="desiredSlots">Consume slots desired at the start of the pass.</param>
+        /// <param name="healthySessions">Tracked sessions that still have an open consume channel.</param>
+        /// <param name="consecutiveUnavailablePasses">How many consecutive infrastructure-unavailable passes have occurred.</param>
+        [LoggerMessage(
+            EventId = 5329,
+            Level = LogLevel.Warning,
+            Message = "Article Work infrastructure unavailable desiredSlots={DesiredSlots} healthySessions={HealthySessions} consecutiveUnavailablePasses={ConsecutiveUnavailablePasses}")]
+        internal static partial void ConsumerInfrastructureUnavailable(
+            ILogger logger,
+            int desiredSlots,
+            int healthySessions,
+            int consecutiveUnavailablePasses);
+
+        /// <summary>
+        /// Writes an Information event when membership reconcile succeeds after one or more infrastructure-unavailable passes.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="desiredSlots">Consume slots desired at the start of the recovering pass.</param>
+        /// <param name="previousUnavailablePasses">Consecutive unavailable passes cleared by this success.</param>
+        [LoggerMessage(
+            EventId = 5330,
+            Level = LogLevel.Information,
+            Message = "Article Work infrastructure recovered desiredSlots={DesiredSlots} previousUnavailablePasses={PreviousUnavailablePasses}")]
+        internal static partial void ConsumerInfrastructureRecovered(
+            ILogger logger,
+            int desiredSlots,
+            int previousUnavailablePasses);
     }
 }

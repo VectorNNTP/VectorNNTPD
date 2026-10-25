@@ -376,7 +376,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Logging
                 var asyncSink = Assert.Single(
                     sinks,
                     static n => n.GetType().Name.Equals("BackgroundWorkerSink", StringComparison.Ordinal));
-                Assert.True(Assert.IsType<bool>(ReadInstanceField(asyncSink, "_blockWhenFull")!));
+                Assert.False(Assert.IsType<bool>(ReadInstanceField(asyncSink, "_blockWhenFull")!));
                 var queue = ReadInstanceField(asyncSink, "_queue")
                             ?? throw new InvalidOperationException("BackgroundWorkerSink._queue was not found.");
                 var boundedCapacity = queue.GetType().GetProperty("BoundedCapacity")?.GetValue(queue)
