@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
 using VectorNNTPD.BackFillerService.ArticleWork;
 
 namespace VectorNNTPD.BackFillerService.Tests.Stress
@@ -212,24 +213,30 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     .ConfigureAwait(false);
                 publishCompleted = Stopwatch.GetTimestamp();
             }
-            // codeql[cs/catch-of-all-exceptions] Publish must return a broker-error outcome for every transport/AMQP failure type.
-            catch (Exception ex)
+            catch (AlreadyClosedException ex)
             {
-                CompleteBrokerOutstanding(correlationId, clearWaiting: true);
-                return new ArticleWorkReply(
-                    ArticleWorkStressOutcome.BrokerError,
-                    backbone,
-                    messageId,
-                    requestId,
-                    null,
-                    null,
-                    null,
-                    ex.GetType().Name)
-                {
-                    CorrelationId = correlationId,
-                    PublishStartedTimestamp = publishStarted,
-                    PublishCompletedTimestamp = Stopwatch.GetTimestamp(),
-                };
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
+            }
+            catch (OperationInterruptedException ex)
+            {
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
+            }
+            catch (IOException ex)
+            {
+                // Includes BrokerUnreachableException.
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
+            }
+            catch (TimeoutException ex)
+            {
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
+            }
+            catch (ObjectDisposedException ex)
+            {
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return PublishBrokerError(ex, correlationId, backbone, messageId, requestId, publishStarted);
             }
 
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -357,25 +364,76 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     pending.Waiter.TrySetResult(reply with { CorrelationId = correlationId });
                 }
             }
-            // codeql[cs/catch-of-all-exceptions] Consumer callback must complete the waiter for any parse/delivery fault.
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                if (wasWaiting)
-                {
-                    pending.Waiter.TrySetResult(new ArticleWorkReply(
-                        ArticleWorkStressOutcome.BrokerError,
-                        Backbone: string.Empty,
-                        MessageId: string.Empty,
-                        RequestId: null,
-                        Fqdn: null,
-                        ListenerPort: null,
-                        ArticleIdHex: null,
-                        Error: ex.GetType().Name)
-                    {
-                        CorrelationId = correlationId,
-                    });
-                }
+                CompleteReplyParseFault(wasWaiting, pending, correlationId, ex);
             }
+            catch (KeyNotFoundException ex)
+            {
+                CompleteReplyParseFault(wasWaiting, pending, correlationId, ex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                CompleteReplyParseFault(wasWaiting, pending, correlationId, ex);
+            }
+            catch (FormatException ex)
+            {
+                CompleteReplyParseFault(wasWaiting, pending, correlationId, ex);
+            }
+            catch (ArgumentException ex)
+            {
+                CompleteReplyParseFault(wasWaiting, pending, correlationId, ex);
+            }
+        }
+
+        private ArticleWorkReply PublishBrokerError(
+            Exception ex,
+            string correlationId,
+            string backbone,
+            string messageId,
+            Guid requestId,
+            long publishStarted)
+        {
+            CompleteBrokerOutstanding(correlationId, clearWaiting: true);
+            return new ArticleWorkReply(
+                ArticleWorkStressOutcome.BrokerError,
+                backbone,
+                messageId,
+                requestId,
+                null,
+                null,
+                null,
+                ex.GetType().Name)
+            {
+                CorrelationId = correlationId,
+                PublishStartedTimestamp = publishStarted,
+                PublishCompletedTimestamp = Stopwatch.GetTimestamp(),
+            };
+        }
+
+        private static void CompleteReplyParseFault(
+            bool wasWaiting,
+            PendingRpc pending,
+            string correlationId,
+            Exception ex)
+        {
+            if (!wasWaiting)
+            {
+                return;
+            }
+
+            pending.Waiter.TrySetResult(new ArticleWorkReply(
+                ArticleWorkStressOutcome.BrokerError,
+                Backbone: string.Empty,
+                MessageId: string.Empty,
+                RequestId: null,
+                Fqdn: null,
+                ListenerPort: null,
+                ArticleIdHex: null,
+                Error: ex.GetType().Name)
+            {
+                CorrelationId = correlationId,
+            });
         }
 
         private void CompleteBrokerOutstanding(string correlationId, bool clearWaiting)
@@ -487,39 +545,85 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             Interlocked.Exchange(ref _waitingCount, 0);
             Interlocked.Exchange(ref _brokerOutstandingCount, 0);
 
-            try
-            {
-                await _consumeChannel.CloseAsync().ConfigureAwait(false);
-            }
-            // codeql[cs/catch-of-all-exceptions] Dispose must continue closing remaining RabbitMQ resources after any close fault.
-            catch (Exception)
-            {
-                // ignored on dispose
-            }
-
-            try
-            {
-                await _publishChannel.CloseAsync().ConfigureAwait(false);
-            }
-            // codeql[cs/catch-of-all-exceptions] Dispose must continue closing remaining RabbitMQ resources after any close fault.
-            catch (Exception)
-            {
-                // ignored on dispose
-            }
-
-            try
-            {
-                await _connection.CloseAsync().ConfigureAwait(false);
-            }
-            // codeql[cs/catch-of-all-exceptions] Dispose must finish even when the broker connection close faults.
-            catch (Exception)
-            {
-                // ignored on dispose
-            }
+            await CloseIgnoreFaultsAsync(_consumeChannel).ConfigureAwait(false);
+            await CloseIgnoreFaultsAsync(_publishChannel).ConfigureAwait(false);
+            await CloseIgnoreFaultsAsync(_connection).ConfigureAwait(false);
 
             await _consumeChannel.DisposeAsync().ConfigureAwait(false);
             await _publishChannel.DisposeAsync().ConfigureAwait(false);
             await _connection.DisposeAsync().ConfigureAwait(false);
+        }
+
+        private static async Task CloseIgnoreFaultsAsync(IChannel channel)
+        {
+            try
+            {
+                await channel.CloseAsync().ConfigureAwait(false);
+            }
+            catch (AlreadyClosedException)
+            {
+                // ignored on dispose
+            }
+            catch (OperationInterruptedException)
+            {
+                // ignored on dispose
+            }
+            catch (IOException)
+            {
+                // ignored on dispose
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignored on dispose
+            }
+            catch (InvalidOperationException)
+            {
+                // ignored on dispose
+            }
+            catch (TimeoutException)
+            {
+                // ignored on dispose
+            }
+            catch (OperationCanceledException)
+            {
+                // ignored on dispose
+            }
+        }
+
+        private static async Task CloseIgnoreFaultsAsync(IConnection connection)
+        {
+            try
+            {
+                await connection.CloseAsync().ConfigureAwait(false);
+            }
+            catch (AlreadyClosedException)
+            {
+                // ignored on dispose
+            }
+            catch (OperationInterruptedException)
+            {
+                // ignored on dispose
+            }
+            catch (IOException)
+            {
+                // ignored on dispose
+            }
+            catch (ObjectDisposedException)
+            {
+                // ignored on dispose
+            }
+            catch (InvalidOperationException)
+            {
+                // ignored on dispose
+            }
+            catch (TimeoutException)
+            {
+                // ignored on dispose
+            }
+            catch (OperationCanceledException)
+            {
+                // ignored on dispose
+            }
         }
 
         private sealed class PendingRpc(TaskCompletionSource<ArticleWorkReply> waiter)

@@ -73,8 +73,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     };
                     results.Add(new CorpusIdPreflightResult(id, kind, reply.Error ?? reply.Outcome.ToString()));
                 }
-                // codeql[cs/catch-of-all-exceptions] Live preflight must record every retrieval fault as an explicit per-ID outcome.
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (RabbitMQ.Client.Exceptions.AlreadyClosedException ex)
+                {
+                    results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
+                }
+                catch (RabbitMQ.Client.Exceptions.OperationInterruptedException ex)
+                {
+                    results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
+                }
+                catch (IOException ex)
+                {
+                    // Includes BrokerUnreachableException.
+                    results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
+                }
+                catch (ObjectDisposedException ex)
+                {
+                    results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
+                }
+                catch (TimeoutException ex)
                 {
                     results.Add(new CorpusIdPreflightResult(id, CorpusIdPreflightKind.RetrievalFailed, ex.GetType().Name));
                 }

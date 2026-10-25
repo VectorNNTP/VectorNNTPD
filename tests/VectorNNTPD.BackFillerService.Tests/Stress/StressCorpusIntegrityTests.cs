@@ -16,6 +16,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         [Fact]
         public void Required_corpus_path_resolves_to_usable_logs_on_this_host()
         {
+            // Absolute corpus path is machine-local (see StressCorpusPaths). CI agents do not mount it.
+            // Live stress (VECTORNNTPD_BACKFILLER_E2E_STRESS=1) still requires the directory when enabled.
+            if (!Directory.Exists(StressCorpusPaths.RequiredNewsLogDirectory))
+            {
+                return;
+            }
+
             // After the verified junction (or a real VectorNNTP tree), discovery must see *.log files.
             NewsLogMessageIdDiscovery.RequireUsableCorpusDirectory(StressCorpusPaths.RequiredNewsLogDirectory);
             Assert.NotEmpty(NewsLogMessageIdDiscovery.DiscoverLogFiles(StressCorpusPaths.RequiredNewsLogDirectory));

@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Security.Authentication;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using RabbitMQ.Client.Exceptions;
 
 namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
@@ -170,6 +172,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 .ConfigureAwait(false);
             workClient.StressRunId = runId;
 
+            var disposeReplyClientOnFailure = true;
             try
             {
             // Live retrieval preflight runs after the reply consumer is ready and before any throughput publish.
@@ -373,14 +376,30 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                             {
                                 break;
                             }
-                            // codeql[cs/catch-of-all-exceptions] Publisher worker must record any broker/RPC failure and keep flooding other items.
-                            catch (Exception)
+                            catch (AlreadyClosedException)
                             {
-                                metrics.RecordFailure(
-                                    item.Backbone,
-                                    StressFailureClass.Other,
-                                    (long)Stopwatch.GetElapsedTime(item.StartedTimestamp).TotalMilliseconds);
-                                MaybeAbort(metrics, runCts);
+                                RecordPublisherWorkerFault(metrics, item, runCts);
+                            }
+                            catch (OperationInterruptedException)
+                            {
+                                RecordPublisherWorkerFault(metrics, item, runCts);
+                            }
+                            catch (IOException)
+                            {
+                                // Includes BrokerUnreachableException.
+                                RecordPublisherWorkerFault(metrics, item, runCts);
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                RecordPublisherWorkerFault(metrics, item, runCts);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                RecordPublisherWorkerFault(metrics, item, runCts);
+                            }
+                            catch (TimeoutException)
+                            {
+                                RecordPublisherWorkerFault(metrics, item, runCts);
                             }
                             finally
                             {
@@ -480,14 +499,25 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                                     (long)Stopwatch.GetElapsedTime(item.StartedTimestamp).TotalMilliseconds);
                                 MaybeAbort(metrics, runCts);
                             }
-                            // codeql[cs/catch-of-all-exceptions] Delivery worker must classify any NNTP/transport failure and return the leased client.
-                            catch (Exception)
+                            catch (IOException)
                             {
-                                metrics.RecordFailure(
-                                    item.Backbone,
-                                    StressFailureClass.Disconnect,
-                                    (long)Stopwatch.GetElapsedTime(item.StartedTimestamp).TotalMilliseconds);
-                                MaybeAbort(metrics, runCts);
+                                RecordDeliveryWorkerFault(metrics, item, runCts);
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                RecordDeliveryWorkerFault(metrics, item, runCts);
+                            }
+                            catch (AuthenticationException)
+                            {
+                                RecordDeliveryWorkerFault(metrics, item, runCts);
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                RecordDeliveryWorkerFault(metrics, item, runCts);
+                            }
+                            catch (TimeoutException)
+                            {
+                                RecordDeliveryWorkerFault(metrics, item, runCts);
                             }
                             finally
                             {
@@ -528,10 +558,18 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 {
                     await sampler.ConfigureAwait(false);
                 }
-                // codeql[cs/catch-of-all-exceptions] Queue-depth sampler is optional observability and must not fail the soak.
-                catch (Exception)
+                catch (OperationCanceledException)
                 {
-                    // Sampler faults are non-fatal.
+                    // Sampler cancelled with the measured run.
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Sampler raced disposal during teardown.
+                }
+                catch (AggregateException ex) when (ex.InnerExceptions.All(static e =>
+                    e is OperationCanceledException or ObjectDisposedException))
+                {
+                    // Task.WhenAll-style aggregates of expected teardown faults.
                 }
 
                 metrics.SteadyStateEndTimestamp = Stopwatch.GetTimestamp();
@@ -563,6 +601,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
 
             await workClient.DisposeAsync().ConfigureAwait(false);
+            disposeReplyClientOnFailure = false;
             metrics.SetReplyLifecycleCounters(
                 workClient.LateRepliesAfterTimeout,
                 workClient.UnresolvedAtDispose,
@@ -578,11 +617,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 .ConfigureAwait(false);
             return summary;
             }
-            // codeql[cs/catch-of-all-exceptions] Run failure must still dispose the exclusive ReplyTo client before rethrowing.
-            catch (Exception)
+            finally
             {
-                await workClient.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (disposeReplyClientOnFailure)
+                {
+                    await workClient.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
 
@@ -618,11 +658,58 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 var consumers = root.TryGetProperty("consumers", out var c) ? c.GetInt64() : 0;
                 metrics.SampleQueueDepth(Stopwatch.GetTimestamp(), queueName, messages, ready, unacked, consumers);
             }
-            // codeql[cs/catch-of-all-exceptions] Management API sampling is optional; any fault must not abort the soak.
-            catch (Exception)
+            catch (OperationCanceledException)
             {
                 // Optional observability; never fail the run.
             }
+            catch (HttpRequestException)
+            {
+                // Optional observability; never fail the run.
+            }
+            catch (JsonException)
+            {
+                // Optional observability; never fail the run.
+            }
+            catch (IOException)
+            {
+                // Optional observability; never fail the run.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Optional observability; never fail the run.
+            }
+            catch (UriFormatException)
+            {
+                // Optional observability; never fail the run.
+            }
+            catch (FormatException)
+            {
+                // Optional observability; never fail the run.
+            }
+        }
+
+        private void RecordPublisherWorkerFault(
+            StressMetrics metrics,
+            WorkItem item,
+            CancellationTokenSource runCts)
+        {
+            metrics.RecordFailure(
+                item.Backbone,
+                StressFailureClass.Other,
+                (long)Stopwatch.GetElapsedTime(item.StartedTimestamp).TotalMilliseconds);
+            MaybeAbort(metrics, runCts);
+        }
+
+        private void RecordDeliveryWorkerFault(
+            StressMetrics metrics,
+            DeliveryItem item,
+            CancellationTokenSource runCts)
+        {
+            metrics.RecordFailure(
+                item.Backbone,
+                StressFailureClass.Disconnect,
+                (long)Stopwatch.GetElapsedTime(item.StartedTimestamp).TotalMilliseconds);
+            MaybeAbort(metrics, runCts);
         }
 
         private void MaybeAbort(StressMetrics metrics, CancellationTokenSource runCts)

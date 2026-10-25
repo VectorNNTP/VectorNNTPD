@@ -137,10 +137,21 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             {
                 throw;
             }
-            // codeql[cs/catch-of-all-exceptions] QUIT under load may fail with any transport fault; dispose must still run.
-            catch (Exception)
+            catch (IOException)
             {
                 // Peer may close without 205 under load; still dispose.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Transport already closed during QUIT; still dispose.
+            }
+            catch (AuthenticationException)
+            {
+                // TLS fault during QUIT write/read; still dispose.
+            }
+            catch (InvalidOperationException)
+            {
+                // Stream/state fault during QUIT; still dispose.
             }
             finally
             {
@@ -217,17 +228,19 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 Interlocked.Decrement(ref _created);
                 // Wait briefly for a return under saturation.
                 await Task.Delay(1, cancellationToken).ConfigureAwait(false);
-                if (_idle.TryTake(out var recycled) && recycled.IsConnected)
+                if (!_idle.TryTake(out var recycled) || recycled is null)
+                {
+                    continue;
+                }
+
+                if (recycled.IsConnected)
                 {
                     return recycled;
                 }
 
-                if (recycled is not null)
-                {
-                    await recycled.DisposeAsync().ConfigureAwait(false);
-                    Interlocked.Decrement(ref _created);
-                    metrics.ConnectionClosed();
-                }
+                await recycled.DisposeAsync().ConfigureAwait(false);
+                Interlocked.Decrement(ref _created);
+                metrics.ConnectionClosed();
             }
         }
 
@@ -258,8 +271,23 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                     await client.QuitAsync(cts.Token).ConfigureAwait(false);
                 }
-                // codeql[cs/catch-of-all-exceptions] Pool dispose must force-close idle clients after any QUIT failure.
-                catch (Exception)
+                catch (OperationCanceledException)
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (AuthenticationException)
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
                 {
                     await client.DisposeAsync().ConfigureAwait(false);
                 }

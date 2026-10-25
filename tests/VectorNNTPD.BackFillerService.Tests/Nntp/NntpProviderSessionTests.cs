@@ -1532,10 +1532,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, finished.Kind);
                 Assert.False(finished.SessionReusable);
                 Assert.Null(finished.Article);
-                Assert.StartsWith(nameof(InvalidOperationException) + ":", finished.Reason, StringComparison.Ordinal);
-                Assert.False(string.IsNullOrWhiteSpace(finished.Reason[(nameof(InvalidOperationException) + ": ").Length..]));
-                Assert.DoesNotContain("NullReference", finished.Reason ?? string.Empty, StringComparison.Ordinal);
-                Assert.DoesNotContain("ArgumentNull", finished.Reason ?? string.Empty, StringComparison.Ordinal);
+                var reason = finished.Reason ?? string.Empty;
+                var prefix = nameof(InvalidOperationException) + ":";
+                Assert.StartsWith(prefix, reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(reason[prefix.Length..].TrimStart()));
+                Assert.DoesNotContain("NullReference", reason, StringComparison.Ordinal);
+                Assert.DoesNotContain("ArgumentNull", reason, StringComparison.Ordinal);
                 Assert.Equal(0, Volatile.Read(ref consumed));
                 Assert.Null(SessionField(session, "_stream"));
                 Assert.Null(SessionField(session, "_reader"));
