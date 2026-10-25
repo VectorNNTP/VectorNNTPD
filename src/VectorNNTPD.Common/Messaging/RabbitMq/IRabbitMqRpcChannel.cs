@@ -37,7 +37,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <param name="requestId">Logical lookup UUID carried as the AMQP <c>RequestId</c> property.</param>
         /// <param name="replyTo">NNTPD reply-queue name.</param>
         /// <param name="contentType">AMQP content type. Article-work uses <c>application/json</c>.</param>
-        /// <param name="expiration">AMQP expiration in milliseconds. Article-work uses <c>1000</c>.</param>
+        /// <param name="expiration">
+        /// AMQP expiration in milliseconds, or empty/whitespace to omit the property.
+        /// Article-work requests omit expiration so ready work may buffer; other RPCs may supply a TTL.
+        /// </param>
         /// <param name="body">Application payload bytes.</param>
         /// <param name="cancellationToken">Token used to cancel the publish.</param>
         Task PublishAsync(

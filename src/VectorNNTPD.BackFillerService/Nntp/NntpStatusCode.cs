@@ -42,6 +42,26 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>RFC 3977 ARTICLE by Message-ID: no such article.</summary>
         internal const int NoArticleWithMessageId = 430;
 
+        /// <summary>
+        /// Provider ARTICLE response treated as a definitive miss for Article Work lookup.
+        /// </summary>
+        /// <remarks>
+        /// Not an RFC 3977 ARTICLE success/failure code for Message-ID retrieval. Some upstream providers
+        /// return 451 when the article is unavailable; BackFiller maps that status to
+        /// <see cref="ArticleRetrievalKind.ArticleNotFound"/> (same settlement as 430), not provider failure.
+        /// </remarks>
+        internal const int ArticleUnavailable = 451;
+
+        /// <summary>
+        /// RFC 3977 §3.2.1: server terminates the connection after this response.
+        /// </summary>
+        internal const int ServiceTemporarilyUnavailable = 400;
+
+        /// <summary>
+        /// RFC 3977 §3.2.1: internal fault preventing the command (single-line; connection stays open).
+        /// </summary>
+        internal const int InternalFault = 403;
+
         /// <summary>RFC 3977/4643: authentication required for the command.</summary>
         private const int AuthenticationRequired = 480;
 
@@ -52,16 +72,19 @@ namespace VectorNNTPD.BackFillerService.Nntp
         private const int AuthenticationOutOfSequence = 482;
 
         /// <summary>RFC 3977: command unknown.</summary>
-        private const int CommandUnknown = 500;
+        internal const int CommandUnknown = 500;
 
         /// <summary>RFC 3977: command syntax error.</summary>
-        private const int CommandSyntaxError = 501;
+        internal const int CommandSyntaxError = 501;
 
-        /// <summary>RFC 3977: command not permitted / service permanently unavailable.</summary>
-        private const int CommandNotPermitted = 502;
+        /// <summary>
+        /// RFC 3977 §3.2.1: command not permitted on this connection; a new connection with
+        /// appropriate authority is required before the facility can be used.
+        /// </summary>
+        internal const int CommandNotPermitted = 502;
 
         /// <summary>RFC 3977: program fault / temporary unavailability.</summary>
-        private const int ProgramFault = 503;
+        internal const int ProgramFault = 503;
 
         /// <summary>Returns whether <paramref name="code"/> is a usable NNTP greeting.</summary>
         /// <param name="code">NNTP status code.</param>
@@ -88,5 +111,24 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </returns>
         internal static bool IsCommandRejected(int code) =>
             code is CommandUnknown or CommandSyntaxError or CommandNotPermitted or ProgramFault;
+
+        /// <summary>
+        /// Returns whether an ARTICLE status is a single-line command failure that leaves the session synchronized
+        /// and reusable for a later ARTICLE (RFC 3977 §§3.2, 3.2.1).
+        /// </summary>
+        /// <param name="code">NNTP status from the ARTICLE status line.</param>
+        /// <returns>
+        /// <see langword="true"/> for <see cref="InternalFault"/>, <see cref="CommandUnknown"/>,
+        /// <see cref="CommandSyntaxError"/>, or <see cref="ProgramFault"/>.
+        /// </returns>
+        /// <remarks>
+        /// ARTICLE is a mandatory READER command; RFC 3977 §3.2.1 forbids 500 for mandatory commands.
+        /// Providers may still return 500 (for example Giganews <c>server error</c>) as a per-request fault.
+        /// Unexpected 4xx/5xx are command failures (RFC 3977 §3.2); a single-line response does not desynchronize
+        /// the session. <see cref="CommandNotPermitted"/> and <see cref="ServiceTemporarilyUnavailable"/> are
+        /// excluded: 502 requires a new connection with appropriate authority, and 400 closes the connection.
+        /// </remarks>
+        internal static bool IsArticleLevelFailureReusable(int code) =>
+            code is InternalFault or CommandUnknown or CommandSyntaxError or ProgramFault;
     }
 }

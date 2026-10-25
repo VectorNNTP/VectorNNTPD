@@ -432,6 +432,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Single(context.PublishChannel.Publications);
         }
 
+        /// <summary>Canonical success response intent used when exercising publish recovery paths.</summary>
         private static ArticleWorkResponseIntent SuccessIntent() =>
             new(
                 ArticleWorkOutcome.Success,
@@ -445,6 +446,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 ArticleWorkTestDeliveries.CanonicalListenerPort,
                 ArticleWorkTestDeliveries.CanonicalArticleIdHex);
 
+        /// <summary>Starts a single-session Article Work consumer against a fake RabbitMQ factory.</summary>
+        /// <param name="handler">Handler wired into the consumer; defaults to <see cref="DeferredArticleWorkHandler"/>.</param>
+        /// <returns>Harness holding factory, connections, and running consumer.</returns>
         private static async Task<ConsumerHarness> StartConsumerAsync(IArticleWorkHandler? handler = null)
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();
@@ -476,6 +480,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             return new ConsumerHarness(factory, connections, consumer);
         }
 
+        /// <summary>Starts a running <see cref="ArticleWorkResponsePublisher"/> with publish confirms enabled.</summary>
         private static async Task<PublisherHarness> StartPublisherAsync()
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory
@@ -494,6 +499,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             return new PublisherHarness(factory, connections, publisher);
         }
 
+        /// <summary>Publishes a single-backbone usable-capacity snapshot when <paramref name="active"/> is positive.</summary>
+        /// <param name="backbone">Backbone name key in the snapshot.</param>
+        /// <param name="active">Active session count; zero omits the backbone from the snapshot.</param>
         private static BackboneUsableCapacityState CreateCapacity(string backbone, int active)
         {
             var capacity = new BackboneUsableCapacityState();
@@ -508,17 +516,22 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             return capacity;
         }
 
+        /// <summary>Owns a started consumer and its RabbitMQ connections for channel-failure tests.</summary>
         private sealed class ConsumerHarness(
             FakeBackFillerRabbitMqConnectionFactory factory,
             RabbitMqService connections,
             ArticleWorkConsumerService consumer) : IAsyncDisposable
         {
+            /// <summary>Fake factory that created the test connection.</summary>
             public FakeBackFillerRabbitMqConnectionFactory Factory { get; } = factory;
 
+            /// <summary>Started <see cref="RabbitMqService"/> instance.</summary>
             public RabbitMqService Connections { get; } = connections;
 
+            /// <summary>Running Article Work consumer under test.</summary>
             public ArticleWorkConsumerService Consumer { get; } = consumer;
 
+            /// <summary>Stops the consumer, then disposes connections.</summary>
             public async ValueTask DisposeAsync()
             {
                 await Consumer.DisposeAsync();
@@ -526,20 +539,26 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             }
         }
 
+        /// <summary>Owns a started response publisher and exposes its fake publish channel.</summary>
         private sealed class PublisherHarness(
             FakeBackFillerRabbitMqConnectionFactory factory,
             RabbitMqService connections,
             ArticleWorkResponsePublisher publisher) : IAsyncDisposable
         {
+            /// <summary>Fake factory that created the test connection.</summary>
             public FakeBackFillerRabbitMqConnectionFactory Factory { get; } = factory;
 
+            /// <summary>Started <see cref="RabbitMqService"/> instance.</summary>
             public RabbitMqService Connections { get; } = connections;
 
+            /// <summary>Running response publisher under test.</summary>
             public ArticleWorkResponsePublisher Publisher { get; } = publisher;
 
+            /// <summary>Fake publish channel backing <see cref="Publisher"/>.</summary>
             public FakeBackFillerRabbitMqPublishChannel PublishChannel =>
                 Assert.IsType<FakeBackFillerRabbitMqPublishChannel>(Publisher.Channel);
 
+            /// <summary>Stops the publisher, then disposes connections.</summary>
             public async ValueTask DisposeAsync()
             {
                 await Publisher.DisposeAsync();

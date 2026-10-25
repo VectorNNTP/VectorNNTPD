@@ -1228,7 +1228,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Listener
         /// <summary>Returns a different UTC instant from each <see cref="GetUtcNow"/> call, in order.</summary>
         private sealed class SteppingTimeProvider : TimeProvider
         {
+            /// <summary>UTC instants returned in order; the last instant repeats when exhausted.</summary>
             private readonly DateTimeOffset[] _instants;
+
+            /// <summary>Number of <see cref="GetUtcNow"/> calls completed.</summary>
             private int _index;
 
             /// <summary>Stores the instants returned by successive clock reads.</summary>

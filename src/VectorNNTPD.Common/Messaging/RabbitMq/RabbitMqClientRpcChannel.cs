@@ -66,16 +66,19 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             ArgumentException.ThrowIfNullOrWhiteSpace(requestId);
             ArgumentException.ThrowIfNullOrWhiteSpace(replyTo);
             ArgumentException.ThrowIfNullOrWhiteSpace(contentType);
-            ArgumentException.ThrowIfNullOrWhiteSpace(expiration);
+            ArgumentNullException.ThrowIfNull(expiration);
 
             var properties = new BasicProperties
             {
                 CorrelationId = correlationId,
                 ReplyTo = replyTo,
                 ContentType = contentType,
-                Expiration = expiration,
                 Headers = CreateRequestIdHeaders(requestId),
             };
+            if (!string.IsNullOrWhiteSpace(expiration))
+            {
+                properties.Expiration = expiration;
+            }
 
             await _channel.BasicPublishAsync(
                 exchange,

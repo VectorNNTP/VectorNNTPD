@@ -903,7 +903,7 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 case FakePublishConfirmBehavior.Nack:
                     throw new InvalidOperationException("publisher nack");
                 case FakePublishConfirmBehavior.Unroutable:
-                    throw new InvalidOperationException("RabbitMQ returned the publication as unroutable.");
+                    throw new RabbitMqPublicationUnroutableException();
                 case FakePublishConfirmBehavior.Timeout:
                     throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
                 case FakePublishConfirmBehavior.CloseChannel:

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
@@ -276,7 +277,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             if (cancellationToken.IsCancellationRequested)
             {
                 LastKind = ArticleRetrievalKind.Cancelled;
-                LogArticleProcessed(item, OutcomeFailed, string.Empty, commandStartedTimestamp: 0);
+                LogArticleProcessed(
+                    item,
+                    OutcomeFailed,
+                    string.Empty,
+                    statusCode: null,
+                    connectionId: Guid.Empty,
+                    commandStartedTimestamp: 0);
                 return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
             }
 
@@ -326,7 +333,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 }
                 catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
-                    LogArticleProcessed(item, OutcomeFailed, string.Empty, CommandTimestamp(ex));
+                    LogArticleProcessed(
+                        item,
+                        OutcomeFailed,
+                        NntpExceptionDiagnostics.FormatReason(ex),
+                        statusCode: null,
+                        ConnectionIdFromException(ex),
+                        CommandTimestamp(ex));
                     if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
                     {
                         LastKind = ArticleRetrievalKind.Cancelled;
@@ -343,14 +356,26 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     {
                         var mapped = MapRetrieval(retrieval);
                         var (outcome, reason) = RetrievalLog(retrieval);
-                        LogArticleProcessed(item, outcome, reason, retrieval.CommandStartedTimestamp);
+                        LogArticleProcessed(
+                            item,
+                            outcome,
+                            reason,
+                            retrieval.StatusCode,
+                            retrieval.ConnectionId,
+                            retrieval.CommandStartedTimestamp);
                         return mapped;
                     }
 
                     if (!consumed)
                     {
                         LastRetentionKind = ArticleRetentionKind.InvalidPayload;
-                        LogArticleProcessed(item, OutcomeFailed, string.Empty, retrieval.CommandStartedTimestamp);
+                        LogArticleProcessed(
+                            item,
+                            OutcomeFailed,
+                            "Retrieved article payload could not be transferred into retention.",
+                            retrieval.StatusCode,
+                            retrieval.ConnectionId,
+                            retrieval.CommandStartedTimestamp);
                         return new ArticleWorkHandlerResult(
                             ArticleWorkOutcome.RetentionRejected,
                             "Retrieved article payload could not be transferred into retention.");
@@ -367,6 +392,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             item,
                             OutcomeValidationFailed,
                             rejected.Error ?? string.Empty,
+                            retrieval.StatusCode,
+                            retrieval.ConnectionId,
                             retrieval.CommandStartedTimestamp);
                         return rejected;
                     }
@@ -378,6 +405,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             item,
                             OutcomeValidationFailed,
                             "MessageIdMismatch",
+                            retrieval.StatusCode,
+                            retrieval.ConnectionId,
                             retrieval.CommandStartedTimestamp);
                         return new ArticleWorkHandlerResult(
                             ArticleWorkOutcome.InvalidArticle,
@@ -390,13 +419,21 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             item,
                             OutcomeValidationFailed,
                             "NotFrameable",
+                            retrieval.StatusCode,
+                            retrieval.ConnectionId,
                             retrieval.CommandStartedTimestamp);
                         return new ArticleWorkHandlerResult(
                             ArticleWorkOutcome.InvalidArticle,
                             "NotFrameable");
                     }
 
-                    LogArticleProcessed(item, OutcomeFound, string.Empty, retrieval.CommandStartedTimestamp);
+                    LogArticleProcessed(
+                        item,
+                        OutcomeFound,
+                        string.Empty,
+                        retrieval.StatusCode,
+                        retrieval.ConnectionId,
+                        retrieval.CommandStartedTimestamp);
 
                     if (!System.Runtime.InteropServices.MemoryMarshal.TryGetArray(record.ArtData, out var segment)
                         || segment.Array is null
@@ -452,22 +489,36 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// </summary>
         /// <param name="item">Work item whose Message-ID and backbone are logged.</param>
         /// <param name="outcome">Terminal processing outcome.</param>
-        /// <param name="reason">Validation failure reason. Empty for every other outcome.</param>
+        /// <param name="reason">Validation or provider failure text. Empty for successful <c>Found</c>.</param>
+        /// <param name="statusCode">NNTP status when present.</param>
+        /// <param name="connectionId">Physical session identity, or <see cref="Guid.Empty"/> when none was leased.</param>
         /// <param name="commandStartedTimestamp">ARTICLE send timestamp. Zero when the command was not sent.</param>
         private void LogArticleProcessed(
             ArticleWorkItem item,
             string outcome,
             string reason,
+            int? statusCode,
+            Guid connectionId,
             long commandStartedTimestamp)
         {
             ArticleWorkLogMessages.ArticleProcessed(
                 _logger,
                 DisplayIdentity(item.Request.MessageId),
                 DisplayIdentity(item.Request.Backbone),
+                FormatConnectionId(connectionId),
                 outcome,
                 reason,
+                statusCode is { } code ? code.ToString(CultureInfo.InvariantCulture) : string.Empty,
                 ElapsedSeconds(commandStartedTimestamp));
         }
+
+        /// <summary>Formats <paramref name="connectionId"/> for Event 5321, or empty when none was leased.</summary>
+        private static string FormatConnectionId(Guid connectionId) =>
+            connectionId == Guid.Empty ? string.Empty : connectionId.ToString("D");
+
+        /// <summary>Reads <see cref="ArticleRetrievalResult.ConnectionIdKey"/> from <paramref name="exception"/>.</summary>
+        private static Guid ConnectionIdFromException(Exception exception) =>
+            exception.Data[ArticleRetrievalResult.ConnectionIdKey] is Guid id ? id : Guid.Empty;
 
         /// <summary>
         /// Returns the preparation for <see cref="INntpSharedConfigurationCatalogue.Current"/>, rebuilding it when that snapshot's
@@ -504,11 +555,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             }
         }
 
-        /// <summary>Maps a non-retrieved download to the article-processing outcome and validation reason.</summary>
+        /// <summary>Maps a non-retrieved download to the article-processing outcome and log reason.</summary>
         /// <param name="retrieval">Download that is not <see cref="ArticleRetrievalKind.ArticleRetrieved"/>.</param>
         /// <returns>
         /// <c>NotFound</c> for a miss, <c>ValidationFailed</c> with <see cref="ArticleRetrievalResult.Reason"/> for an invalid article,
-        /// and <c>Failed</c> for every other kind.
+        /// and <c>Failed</c> with the retrieval diagnostic for every other kind.
         /// </returns>
         private static (string Outcome, string Reason) RetrievalLog(ArticleRetrievalResult retrieval)
         {
@@ -516,7 +567,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             {
                 ArticleRetrievalKind.ArticleNotFound => (OutcomeNotFound, string.Empty),
                 ArticleRetrievalKind.InvalidArticle => (OutcomeValidationFailed, retrieval.Reason),
-                _ => (OutcomeFailed, string.Empty),
+                _ => (OutcomeFailed, retrieval.Reason),
             };
         }
 

@@ -13,10 +13,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Integration
     {
         /// <summary>Canonical valid article bytes used across concurrency scenarios.</summary>
         private static readonly byte[] Payload = ArticleWorkTestArticles.Valid();
-        /// <summary>Provider connect failure requeues without ack; successful redelivery acks only the second delivery tag.</summary>
+        /// <summary>Provider connect failure ACKs with a failure reply; a later success ACKs a distinct delivery tag.</summary>
 
         [Fact]
-        public async Task Retryable_failures_then_redelivery_acks_only_the_second_attempt()
+        public async Task Provider_failure_acks_then_later_success_acks_second_delivery()
         {
             await using var harness = await BackFillerPipelineHarness.StartAsync();
             var channel = new FakeBackFillerRabbitMqChannel(1);
@@ -39,8 +39,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Integration
                 static () => true,
                 CancellationToken.None);
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, providerFailure);
-            Assert.False(Assert.Single(channel.Settlements).Acknowledge);
-            Assert.True(channel.Settlements[0].Requeue);
+            Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+            Assert.False(channel.Settlements[0].Requeue);
 
             harness.EnqueueArticle(Payload);
             var success = await harness.ProcessCanonicalAsync(channel, deliveryTag: 8);
@@ -51,10 +51,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Integration
             Assert.Equal(7UL, channel.Settlements[0].DeliveryTag);
             Assert.Equal(1, harness.Retention.RetainedCount);
         }
-        /// <summary>Oversized retention requeues; a publish confirm failure after ingest NACK-requeues and does not ACK.</summary>
+        /// <summary>Oversized retention ACKs with RetentionRejected reply; a publish confirm failure after Success still NACK-requeues.</summary>
 
         [Fact]
-        public async Task Retention_rejection_requeues_and_publish_failure_after_success_nacks()
+        public async Task Retention_rejection_acks_and_publish_failure_after_success_nacks()
         {
             await using var tiny = await BackFillerPipelineHarness.StartAsync();
             var oversized = ArticleWorkTestArticles.OversizedForOneMegabyteRetention();
@@ -62,9 +62,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Integration
             var rejectChannel = new FakeBackFillerRabbitMqChannel(1);
             var rejected = await tiny.ProcessCanonicalAsync(rejectChannel);
             Assert.Equal(ArticleWorkOutcome.RetentionRejected, rejected);
-            Assert.True(Assert.Single(rejectChannel.Settlements).Requeue);
-            Assert.False(rejectChannel.Settlements[0].Acknowledge);
-            Assert.Empty(tiny.PublishChannel.Publications);
+            Assert.False(Assert.Single(rejectChannel.Settlements).Requeue);
+            Assert.True(rejectChannel.Settlements[0].Acknowledge);
+            Assert.Single(tiny.PublishChannel.Publications);
 
             await using var publishFail = await BackFillerPipelineHarness.StartAsync(FakePublishConfirmBehavior.Nack);
             publishFail.EnqueueArticle(Payload);

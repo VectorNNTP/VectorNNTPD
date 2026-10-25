@@ -94,11 +94,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
             var result = await session.ConnectAsync(factory, CancellationToken.None);
             Assert.Equal(ArticleRetrievalKind.ProviderFailure, result!.Kind);
+            Assert.Equal("IOException: refused", result.Reason);
             await session.DisposeAsync();
         }
 
         /// <summary>
-        /// A real <see cref="SocketException"/> from connect is a non-reusable provider failure whose reason is the exception type name.
+        /// A real <see cref="SocketException"/> from connect is a non-reusable provider failure whose reason includes type and message.
         /// </summary>
         [Fact]
         public async Task Connect_socket_exception_is_a_non_reusable_provider_failure()
@@ -113,7 +114,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.NotNull(result);
             Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
             Assert.False(result.SessionReusable);
-            Assert.Equal(nameof(SocketException), result.Reason);
+            Assert.StartsWith(nameof(SocketException) + ":", result.Reason, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(result.Reason[(nameof(SocketException) + ": ").Length..]));
             Assert.Equal(NntpSessionState.Retiring, session.State);
             await session.DisposeAsync();
         }
@@ -212,7 +214,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             {
                 var result = await session.ConnectAsync(factory, CancellationToken.None);
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result!.Kind);
-                Assert.Equal(nameof(IOException), result.Reason);
+                Assert.Equal("IOException: AUTHINFO PASS write fault", result.Reason);
                 Assert.DoesNotContain(Password, result.Reason, StringComparison.Ordinal);
                 Assert.Equal("AUTHINFO USER acct", server.Commands[1]);
                 Assert.DoesNotContain(
@@ -682,7 +684,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.NotNull(result);
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
                 Assert.False(result.SessionReusable);
-                Assert.Equal("InvalidOperationException", result.Reason);
+                Assert.Equal("InvalidOperationException: TLS handshake starting", result.Reason);
                 Assert.Null(SessionField(session, "_stream"));
                 Assert.Null(SessionField(session, "_reader"));
                 Assert.Equal(1, server.ClientStreamDisposeCount);
@@ -721,7 +723,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.NotNull(result);
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
                 Assert.False(result.SessionReusable);
-                Assert.Equal("InvalidOperationException", result.Reason);
+                Assert.Equal("InvalidOperationException: TLS handshake starting", result.Reason);
                 Assert.Null(SessionField(session, "_stream"));
                 Assert.Null(SessionField(session, "_reader"));
                 Assert.Equal(1, server.ClientStreamDisposeCount);
@@ -878,6 +880,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
             using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
             Assert.Equal(ArticleRetrievalKind.ArticleNotFound, result.Kind);
+            Assert.Equal(430, result.StatusCode);
+            Assert.True(result.SessionReusable);
+            await session.DisposeAsync();
+        }
+
+        /// <summary>
+        /// ARTICLE 451 is classified as ArticleNotFound (not ProviderFailure) and keeps the session reusable.
+        /// </summary>
+        [Fact]
+        public async Task Article_451_is_article_not_found_and_reusable()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.Respond(static _ => "451 article unavailable\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+            using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+            Assert.Equal(ArticleRetrievalKind.ArticleNotFound, result.Kind);
+            Assert.Equal(NntpStatusCode.ArticleUnavailable, result.StatusCode);
+            Assert.NotEqual(ArticleRetrievalKind.ProviderFailure, result.Kind);
             Assert.True(result.SessionReusable);
             await session.DisposeAsync();
         }
@@ -1238,15 +1262,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
-        /// 4xx/5xx ARTICLE statuses are ProviderFailure, not ArticleNotFound, and retire the session.
+        /// Connection-terminating or authority ARTICLE statuses are ProviderFailure (not NotFound) and retire the session.
         /// </summary>
-
         [Theory]
         [InlineData("400 service unavailable")]
-        [InlineData("503 program fault")]
         [InlineData("502 not permitted")]
-        [InlineData("500 unknown command")]
-        public async Task Provider_error_status_is_not_article_not_found(string status)
+        public async Task Provider_terminating_status_is_not_article_not_found_and_retires(string status)
         {
             var factory = new ScriptedNntpTransportFactory();
             var server = new ScriptedNntpServer();
@@ -1259,6 +1280,76 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
             Assert.NotEqual(ArticleRetrievalKind.ArticleNotFound, result.Kind);
             Assert.False(result.SessionReusable);
+            await session.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Single-line ARTICLE 403/500/501/503 are ProviderFailure (not NotFound) and keep the session reusable.
+        /// </summary>
+        [Theory]
+        [InlineData("403 internal fault", NntpStatusCode.InternalFault)]
+        [InlineData("500 server error", NntpStatusCode.CommandUnknown)]
+        [InlineData("500 unknown command", NntpStatusCode.CommandUnknown)]
+        [InlineData("501 syntax error", NntpStatusCode.CommandSyntaxError)]
+        [InlineData("503 program fault", NntpStatusCode.ProgramFault)]
+        public async Task Article_level_5xx_is_provider_failure_and_reusable(string status, int expectedCode)
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.Respond(_ => status + "\r\n");
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+
+            using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+            Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
+            Assert.NotEqual(ArticleRetrievalKind.ArticleNotFound, result.Kind);
+            Assert.Equal(expectedCode, result.StatusCode);
+            Assert.True(result.SessionReusable);
+            Assert.True(session.IsReusable);
+            await session.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Giganews-style ARTICLE 500 server error leaves the connection synchronized for a later Found ARTICLE.
+        /// </summary>
+        [Fact]
+        public async Task Giganews_500_server_error_allows_subsequent_article_on_same_session()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            var articleOrdinal = 0;
+            server.Respond(_ =>
+            {
+                var n = Interlocked.Increment(ref articleOrdinal);
+                return n == 1
+                    ? "500 server error\r\n"
+                    : "220 0 <ok@b> article follows\r\nFrom: a@b\r\n\r\nbody\r\n.\r\n";
+            });
+            factory.Enqueue(server);
+            var session = CreateSession();
+            Assert.Null(await session.ConnectAsync(factory, CancellationToken.None));
+            var connectionId = session.ConnectionId;
+
+            using (var failed = await session.DownloadArticleAsync("<miss@b>", CancellationToken.None))
+            {
+                Assert.Equal(ArticleRetrievalKind.ProviderFailure, failed.Kind);
+                Assert.Equal(NntpStatusCode.CommandUnknown, failed.StatusCode);
+                Assert.Equal("server error", failed.Reason);
+                Assert.True(failed.SessionReusable);
+                Assert.Equal(connectionId, failed.ConnectionId);
+            }
+
+            using (var found = await session.DownloadArticleAsync("<ok@b>", CancellationToken.None))
+            {
+                Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, found.Kind);
+                Assert.Equal(NntpStatusCode.ArticleFollows, found.StatusCode);
+                Assert.True(found.SessionReusable);
+                Assert.Equal(connectionId, found.ConnectionId);
+                Assert.NotNull(found.Article);
+            }
+
+            Assert.True(session.IsReusable);
             await session.DisposeAsync();
         }
 
@@ -1441,9 +1532,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, finished.Kind);
                 Assert.False(finished.SessionReusable);
                 Assert.Null(finished.Article);
-                Assert.Equal(nameof(InvalidOperationException), finished.Reason);
-                Assert.DoesNotContain("NullReference", finished.Reason ?? string.Empty, StringComparison.Ordinal);
-                Assert.DoesNotContain("ArgumentNull", finished.Reason ?? string.Empty, StringComparison.Ordinal);
+                var reason = finished.Reason ?? string.Empty;
+                var prefix = nameof(InvalidOperationException) + ":";
+                Assert.StartsWith(prefix, reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(reason[prefix.Length..].TrimStart()));
+                Assert.DoesNotContain("NullReference", reason, StringComparison.Ordinal);
+                Assert.DoesNotContain("ArgumentNull", reason, StringComparison.Ordinal);
                 Assert.Equal(0, Volatile.Read(ref consumed));
                 Assert.Null(SessionField(session, "_stream"));
                 Assert.Null(SessionField(session, "_reader"));
@@ -1526,7 +1620,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, finished.Kind);
                 Assert.False(finished.SessionReusable);
                 Assert.Null(finished.Article);
-                Assert.Equal(nameof(ObjectDisposedException), finished.Reason);
+                Assert.StartsWith(nameof(ObjectDisposedException) + ":", finished.Reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(finished.Reason[(nameof(ObjectDisposedException) + ": ").Length..]));
                 Assert.Equal(0, Volatile.Read(ref consumed));
                 Assert.Null(SessionField(session, "_stream"));
                 Assert.Null(SessionField(session, "_reader"));
@@ -2187,6 +2282,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             }
         }
 
+        /// <summary>Wraps a plaintext transport so the first handshake read can be stalled and cancellation observed.</summary>
         private sealed class StalledPlaintextStream : Stream
         {
             /// <summary>Transport wrapped for the scripted server.</summary>

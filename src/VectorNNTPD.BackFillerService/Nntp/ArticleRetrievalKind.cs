@@ -6,7 +6,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>ARTICLE succeeded and produced an owned destuffed payload.</summary>
         ArticleRetrieved = 0,
 
-        /// <summary>Provider reported that the article does not exist (430).</summary>
+        /// <summary>Provider reported that the article does not exist or is unavailable (430 or ARTICLE 451).</summary>
         ArticleNotFound = 1,
 
         /// <summary>

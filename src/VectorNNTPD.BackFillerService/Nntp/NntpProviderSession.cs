@@ -142,12 +142,25 @@ namespace VectorNNTPD.BackFillerService.Nntp
             _options = options;
             _logger = logger;
             ConnectionNumber = connectionNumber;
+            ConnectionId = Guid.NewGuid();
             _wireIdentity = FormatWireIdentity(provider, connectionNumber);
             State = NntpSessionState.Created;
         }
 
         /// <summary>Gets the one-based pool slot captured at construction.</summary>
+        /// <remarks>
+        /// Pool slot numbers are reused after retirement. Use <see cref="ConnectionId"/> to correlate one physical TCP session.
+        /// </remarks>
         internal int ConnectionNumber { get; }
+
+        /// <summary>
+        /// Gets the process-unique identity assigned when this physical NNTP session object is constructed.
+        /// </summary>
+        /// <remarks>
+        /// Stable for the lifetime of this connection. Distinct from <see cref="ConnectionNumber"/> (reusable pool slot),
+        /// Article Work request ids, Message-IDs, and RabbitMQ delivery tags.
+        /// </remarks>
+        internal Guid ConnectionId { get; }
 
         /// <summary>
         /// Gets the stable Debug wire-log prefix
@@ -315,7 +328,13 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
 
                 AssignState(NntpSessionState.Ready);
-                NntpLogMessages.SessionReady(_logger, _provider.Backbone, _provider.Host, _provider.Port, _provider.UseTls);
+                NntpLogMessages.SessionReady(
+                    _logger,
+                    _provider.Backbone,
+                    ConnectionId,
+                    _provider.Host,
+                    _provider.Port,
+                    _provider.UseTls);
                 return null;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -328,7 +347,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
             catch (Exception ex) when (ex is SocketException or IOException or ObjectDisposedException or InvalidOperationException or AuthenticationException or FormatException or InvalidDataException or TimeoutException)
             {
-                return FailClosed(ArticleRetrievalKind.ProviderFailure, null, ex.GetType().Name, reusable: false);
+                return FailClosed(ArticleRetrievalKind.ProviderFailure, null, NntpExceptionDiagnostics.FormatReason(ex), reusable: false);
             }
         }
 
@@ -353,10 +372,16 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Status <see cref="NntpStatusCode.ArticleFollows"/> returns the destuffed payload when <see cref="NntpProtocolIo.HasHeaderBodySeparator"/> is true.
         /// With <paramref name="consumePayload"/> null, that payload is an owned <see cref="RetrievedArticle"/>.
         /// With <paramref name="consumePayload"/> not null, the result's article is null because the delegate already consumed the scratch.
-        /// Status <see cref="NntpStatusCode.NoArticleWithMessageId"/> is <see cref="ArticleRetrievalKind.ArticleNotFound"/> and the session stays reusable.
+        /// Status <see cref="NntpStatusCode.NoArticleWithMessageId"/> or <see cref="NntpStatusCode.ArticleUnavailable"/>
+        /// is <see cref="ArticleRetrievalKind.ArticleNotFound"/> and the session stays reusable.
         /// A 220 payload with no header/body separator is <see cref="ArticleRetrievalKind.InvalidArticle"/> and stays reusable.
         /// A payload that reaches <see cref="NntpSessionOptions.MaxArticleBytes"/> is <see cref="ArticleRetrievalKind.InvalidArticle"/> and the session is marked unhealthy because the multiline response is no longer synchronized.
-        /// <see cref="NntpStatusCode.IsAuthenticationFailure"/>, <see cref="NntpStatusCode.IsCommandRejected"/>, statuses 412, 420, and 423, and every other status mark the session unhealthy.
+        /// Single-line ARTICLE failures classified by <see cref="NntpStatusCode.IsArticleLevelFailureReusable"/>
+        /// (403, 500, 501, 503) are <see cref="ArticleRetrievalKind.ProviderFailure"/> and stay reusable: the
+        /// response does not desynchronize the session (RFC 3977 §§3.2, 3.2.1).
+        /// <see cref="NntpStatusCode.IsAuthenticationFailure"/>, <see cref="NntpStatusCode.CommandNotPermitted"/>,
+        /// <see cref="NntpStatusCode.ServiceTemporarilyUnavailable"/>, statuses 412, 420, and 423, empty or malformed
+        /// status lines, multiline desynchronization, and transport failures mark the session unhealthy.
         /// </returns>
         /// <exception cref="ArgumentException"><paramref name="messageId"/> is null or whitespace.</exception>
         /// <remarks>
@@ -559,11 +584,22 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     return WithCommandTimestamp(ArticleRetrievalResult.Retrieved(code, text));
                 }
 
-                if (code == NntpStatusCode.NoArticleWithMessageId)
+                if (code is NntpStatusCode.NoArticleWithMessageId or NntpStatusCode.ArticleUnavailable)
                 {
                     AssignState(NntpSessionState.Ready);
                     return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                         ArticleRetrievalKind.ArticleNotFound,
+                        code,
+                        text,
+                        sessionReusable: true));
+                }
+
+                if (NntpStatusCode.IsArticleLevelFailureReusable(code))
+                {
+                    // Single-line negative ARTICLE status: protocol remains synchronized; fail this article only.
+                    AssignState(NntpSessionState.Ready);
+                    return WithCommandTimestamp(ArticleRetrievalResult.Failed(
+                        ArticleRetrievalKind.ProviderFailure,
                         code,
                         text,
                         sessionReusable: true));
@@ -574,10 +610,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     return MarkUnhealthy(ArticleRetrievalKind.AuthenticationFailure, code, text);
                 }
 
-                if (NntpStatusCode.IsCommandRejected(code)
-                    || code is NntpStatusCode.NoNewsgroupSelected
+                if (code is NntpStatusCode.NoNewsgroupSelected
                         or NntpStatusCode.CurrentArticleInvalid
-                        or NntpStatusCode.NoArticleWithNumber)
+                        or NntpStatusCode.NoArticleWithNumber
+                        or NntpStatusCode.CommandNotPermitted
+                        or NntpStatusCode.ServiceTemporarilyUnavailable)
                 {
                     return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, text);
                 }
@@ -598,7 +635,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or AuthenticationException or FormatException or InvalidDataException or TimeoutException)
             {
-                return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, ex.GetType().Name);
+                return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, NntpExceptionDiagnostics.FormatReason(ex));
             }
             finally
             {
@@ -734,7 +771,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or AuthenticationException or FormatException or InvalidDataException or TimeoutException)
             {
-                _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, ex.GetType().Name);
+                _ = MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, NntpExceptionDiagnostics.FormatReason(ex));
                 return false;
             }
             finally
@@ -1168,14 +1205,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     return ArticleRetrievalResult.Failed(
                         ArticleRetrievalKind.ProviderFailure,
                         null,
-                        $"TLS handshake failed ({ex.GetType().Name}).",
+                        "TLS handshake failed: " + NntpExceptionDiagnostics.FormatReason(ex),
                         sessionReusable: false);
                 }
 
                 return FailClosed(
                     ArticleRetrievalKind.ProviderFailure,
                     null,
-                    $"TLS handshake failed ({ex.GetType().Name}).",
+                    "TLS handshake failed: " + NntpExceptionDiagnostics.FormatReason(ex),
                     reusable: false);
             }
 
@@ -1584,26 +1621,33 @@ namespace VectorNNTPD.BackFillerService.Nntp
         }
 
         /// <summary>
-        /// Copies <see cref="ArticleCommandStartedTimestamp"/> onto <paramref name="result"/>.
-        /// Zero means ARTICLE was not sent.
+        /// Copies <see cref="ArticleCommandStartedTimestamp"/> and <see cref="ConnectionId"/> onto <paramref name="result"/>.
+        /// Zero command timestamp means ARTICLE was not sent.
         /// </summary>
         /// <param name="result">Retrieval result about to be returned.</param>
-        /// <returns>The same result, with the command timestamp stored.</returns>
+        /// <returns>The same result, with session correlation fields stored.</returns>
         private ArticleRetrievalResult WithCommandTimestamp(ArticleRetrievalResult result)
         {
             result.CommandStartedTimestamp = ArticleCommandStartedTimestamp;
+            result.ConnectionId = ConnectionId;
             return result;
         }
 
         /// <summary>
-        /// Stores <see cref="ArticleCommandStartedTimestamp"/> on <paramref name="exception"/> when ARTICLE was sent.
+        /// Stores <see cref="ArticleCommandStartedTimestamp"/> and <see cref="ConnectionId"/> on <paramref name="exception"/>
+        /// for handler correlation when download throws.
         /// </summary>
-        /// <param name="exception">Exception that leaves <see cref="DownloadArticleAsync"/> after the command timestamp is known.</param>
+        /// <param name="exception">Exception that leaves <see cref="DownloadArticleAsync"/> after the session is known.</param>
         private void RememberCommandTimestamp(Exception exception)
         {
             if (ArticleCommandStartedTimestamp != 0)
             {
                 exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] = ArticleCommandStartedTimestamp;
+            }
+
+            if (exception.Data[ArticleRetrievalResult.ConnectionIdKey] is not Guid)
+            {
+                exception.Data[ArticleRetrievalResult.ConnectionIdKey] = ConnectionId;
             }
         }
 

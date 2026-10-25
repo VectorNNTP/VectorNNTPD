@@ -138,6 +138,35 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
+        /// ARTICLE 451 follows the same terminal NotFound path as 430: ACK, RPC reply, no requeue.
+        /// </summary>
+        [Fact]
+        public async Task Article_451_maps_to_not_found_ack_without_requeue()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var server = new ScriptedNntpServer();
+            server.Respond(static _ => "451 article unavailable\r\n");
+            factory.Enqueue(server);
+            var (_, publisher, pipeline, _) = CreatePipeline(factory);
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+
+            var outcome = await pipeline.ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.ArticleNotFound, outcome);
+            Assert.NotEqual(ArticleWorkOutcome.ProviderFailure, outcome);
+            var intent = Assert.Single(publisher.Published);
+            Assert.Equal(ArticleWorkOutcome.ArticleNotFound, intent.Outcome);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.True(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
+        }
+
+        /// <summary>
         /// Connect/auth failures requeue without publishing a terminal Article Work response.
         /// </summary>
 
@@ -170,10 +199,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, downOutcome);
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, authOutcome);
-            Assert.Empty(downPipeline.Publisher.Published);
-            Assert.Empty(authPipeline.Publisher.Published);
-            Assert.True(Assert.Single(downChannel.Settlements).Requeue);
-            Assert.True(Assert.Single(authChannel.Settlements).Requeue);
+            Assert.Equal(ArticleWorkOutcome.ProviderFailure, Assert.Single(downPipeline.Publisher.Published).Outcome);
+            Assert.Equal(ArticleWorkOutcome.ProviderFailure, Assert.Single(authPipeline.Publisher.Published).Outcome);
+            Assert.True(Assert.Single(downChannel.Settlements).Acknowledge);
+            Assert.False(Assert.Single(downChannel.Settlements).Requeue);
+            Assert.True(Assert.Single(authChannel.Settlements).Acknowledge);
+            Assert.False(Assert.Single(authChannel.Settlements).Requeue);
         }
 
         /// <summary>
@@ -272,13 +303,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(ArticleWorkOutcome.RetentionRejected, outcome);
             Assert.Equal(ArticleRetentionKind.PayloadExceedsCapacity, handler.LastRetentionKind);
             Assert.NotEqual(ArticleWorkOutcome.ArticleNotFound, outcome);
-            Assert.Empty(publisher.Published);
-            Assert.False(Assert.Single(channel.Settlements).Acknowledge);
-            Assert.True(Assert.Single(channel.Settlements).Requeue);
+            Assert.Equal(ArticleWorkOutcome.RetentionRejected, Assert.Single(publisher.Published).Outcome);
+            Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+            Assert.False(Assert.Single(channel.Settlements).Requeue);
         }
 
         /// <summary>
-        /// Unknown backbone name yields ProviderFailure and requeue.
+        /// Unknown backbone name yields ProviderFailure with ACK and a correlated failure reply.
         /// </summary>
 
         [Fact]
@@ -306,7 +337,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 CancellationToken.None);
 
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
-            Assert.True(Assert.Single(channel.Settlements).Requeue);
+            Assert.Equal(ArticleWorkOutcome.ProviderFailure, Assert.Single(publisher.Published).Outcome);
+            Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+            Assert.False(Assert.Single(channel.Settlements).Requeue);
         }
 
         /// <summary>Wires Giganews on loopback with scripted transport, retention, handler, publisher, and a 1024-byte delivery pipeline.</summary>

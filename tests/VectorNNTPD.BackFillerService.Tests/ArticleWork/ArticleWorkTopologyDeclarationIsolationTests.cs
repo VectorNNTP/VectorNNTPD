@@ -315,6 +315,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             await connections.DisposeAsync();
         }
 
+        /// <summary>Hooks manual-ack channel creation so queue declare failures are scripted per queue name.</summary>
+        /// <param name="factory">Factory whose last connection receives the hook.</param>
+        /// <param name="failure">Returns an exception for a queue name, or null to succeed.</param>
         private static void ArmQueueDeclareFailure(
             FakeBackFillerRabbitMqConnectionFactory factory,
             Func<string, Exception?> failure)
@@ -325,6 +328,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             };
         }
 
+        /// <summary>Builds a RabbitMQ precondition-failed shutdown wrapped as <see cref="OperationInterruptedException"/>.</summary>
+        /// <param name="queue">Queue name embedded in the broker error text.</param>
         private static OperationInterruptedException CreatePreconditionFailed(string queue)
         {
             var shutdown = new ShutdownEventArgs(
@@ -336,6 +341,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             return new OperationInterruptedException(shutdown);
         }
 
+        /// <summary>Constructs a consumer with deferred handler and recording publisher for topology tests.</summary>
         private static ArticleWorkConsumerService CreateConsumer(
             IRabbitMqService connections,
             IBackFillerProviderCatalog catalog,
@@ -350,6 +356,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 catalog,
                 capacity);
 
+        /// <summary>Builds a static provider catalog from backbone and max-session pairs.</summary>
         private static StaticBackFillerProviderCatalog CreateCatalog(
             IReadOnlyList<(string Backbone, int MaxSessions)> providers) =>
             new(
@@ -365,6 +372,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                     p.MaxSessions)),
             ]);
 
+        /// <summary>Publishes a usable-capacity snapshot omitting backbones with zero active sessions.</summary>
         private static BackboneUsableCapacityState CreateCapacity(
             IReadOnlyList<(string Backbone, int Active)> capacities)
         {

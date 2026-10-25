@@ -77,7 +77,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             }
         }
 
-        /// <summary>A stalled status read is reported as TimeoutException and retires the session.</summary>
+        /// <summary>A stalled status read is reported as TimeoutException with FormatReason text and retires the session.</summary>
         [Fact]
         public async Task Stalled_status_read_is_timeout_exception_and_not_reusable()
         {
@@ -95,7 +95,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await statusCopied.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 using var result = await download.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
-                Assert.Equal(nameof(TimeoutException), result.Reason);
+                Assert.StartsWith(nameof(TimeoutException) + ":", result.Reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(result.Reason[(nameof(TimeoutException) + ": ").Length..]));
                 Assert.False(result.SessionReusable);
             }
             finally
@@ -303,6 +304,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.True(sawBlockedWaiter, "shutdown cancellation did not leave a permit waiter queued");
         }
 
+        /// <summary>
+        /// Runs one pool shutdown while a cancelled acquire and a shutdown acquire are queued; returns whether a blocked permit waiter was observed.
+        /// </summary>
         private static async Task<bool> RunConcurrentShutdownOnceAsync()
         {
             var factory = new ScriptedNntpTransportFactory();
@@ -336,6 +340,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             return sawBlockedWaiter;
         }
 
+        /// <summary>Connects a provider session to one enqueued scripted server with test timeouts.</summary>
         private static async Task<NntpProviderSession> ConnectAsync(
             ScriptedNntpServer server,
             TimeSpan? commandTimeout = null,
@@ -356,6 +361,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             return session;
         }
 
+        /// <summary>Polls <paramref name="predicate"/> until true or a five-second safety timeout.</summary>
         private static async Task WaitUntilAsync(Func<bool> predicate)
         {
             using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));

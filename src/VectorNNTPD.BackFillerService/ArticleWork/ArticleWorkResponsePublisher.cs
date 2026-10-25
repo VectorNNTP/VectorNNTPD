@@ -360,6 +360,22 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         outcome);
                 }
             }
+            catch (RabbitMqPublicationUnroutableException ex)
+            {
+                // Permanent missing ReplyTo: article may already be retrieved; RPC delivery failed.
+                // NACK without requeue discards the work message (no DLX). Log identity fields for recovery.
+                ArticleWorkLogMessages.ReplyUnroutableTerminal(
+                    _logger,
+                    generation,
+                    intent.RequestId?.ToString("D") ?? "(none)",
+                    string.IsNullOrWhiteSpace(intent.MessageId) ? "(none)" : intent.MessageId,
+                    string.IsNullOrWhiteSpace(intent.Backbone) ? "(none)" : intent.Backbone,
+                    intent.CorrelationId,
+                    intent.ReplyTo,
+                    intent.Outcome.ToString(),
+                    ex.Message);
+                throw;
+            }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 ArticleWorkLogMessages.PublicationFailed(

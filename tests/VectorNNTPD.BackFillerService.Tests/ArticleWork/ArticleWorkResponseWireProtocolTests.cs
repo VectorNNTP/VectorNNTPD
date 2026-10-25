@@ -11,6 +11,26 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
     public sealed class ArticleWorkResponseWireProtocolTests
     {
         /// <summary>
+        /// Response AMQP Expiration remains the locked 1-second reply-path TTL (not a work-request TTL).
+        /// </summary>
+        [Fact]
+        public void Response_expiration_milliseconds_is_exactly_1000()
+        {
+            Assert.Equal("1000", ArticleWorkResponseWireProtocol.ExpirationMilliseconds);
+        }
+
+        /// <summary>
+        /// Verifies the response AMQP expiration constant is non-empty, fixed at one second, and not treated as a work-request TTL.
+        /// </summary>
+        [Fact]
+        public void Response_expiration_is_distinct_from_omitted_work_request_ttl()
+        {
+            // Work requests must not inherit the response TTL constant; buffering depends on omission.
+            Assert.False(string.IsNullOrWhiteSpace(ArticleWorkResponseWireProtocol.ExpirationMilliseconds));
+            Assert.Equal("1000", ArticleWorkResponseWireProtocol.ExpirationMilliseconds);
+        }
+
+        /// <summary>
         /// Success serialization matches the canonical protocol bytes and excludes uri/error/payload fields.
         /// </summary>
         [Fact]
@@ -155,27 +175,46 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Retryable/non-terminal outcomes must not produce v1 terminal response JSON (serializer throws).
+        /// Cancelled is not a publishable terminal reply (NACK-requeue without RPC response).
         /// </summary>
-        /// <param name="outcomeName">Non-terminal outcome name.</param>
+        [Fact]
+        public void Cancelled_is_not_a_serializable_terminal_response()
+        {
+            var intent = new ArticleWorkResponseIntent(
+                ArticleWorkOutcome.Cancelled,
+                Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
+                ArticleWorkTestDeliveries.CanonicalMessageId,
+                "Giganews",
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                "cancelled");
+
+            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+        }
+
+        /// <summary>
+        /// ProviderFailure / UnexpectedFailure / RetentionRejected serialize as terminal failure replies with error text.
+        /// </summary>
         [Theory]
-        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
-        [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
-        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
-        [InlineData(nameof(ArticleWorkOutcome.RetentionRejected))]
-        public void Retryable_outcomes_are_not_serializable_terminal_responses(string outcomeName)
+        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure), "ProviderFailure")]
+        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure), "UnexpectedFailure")]
+        [InlineData(nameof(ArticleWorkOutcome.RetentionRejected), "RetentionRejected")]
+        public void Terminal_provider_operation_failures_serialize_with_error(string outcomeName, string wireName)
         {
             var outcome = Enum.Parse<ArticleWorkOutcome>(outcomeName);
-            var intent = new ArticleWorkResponseIntent(
+            var json = ArticleWorkResponseWireProtocol.SerializeV1(new ArticleWorkResponseIntent(
                 outcome,
                 Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
                 ArticleWorkTestDeliveries.CanonicalMessageId,
                 "Giganews",
                 ArticleWorkTestDeliveries.CanonicalCorrelationId,
                 ArticleWorkTestDeliveries.CanonicalReplyTo,
-                "retry");
+                "upstream fault"));
 
-            Assert.Throws<InvalidOperationException>(() => ArticleWorkResponseWireProtocol.SerializeV1(intent));
+            using var document = JsonDocument.Parse(json);
+            Assert.Equal(wireName, document.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal("upstream fault", document.RootElement.GetProperty("error").GetString());
+            Assert.False(document.RootElement.TryGetProperty("fqdn", out _));
         }
 
         /// <summary>

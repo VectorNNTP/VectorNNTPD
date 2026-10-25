@@ -22,9 +22,17 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         private const string RequestIdHeaderName = "RequestId";
 
         /// <summary>
-        /// Worker response TTL in milliseconds. Locked NNTPD architecture uses the same value
-        /// on requests and accepted responses. Old BackFiller publisher did not set Expiration.
+        /// AMQP per-message TTL in milliseconds for Article Work <em>responses</em> only.
         /// </summary>
+        /// <remarks>
+        /// Applied when BackFiller publishes a terminal reply to the caller's exclusive ReplyTo queue.
+        /// Leftover replies should not linger if the caller has already abandoned the correlation.
+        /// This is RabbitMQ message TTL on the reply path, not a processing deadline for a work
+        /// delivery already handed to a consumer, and not a TTL for work <em>requests</em> waiting
+        /// in <c>backfiller.{backbone}</c>. Work requests must remain eligible for broker buffering
+        /// until a consumer delivers them; they must not carry this expiration. Queue declarations
+        /// must not set <c>x-message-ttl</c> that silently drops ready work.
+        /// </remarks>
         internal const string ExpirationMilliseconds = "1000";
 
         /// <summary>Serializes one validated v1 response. Does not embed article bytes.</summary>
@@ -36,9 +44,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="intent"/> is null.</exception>
         /// <exception cref="InvalidOperationException">
         /// Thrown when <paramref name="intent"/> is not a publishable v1 response.
-        /// <see cref="ArticleWorkOutcome.ProviderFailure"/>, <see cref="ArticleWorkOutcome.Cancelled"/>,
-        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, and <see cref="ArticleWorkOutcome.RetentionRejected"/>
-        /// are rejected. Success requires a canonical FQDN from <see cref="VatpEndpointFields.IsCanonicalFqdn"/>,
+        /// <see cref="ArticleWorkOutcome.Cancelled"/> is rejected (cancel settles by NACK-requeue without a terminal reply).
+        /// Success requires a canonical FQDN from <see cref="VatpEndpointFields.IsCanonicalFqdn"/>,
         /// a port accepted by <see cref="VatpEndpointFields.IsCanonicalPort"/>, and a 64-character lowercase
         /// hexadecimal article id, and must not include <c>error</c>. Other publishable outcomes require a
         /// non-empty <c>error</c> and must not include success fields.
@@ -105,7 +112,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Returns the protocol outcome name written to the <c>outcome</c> property.</summary>
         /// <param name="outcome">Classified outcome to encode.</param>
         /// <returns>
-        /// <c>Success</c>, <c>ArticleNotFound</c>, <c>InvalidArticle</c>, or <c>InvalidRequest</c>.
+        /// Wire <c>outcome</c> name for a publishable terminal response.
         /// </returns>
         /// <exception cref="InvalidOperationException">
         /// Thrown when <paramref name="outcome"/> is not a publishable terminal response.
@@ -117,6 +124,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 ArticleWorkOutcome.ArticleNotFound => "ArticleNotFound",
                 ArticleWorkOutcome.InvalidArticle => "InvalidArticle",
                 ArticleWorkOutcome.InvalidRequest => "InvalidRequest",
+                ArticleWorkOutcome.ProviderFailure => "ProviderFailure",
+                ArticleWorkOutcome.UnexpectedFailure => "UnexpectedFailure",
+                ArticleWorkOutcome.RetentionRejected => "RetentionRejected",
                 _ => throw new InvalidOperationException($"Outcome '{outcome}' is not a publishable terminal response."),
             };
 
@@ -162,6 +172,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
                 case ArticleWorkOutcome.ArticleNotFound:
                 case ArticleWorkOutcome.InvalidArticle:
+                case ArticleWorkOutcome.ProviderFailure:
+                case ArticleWorkOutcome.UnexpectedFailure:
+                case ArticleWorkOutcome.RetentionRejected:
                     RequireIdentity(intent);
                     if (intent.Fqdn is not null || intent.ListenerPort is not null)
                     {

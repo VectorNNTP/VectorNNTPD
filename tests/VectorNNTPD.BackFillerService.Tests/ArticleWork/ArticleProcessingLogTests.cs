@@ -103,11 +103,12 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Retryable provider transport failure logs outcome <c>Failed</c> without echoing exception text or validation wording.
+        /// Provider transport failure logs outcome <c>Failed</c> with the retrieval diagnostic reason and connection id.
         /// </summary>
         [Fact]
         public async Task TransportFailure_logs_one_information_event_with_failed()
         {
+            var connectionId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
             var logger = new CollectingLogger<ProviderArticleWorkHandler>();
             await using var retention = CreateRetention();
             var handler = CreateHandler(
@@ -115,15 +116,18 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 retention,
                 new ScriptedRetriever(
                     payload: null,
-                    ArticleRetrievalResult.Failed(ArticleRetrievalKind.ProviderFailure, null, "connection reset", sessionReusable: false),
-                    Stopwatch.GetTimestamp()));
+                    ArticleRetrievalResult.Failed(ArticleRetrievalKind.ProviderFailure, 400, "connection reset", sessionReusable: false),
+                    Stopwatch.GetTimestamp(),
+                    connectionId));
 
             var result = await handler.HandleAsync(Item(ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews"), CancellationToken.None);
 
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, result.Outcome);
             var entry = AssertSingleCompletion(logger);
             AssertCompletion(entry, ArticleWorkTestDeliveries.CanonicalMessageId, "Giganews", "Failed");
-            Assert.DoesNotContain("connection reset", entry.Message, StringComparison.Ordinal);
+            Assert.Contains("reason=connection reset", entry.Message, StringComparison.Ordinal);
+            Assert.Contains("statusCode=400", entry.Message, StringComparison.Ordinal);
+            Assert.Contains($"connectionId={connectionId:D}", entry.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("ValidationFailed", entry.Message, StringComparison.Ordinal);
         }
 
@@ -472,11 +476,24 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             /// <param name="payload">Article bytes for the callback, or null to skip consumption (failures).</param>
             /// <param name="result">Base retrieval result (kind, code, session reuse).</param>
             /// <param name="commandStartedTimestamp">Value assigned to <see cref="ArticleRetrievalResult.CommandStartedTimestamp"/> on return.</param>
-            internal ScriptedRetriever(byte[]? payload, ArticleRetrievalResult result, long commandStartedTimestamp)
+            /// <summary>Optional physical connection identity stamped onto the returned result.</summary>
+            private readonly Guid _connectionId;
+
+            /// <summary>Configures scripted retrieval inputs for elapsed and outcome logging tests.</summary>
+            /// <param name="payload">Article bytes for the callback, or null to skip consumption (failures).</param>
+            /// <param name="result">Base retrieval result (kind, code, session reuse).</param>
+            /// <param name="commandStartedTimestamp">Value assigned to <see cref="ArticleRetrievalResult.CommandStartedTimestamp"/> on return.</param>
+            /// <param name="connectionId">Optional connection identity stamped onto the returned result.</param>
+            internal ScriptedRetriever(
+                byte[]? payload,
+                ArticleRetrievalResult result,
+                long commandStartedTimestamp,
+                Guid connectionId = default)
             {
                 _payload = payload;
                 _result = result;
                 _commandStartedTimestamp = commandStartedTimestamp;
+                _connectionId = connectionId;
             }
 
             /// <summary>
@@ -501,6 +518,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 }
 
                 _result.CommandStartedTimestamp = _commandStartedTimestamp;
+                _result.ConnectionId = _connectionId;
                 return Task.FromResult(_result);
             }
         }

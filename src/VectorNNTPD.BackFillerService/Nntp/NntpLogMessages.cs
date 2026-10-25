@@ -9,6 +9,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </summary>
         /// <param name="logger">Logger that receives the information event.</param>
         /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionId"><see cref="NntpProviderSession.ConnectionId"/> of the ready physical connection.</param>
         /// <param name="Host">Upstream host from the provider definition.</param>
         /// <param name="Port">Upstream port from the provider definition.</param>
         /// <param name="UseTls">
@@ -18,8 +19,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
         [LoggerMessage(
             EventId = 5400,
             Level = LogLevel.Information,
-            Message = "NNTP session ready backbone={Backbone} host={Host} port={Port} tls={UseTls}")]
-        internal static partial void SessionReady(ILogger logger, string Backbone, string Host, int Port, bool UseTls);
+            Message = "NNTP session ready backbone={Backbone} connectionId={ConnectionId} host={Host} port={Port} tls={UseTls}")]
+        internal static partial void SessionReady(
+            ILogger logger,
+            string Backbone,
+            Guid ConnectionId,
+            string Host,
+            int Port,
+            bool UseTls);
 
         /// <summary>
         /// Written when a live pooled session is removed for retirement, before that session is disposed.
@@ -27,12 +34,19 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </summary>
         /// <param name="logger">Logger that receives the warning.</param>
         /// <param name="Backbone">Backbone of the pool that owned the session.</param>
-        /// <param name="Reason">Caller-supplied retirement text. This method does not throw.</param>
+        /// <param name="ConnectionId"><see cref="NntpProviderSession.ConnectionId"/> of the retired physical connection.</param>
+        /// <param name="Cause">Structured cause from <see cref="NntpSessionRetirementCause"/>.</param>
+        /// <param name="Reason">Caller-supplied human-readable retirement text. This method does not throw.</param>
         [LoggerMessage(
             EventId = 5401,
             Level = LogLevel.Warning,
-            Message = "NNTP session retired backbone={Backbone} reason={Reason}")]
-        internal static partial void SessionRetired(ILogger logger, string Backbone, string Reason);
+            Message = "NNTP session retired backbone={Backbone} connectionId={ConnectionId} cause={Cause} reason={Reason}")]
+        internal static partial void SessionRetired(
+            ILogger logger,
+            string Backbone,
+            Guid ConnectionId,
+            string Cause,
+            string Reason);
 
         /// <summary>
         /// Defined for a non-success download. The article retriever does not call it.

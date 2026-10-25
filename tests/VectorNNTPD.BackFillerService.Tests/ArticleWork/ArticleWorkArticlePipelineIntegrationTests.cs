@@ -143,10 +143,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Provider connect failure is retryable: nack with requeue, no terminal response publication, no retention.
+        /// Provider connect failure is terminal for this delivery: ACK, correlated ProviderFailure reply, no retention.
         /// </summary>
         [Fact]
-        public async Task Provider_network_failure_nacks_with_requeue()
+        public async Task Provider_network_failure_acks_with_failure_reply()
         {
             await using var harness = await BackFillerPipelineHarness.StartAsync();
             harness.Nntp.ConnectException = new IOException("down");
@@ -157,9 +157,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
             Assert.Equal(0, harness.Retention.RetainedCount);
             var settlement = Assert.Single(channel.Settlements);
-            Assert.False(settlement.Acknowledge);
-            Assert.True(settlement.Requeue);
-            Assert.Empty(harness.PublishChannel.Publications);
+            Assert.True(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
+            Assert.Single(harness.PublishChannel.Publications);
         }
 
         /// <summary>

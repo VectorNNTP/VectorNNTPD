@@ -132,23 +132,29 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
                 catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
-                    RememberCommandTimestamp(ex, lease.Session.ArticleCommandStartedTimestamp);
+                    RememberLeaseCorrelation(ex, lease.Session);
                     throw;
                 }
             }
         }
 
         /// <summary>
-        /// Copies a non-zero ARTICLE send timestamp onto <paramref name="exception"/> when download did not return a result.
+        /// Copies ARTICLE send timestamp and <see cref="NntpProviderSession.ConnectionId"/> onto <paramref name="exception"/>
+        /// when download did not return a result.
         /// </summary>
         /// <param name="exception">Exception propagating from <see cref="NntpProviderSession.DownloadArticleAsync"/>.</param>
-        /// <param name="commandStartedTimestamp">Session timestamp. Zero means ARTICLE was not sent.</param>
-        private static void RememberCommandTimestamp(Exception exception, long commandStartedTimestamp)
+        /// <param name="session">Leased session that owned the failed download.</param>
+        private static void RememberLeaseCorrelation(Exception exception, NntpProviderSession session)
         {
-            if (commandStartedTimestamp != 0
+            if (session.ArticleCommandStartedTimestamp != 0
                 && exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] is not long)
             {
-                exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] = commandStartedTimestamp;
+                exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] = session.ArticleCommandStartedTimestamp;
+            }
+
+            if (exception.Data[ArticleRetrievalResult.ConnectionIdKey] is not Guid)
+            {
+                exception.Data[ArticleRetrievalResult.ConnectionIdKey] = session.ConnectionId;
             }
         }
     }

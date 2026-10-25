@@ -888,7 +888,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 () => pool.AcquireAsync(CancellationToken.None));
 
             Assert.Equal(ArticleRetrievalKind.ProviderFailure, failure.Kind);
-            Assert.Equal(nameof(SocketException), failure.Message);
+            Assert.StartsWith(nameof(SocketException) + ":", failure.Message, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(failure.Message[(nameof(SocketException) + ": ").Length..]));
             AssertNoReservedCapacity(pool);
 
             factory.ConnectException = null;
@@ -1159,7 +1160,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             var failure = await Assert.ThrowsAsync<NntpProviderConnectException>(
                 () => pool.AcquireAsync(CancellationToken.None));
             Assert.Equal(ArticleRetrievalKind.ProviderFailure, failure.Kind);
-            Assert.Equal(nameof(SocketException), failure.Message);
+            Assert.StartsWith(nameof(SocketException) + ":", failure.Message, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(failure.Message[(nameof(SocketException) + ": ").Length..]));
             AssertNoReservedCapacity(pool);
 
             factory.ConnectException = null;
@@ -1452,6 +1454,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 exception.Message);
         }
 
+        /// <summary>Builds a test session pool with standard timeouts and optional establishment gate.</summary>
+        /// <param name="factory">Transport factory supplying scripted servers.</param>
+        /// <param name="max">Maximum concurrent sessions for the provider definition.</param>
+        /// <param name="min">Minimum warm sessions (provider definition).</param>
+        /// <param name="keepAliveSeconds">KEEPALIVE interval passed to the provider definition.</param>
+        /// <param name="time">Optional time provider for pool timers.</param>
+        /// <param name="commandTimeout">Optional command timeout override.</param>
+        /// <param name="establishment">Optional establishment gate wired into new sessions.</param>
+        /// <param name="backbone">Provider backbone name on the definition.</param>
+        /// <param name="logger">Optional pool logger.</param>
+        /// <param name="shutdownGrace">Optional shutdown grace period.</param>
         internal static NntpSessionPool CreatePool(
             ScriptedNntpTransportFactory factory,
             int max,
@@ -2227,19 +2240,18 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
-        /// A keepalive retirement that has left the idle list, but not yet finished dispose, cannot be leased or returned to the queue.
-        /// The pause yields, so the caller that released DATE can observe that window and then let dispose finish.
-        /// The replacement lease stays usable after the retired session is disposed, and its return does not requeue the retired one.
+        /// Capacity stays reserved until transport dispose finishes, so maintenance and acquire cannot open another TCP
+        /// while the retiring session is still disposing. After dispose completes, replacement proceeds once.
         /// </summary>
         [Fact]
-        public async Task Retirement_overlapping_acquire_does_not_lease_or_requeue_the_retired_session()
+        public async Task Retirement_holds_capacity_until_dispose_completes()
         {
             var clock = new KeepAliveDelaySource();
             var factory = new ScriptedNntpTransportFactory();
             var retiredServer = ReadyServer();
-            var survivorServer = ReadyServer();
+            var replacementServer = ReadyServer();
             factory.Enqueue(retiredServer);
-            factory.Enqueue(survivorServer);
+            factory.Enqueue(replacementServer);
             await using var pool = CreatePool(factory, max: 1, keepAliveSeconds: 30, time: clock);
             var retirementEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseRetirement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2253,6 +2265,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             {
                 await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
                 Assert.Equal(1, pool.IdleSessionCount);
+                Assert.Single(factory.ConnectAttempts);
 
                 var releaseKeepAlive = await clock.WaitForKeepAliveAsync();
                 releaseKeepAlive();
@@ -2260,45 +2273,187 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 Assert.Equal(0, pool.IdleSessionCount);
                 Assert.Equal(0, pool.LiveSessionCount);
                 Assert.Equal(0, pool.ActiveLeaseCount);
-                Assert.Equal(0, CreatedSessionCount(pool));
-                Assert.Equal(0, ReservedConnectionCount(pool));
-                Assert.Equal(0, retiredServer.ClientStreamDisposeCount);
-
-                var lease = await pool.AcquireAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
-                var survivor = lease.Session;
-                Assert.Equal(NntpSessionState.Ready, survivor.State);
-                Assert.Equal(0, pool.IdleSessionCount);
-                Assert.Equal(1, pool.LiveSessionCount);
-                Assert.Equal(1, pool.ActiveLeaseCount);
                 Assert.Equal(1, CreatedSessionCount(pool));
                 Assert.Equal(1, ReservedConnectionCount(pool));
-                Assert.Equal(2, factory.ConnectAttempts.Count);
+                Assert.Equal(0, retiredServer.ClientStreamDisposeCount);
 
-                await lease.DisposeAsync();
-                Assert.Equal(1, pool.IdleSessionCount);
-                Assert.Equal(1, pool.LiveSessionCount);
-                Assert.Equal(0, pool.ActiveLeaseCount);
-                Assert.Equal(NntpSessionState.Ready, survivor.State);
-                Assert.Equal(2, factory.ConnectAttempts.Count);
+                // Maintenance must not open another provider TCP while the retiring transport is still disposing.
+                // Concurrent acquire-while-disposing is covered by Concurrent_retirement_does_not_allow_connects_above_max_sessions
+                // (lease retire holds the permit until dispose finishes; this DATE path holds capacity the same way).
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+                Assert.Single(factory.ConnectAttempts);
+                Assert.Equal(1, CreatedSessionCount(pool));
+                Assert.Equal(1, ReservedConnectionCount(pool));
 
                 releaseRetirement.TrySetResult();
                 await WaitUntilAsync(() => retiredServer.ClientStreamDisposeCount == 1);
-                Assert.Equal(NntpSessionState.Ready, survivor.State);
-                Assert.Equal(0, survivorServer.ClientStreamDisposeCount);
-                Assert.Equal(1, pool.IdleSessionCount);
+                await WaitUntilAsync(() => CreatedSessionCount(pool) == 0 || pool.LiveSessionCount == 1);
+
+                await using var lease = await pool.AcquireAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+                Assert.Equal(NntpSessionState.Ready, lease.Session.State);
                 Assert.Equal(1, pool.LiveSessionCount);
                 Assert.Equal(1, CreatedSessionCount(pool));
                 Assert.Equal(1, ReservedConnectionCount(pool));
-
-                var reused = await pool.AcquireAsync(CancellationToken.None);
-                Assert.Same(survivor, reused.Session);
-                Assert.Equal(NntpSessionState.Ready, reused.Session.State);
-                Assert.Equal(2, factory.ConnectAttempts.Count);
-                await reused.DisposeAsync();
+                Assert.Equal(0, replacementServer.ClientStreamDisposeCount);
             }
             finally
             {
                 releaseRetirement.TrySetResult();
+                pool.BeforeDetachedSessionDispose = null;
+            }
+        }
+
+        /// <summary>
+        /// Concurrent retirements at MaxSessions keep every disposing reservation until dispose finishes,
+        /// so maintenance cannot initiate connects above the configured limit.
+        /// </summary>
+        [Fact]
+        public async Task Concurrent_retirement_does_not_allow_connects_above_max_sessions()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            EnqueueReadyServers(factory, count: 4);
+            await using var pool = CreatePool(factory, max: 2);
+            var disposeEntered = 0;
+            var bothEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseDispose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            pool.BeforeDetachedSessionDispose = () =>
+            {
+                if (Interlocked.Increment(ref disposeEntered) == 2)
+                {
+                    bothEntered.TrySetResult();
+                }
+
+                return releaseDispose.Task;
+            };
+
+            try
+            {
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+                var first = await pool.AcquireAsync(CancellationToken.None);
+                var second = await pool.AcquireAsync(CancellationToken.None);
+                first.Retire();
+                second.Retire();
+                var returningFirst = first.DisposeAsync().AsTask();
+                var returningSecond = second.DisposeAsync().AsTask();
+                await bothEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+                Assert.Equal(0, pool.LiveSessionCount);
+                Assert.Equal(2, CreatedSessionCount(pool));
+                Assert.Equal(2, ReservedConnectionCount(pool));
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+                var waiting = pool.AcquireAsync(CancellationToken.None);
+                Assert.False(waiting.IsCompleted);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+                Assert.Equal(2, CreatedSessionCount(pool));
+
+                releaseDispose.TrySetResult();
+                await Task.WhenAll(returningFirst, returningSecond).WaitAsync(TimeSpan.FromSeconds(5));
+                await using var replacement = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(factory.ConnectAttempts.Count >= 3);
+                Assert.True(factory.ConnectAttempts.Count <= 4);
+                Assert.True(pool.LiveSessionCount <= 2);
+                Assert.True(CreatedSessionCount(pool) <= 2);
+                Assert.True(ReservedConnectionCount(pool) <= 2);
+            }
+            finally
+            {
+                releaseDispose.TrySetResult();
+                pool.BeforeDetachedSessionDispose = null;
+            }
+        }
+
+        /// <summary>
+        /// An unexpected transport dispose fault still releases created-count and connection-number capacity exactly once
+        /// so the pool can recover without permanently losing the slot or leaving the session selectable.
+        /// </summary>
+        [Fact]
+        public async Task Unexpected_dispose_fault_releases_capacity_and_allows_recovery()
+        {
+            var factory = new ScriptedNntpTransportFactory();
+            var faulting = ReadyServer();
+            faulting.FaultClientDisposeUnexpected = true;
+            factory.Enqueue(faulting);
+            await using var pool = CreatePool(factory, max: 1);
+            await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+
+            var lease = await pool.AcquireAsync(CancellationToken.None);
+            lease.Retire();
+            var fault = await Assert.ThrowsAsync<InvalidOperationException>(() => lease.DisposeAsync().AsTask());
+            Assert.Equal("teardown fault", fault.Message);
+            Assert.Equal(0, pool.LiveSessionCount);
+            Assert.Equal(0, pool.IdleSessionCount);
+            Assert.Equal(0, pool.ActiveLeaseCount);
+            Assert.Equal(0, CreatedSessionCount(pool));
+            Assert.Equal(0, ReservedConnectionCount(pool));
+            Assert.Equal(1, faulting.ClientStreamDisposeCount);
+
+            EnqueueReadyServers(factory, count: 1);
+            await using var recovered = await pool.AcquireAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(NntpSessionState.Ready, recovered.Session.State);
+            Assert.Equal(1, recovered.Session.ConnectionNumber);
+            Assert.Equal(1, pool.LiveSessionCount);
+            Assert.Equal(1, CreatedSessionCount(pool));
+            Assert.Equal(1, ReservedConnectionCount(pool));
+            // Initial connect plus recovery; an unawaited replenish may also attempt once before the server was enqueued.
+            Assert.True(factory.ConnectAttempts.Count >= 2);
+        }
+
+        /// <summary>
+        /// A failed connect that reaches live registration keeps its reservation until dispose finishes,
+        /// then releases it exactly once so a later attempt can reuse slot 1 without exceeding MaxSessions.
+        /// </summary>
+        [Fact]
+        public async Task Failed_establishment_holds_capacity_until_dispose_then_releases_once()
+        {
+            var factory = new ScriptedNntpTransportFactory
+            {
+                ConnectException = new IOException("establishment refused"),
+            };
+            var disposeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseDispose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var pool = CreatePool(factory, max: 1);
+            pool.BeforeDetachedSessionDispose = () =>
+            {
+                disposeEntered.TrySetResult();
+                return releaseDispose.Task;
+            };
+
+            try
+            {
+                var failed = pool.AcquireAsync(CancellationToken.None);
+                await disposeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Single(factory.ConnectAttempts);
+                Assert.Equal(1, CreatedSessionCount(pool));
+                Assert.Equal(1, ReservedConnectionCount(pool));
+                Assert.Equal(0, pool.LiveSessionCount);
+                Assert.False(failed.IsCompleted);
+
+                await pool.EnsureDesiredSessionsAsync(CancellationToken.None);
+                Assert.Single(factory.ConnectAttempts);
+                Assert.Equal(1, CreatedSessionCount(pool));
+
+                releaseDispose.TrySetResult();
+                var connectFault = await Assert.ThrowsAsync<NntpProviderConnectException>(
+                    () => failed.WaitAsync(TimeSpan.FromSeconds(5)));
+                Assert.Equal(ArticleRetrievalKind.ProviderFailure, connectFault.Kind);
+                AssertNoReservedCapacity(pool);
+
+                factory.ConnectException = null;
+                EnqueueReadyServers(factory, count: 1);
+                await using var recovered = await pool.AcquireAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(1, recovered.Session.ConnectionNumber);
+                Assert.Equal(NntpSessionState.Ready, recovered.Session.State);
+                Assert.Equal(2, factory.ConnectAttempts.Count);
+                Assert.Equal(1, CreatedSessionCount(pool));
+                Assert.Equal(1, ReservedConnectionCount(pool));
+            }
+            finally
+            {
+                releaseDispose.TrySetResult();
                 pool.BeforeDetachedSessionDispose = null;
             }
         }
@@ -2794,7 +2949,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await pool.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
                 using var result = await download.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
-                Assert.Equal(nameof(IOException), result.Reason);
+                Assert.StartsWith("IOException:", result.Reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(result.Reason["IOException: ".Length..]));
                 Assert.Equal(1, gate.MaxWriteDepth);
                 Assert.Equal(NntpSessionState.Closed, lease.Session.State);
                 Assert.Equal(1, server.ClientStreamDisposeCount);

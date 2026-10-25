@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
 using VectorNNTPD.BackFillerService.Tests.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.TestDoubles;
@@ -78,7 +80,8 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Publish/confirm failure modes for success NACK-requeue once and do not ACK (no local retry loop).
+        /// Transient/ambiguous publish failures NACK-requeue once and do not ACK (no local retry loop).
+        /// Confirmed unroutable is covered separately as terminal without requeue.
         /// </summary>
         [Fact]
         public async Task Success_publication_failures_nack_requeue_and_do_not_ack()
@@ -88,7 +91,6 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 FakePublishConfirmBehavior.ThrowOnPublish,
                 FakePublishConfirmBehavior.Nack,
                 FakePublishConfirmBehavior.CloseChannel,
-                FakePublishConfirmBehavior.Unroutable,
             ];
 
             foreach (var behavior in behaviors)
@@ -370,29 +372,21 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Retryable handler outcomes nack with requeue and emit no response JSON.
+        /// Cancelled (including cancel override) nacks with requeue and emits no response JSON.
         /// </summary>
-        /// <param name="handlerOutcomeName">Retryable outcome name.</param>
-        [Theory]
-        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure))]
-        [InlineData(nameof(ArticleWorkOutcome.Cancelled))]
-        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure))]
-        public async Task Retryable_outcomes_do_not_publish(string handlerOutcomeName)
+        [Fact]
+        public async Task Cancelled_outcomes_do_not_publish()
         {
-            var handlerOutcome = Enum.Parse<ArticleWorkOutcome>(handlerOutcomeName);
             await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Confirm);
             var handler = new ControllableArticleWorkHandler
             {
-                Outcome = handlerOutcome,
+                Outcome = ArticleWorkOutcome.Cancelled,
                 Error = "retry",
             };
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(handler, context.Publisher, 1024);
             using var cts = new CancellationTokenSource();
-            if (handlerOutcome == ArticleWorkOutcome.Cancelled)
-            {
-                cts.Cancel();
-            }
+            cts.Cancel();
 
             var outcome = await pipeline.ProcessAsync(
                 ArticleWorkTestDeliveries.Canonical(),
@@ -401,7 +395,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 cts.Token);
 
-            Assert.Equal(handlerOutcome, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             Assert.Empty(context.PublishChannel.Publications);
             Assert.True(Assert.Single(channel.Settlements).Requeue);
             Assert.False(Assert.Single(channel.Settlements).Acknowledge);
@@ -588,10 +582,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// An unroutable confirm NACK-requeues once. The pipeline does not replay the handler on that same call.
+        /// Confirmed mandatory unroutable Success is terminal: NACK without requeue, one handler invocation.
         /// </summary>
         [Fact]
-        public async Task Unroutable_success_response_nacks_once_without_a_local_execution_loop()
+        public async Task Unroutable_success_response_nacks_without_requeue_and_without_a_local_execution_loop()
         {
             await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Unroutable);
             var handler = SuccessHandler();
@@ -609,11 +603,11 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal(1, handler.HandleCount);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
-            Assert.True(settlement.Requeue);
+            Assert.False(settlement.Requeue);
         }
 
         /// <summary>
-        /// Unroutable success publication logs request id, outcome, and unroutable hint, then NACK-requeues.
+        /// Unroutable success publication logs request id, correlation, ReplyTo, and outcome, then terminal NACK.
         /// </summary>
         [Fact]
         public async Task Unroutable_success_publication_is_logged_with_request_id_and_outcome()
@@ -633,14 +627,136 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CancellationToken.None);
 
             Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
-            Assert.False(Assert.Single(channel.Settlements).Acknowledge);
-            Assert.True(Assert.Single(channel.Settlements).Requeue);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
             Assert.Contains(
                 logger.Messages,
                 static message =>
                     message.Contains(ArticleWorkTestDeliveries.CanonicalRequestId, StringComparison.Ordinal)
+                    && message.Contains(ArticleWorkTestDeliveries.CanonicalMessageId, StringComparison.Ordinal)
+                    && message.Contains("Giganews", StringComparison.Ordinal)
                     && message.Contains("Success", StringComparison.Ordinal)
-                    && message.Contains("unroutable", StringComparison.OrdinalIgnoreCase));
+                    && message.Contains("unroutable", StringComparison.OrdinalIgnoreCase)
+                    && message.Contains("not be requeued", StringComparison.OrdinalIgnoreCase)
+                    && message.Contains("dead-letter", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Terminal unroutable settlement discards without requeue and does not claim a dead-letter destination.
+        /// </summary>
+        [Fact]
+        public async Task Unroutable_terminal_settlement_is_discard_without_requeue_not_dead_letter_claim()
+        {
+            await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Unroutable);
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var pipeline = new ArticleWorkDeliveryPipeline(SuccessHandler(), context.Publisher, 1024);
+
+            _ = await pipeline.ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
+            // Architecture: no DLX on Article Work queues; this is broker discard, not dead-letter.
+            Assert.False(
+                BackFillerArticleWorkTopology.BuildQueueArguments(
+                        new BackFillerRabbitMqRuntimeOptions(
+                            WorkRequestMaxPayloadBytes: 1024,
+                            PublishConfirmTimeoutSeconds: 10,
+                            ConsumerPrefetchCount: 1,
+                            QueueTopology: new ArticleWorkQueueTopology(
+                                ArticleWorkQueueKind.Classic,
+                                ConfiguredHostCount: 1,
+                                QuorumInitialGroupSize: null),
+                            DeliveryLimit: 10))
+                    .ContainsKey("x-dead-letter-exchange"));
+        }
+
+        /// <summary>
+        /// Ambiguous/non-unroutable publish exceptions remain retryable (NACK requeue).
+        /// </summary>
+        [Fact]
+        public async Task Ambiguous_publish_exception_is_not_classified_as_unroutable()
+        {
+            var publisher = new RecordingArticleWorkResponsePublisher
+            {
+                CompletesSuccessPublication = true,
+                PublishException = new InvalidOperationException("some other publish failure"),
+            };
+            var handler = SuccessHandler();
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
+
+            var outcome = await pipeline.ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.True(settlement.Requeue);
+        }
+
+        /// <summary>
+        /// Typed <see cref="RabbitMqPublicationUnroutableException"/> is terminal even when thrown by a test double.
+        /// </summary>
+        [Fact]
+        public async Task Typed_unroutable_exception_from_publisher_nacks_without_requeue()
+        {
+            var publisher = new RecordingArticleWorkResponsePublisher
+            {
+                CompletesSuccessPublication = true,
+                PublishException = new RabbitMqPublicationUnroutableException(),
+            };
+            var handler = SuccessHandler();
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
+
+            var outcome = await pipeline.ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+            Assert.Equal(1, handler.HandleCount);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
+        }
+
+        /// <summary>
+        /// Publisher-confirm NACK (non-return) remains retryable and must not be treated as unroutable.
+        /// </summary>
+        [Fact]
+        public async Task Publisher_confirm_nack_remains_retryable()
+        {
+            await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Nack);
+            var handler = SuccessHandler();
+            var channel = new FakeBackFillerRabbitMqChannel(1);
+            var pipeline = new ArticleWorkDeliveryPipeline(handler, context.Publisher, 1024);
+
+            var outcome = await pipeline.ProcessAsync(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                channel,
+                static () => true,
+                CancellationToken.None);
+
+            Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
+            Assert.Equal(1, handler.HandleCount);
+            var settlement = Assert.Single(channel.Settlements);
+            Assert.False(settlement.Acknowledge);
+            Assert.True(settlement.Requeue);
         }
 
         /// <summary>
