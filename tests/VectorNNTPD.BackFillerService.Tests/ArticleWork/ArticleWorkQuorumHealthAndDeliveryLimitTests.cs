@@ -136,7 +136,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 3);
@@ -148,7 +148,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.True(settlement.Requeue);
@@ -162,7 +162,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 5);
@@ -174,7 +174,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.True(settlement.Requeue);
@@ -395,7 +395,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 10);
@@ -407,7 +407,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.True(settlement.Requeue);
@@ -421,7 +421,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 5);
@@ -433,7 +433,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.False(settlement.Requeue);
@@ -534,7 +534,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 5,
@@ -553,7 +553,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.False(settlement.Requeue);
@@ -567,7 +567,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var pipeline = new ArticleWorkDeliveryPipeline(
-                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.ProviderFailure },
+                new ControllableArticleWorkHandler { Outcome = ArticleWorkOutcome.Cancelled },
                 new RecordingArticleWorkResponsePublisher(),
                 maxPayloadBytes: 1024,
                 deliveryLimit: 5,
@@ -586,7 +586,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 static () => true,
                 CancellationToken.None);
 
-            Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
+            Assert.Equal(ArticleWorkOutcome.Cancelled, outcome);
             var settlement = Assert.Single(channel.Settlements);
             Assert.False(settlement.Acknowledge);
             Assert.True(settlement.Requeue);

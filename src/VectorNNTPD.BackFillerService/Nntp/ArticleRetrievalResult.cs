@@ -27,6 +27,21 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Zero when the command was not sent.
         /// </summary>
         internal long CommandStartedTimestamp { get; set; }
+
+        /// <summary>
+        /// Stable identity of the physical NNTP connection that performed this retrieval.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Guid.Empty"/> when no session was leased (cancelled before acquire, missing pool, or connect failure
+        /// before a session existed). Otherwise equals <see cref="NntpProviderSession.ConnectionId"/> for that lease.
+        /// </remarks>
+        internal Guid ConnectionId { get; set; }
+
+        /// <summary>
+        /// Exception.Data key for <see cref="ConnectionId"/> when download throws after a session was leased.
+        /// </summary>
+        internal const string ConnectionIdKey = "VectorNNTPD.BackFillerService.NntpConnectionId";
+
         /// <summary>Disposes the owned <see cref="Article"/> when one is present.</summary>
         public void Dispose()
         {

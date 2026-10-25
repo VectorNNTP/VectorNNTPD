@@ -1,4 +1,5 @@
 
+using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.Core;
 
@@ -37,6 +38,16 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Whether missing broker delivery-count on redelivery is treated as exhausted.
         /// </summary>
         internal bool TreatMissingRedeliveryCountAsExhausted => _treatMissingRedeliveryCountAsExhausted;
+
+        /// <summary>
+        /// Error text prepared for the most recent UnexpectedFailure caused by an escaped handler exception.
+        /// </summary>
+        /// <remarks>
+        /// Cleared at the start of each <see cref="ProcessAsync"/> call. When disposition publishes a terminal
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> reply, this is the <c>error</c> value passed to
+        /// publication. Formatted by <see cref="NntpExceptionDiagnostics.FormatReason"/>.
+        /// </remarks>
+        internal string? LastEscapedHandlerFailureError { get; private set; }
 
         /// <summary>
         /// Initializes a new pipeline.
@@ -92,8 +103,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <returns>
         /// The <see cref="ArticleWorkOutcome"/> classification for the delivery. Diagnostic parse failures are returned
         /// through the optional <c>preParsed</c> value and are not reparsed by diagnostic code. Returns
-        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when a required publication is cancelled or fails; those paths
-        /// NACK requeue and do not ACK. A handler result of <see cref="ArticleWorkOutcome.InvalidRequest"/> is treated as
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when a required publication is cancelled or fails with a
+        /// transient or ambiguous error; those paths NACK-requeue (while the delivery limit allows) and do not ACK.
+        /// A confirmed mandatory unroutable reply (<see cref="RabbitMqPublicationUnroutableException"/>) settles
+        /// NACK without requeue so a permanently missing ReplyTo cannot re-fetch indefinitely. Successful article
+        /// retrieval is not the same as successful RPC delivery in that case.
+        /// A handler result of <see cref="ArticleWorkOutcome.InvalidRequest"/> is treated as
         /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>. When <see cref="IArticleWorkResponsePublisher.CompletesSuccessPublication"/>
         /// is <see langword="false"/>, Success is NACK-requeued without publication, and this method still returns
         /// <see cref="ArticleWorkOutcome.Success"/>.
@@ -109,7 +124,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// is cancelled or fails NACK-requeues and returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/>, including when the planned
         /// disposition was ACK. The lease still attempts settlement once; a failed NACK is not retried on that lease. Any
         /// <see cref="ArticleWorkHandlerResult.Article"/> is disposed before settlement. Other handler exceptions become
-        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> and the error text is the exception type name.
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/>; the prepared error text is
+        /// <see cref="NntpExceptionDiagnostics.FormatReason"/> (type and message when present). Handler
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> (and ProviderFailure / RetentionRejected) settle ACK with
+        /// a correlated terminal RPC reply under the current disposition map; that is distinct from a failed reply
+        /// publish, which still NACK-requeues via <see cref="CreateRetryDisposition"/>.
         /// SECURITY: The diagnostic reason is captured from the parse failure and returned directly. This ensures the configured payload
         /// limit is never bypassed by diagnostic code that might reparse the body with an unbounded limit.
         /// </remarks>
@@ -123,6 +142,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(consumingBackbone);
             ArgumentNullException.ThrowIfNull(channel);
+            LastEscapedHandlerFailureError = null;
             ArgumentNullException.ThrowIfNull(channelStillCurrent);
 
             var parsed = preParsed ?? ArticleWorkRequestParser.Parse(delivery, consumingBackbone, _maxPayloadBytes);
@@ -213,7 +233,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 outcome = ArticleWorkOutcome.UnexpectedFailure;
-                error = ex.GetType().Name;
+                error = NntpExceptionDiagnostics.FormatReason(ex);
+                LastEscapedHandlerFailureError = error;
             }
 
             var disposition = ArticleWorkDispositionPlanner.Create(
@@ -297,20 +318,28 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 .ConfigureAwait(false);
         }
 
-        /// <summary>Builds the retry-or-discard disposition for the current delivery count.</summary>
-        private ArticleWorkDisposition CreateRetryDisposition(int? deliveryCount, bool redelivered) =>
-            ArticleWorkDispositionPlanner.Create(
-                ArticleWorkOutcome.UnexpectedFailure,
-                replyable: false,
-                cancellationRequested: false,
+        /// <summary>
+        /// Builds NACK requeue/discard for publish-path retries (not handler <see cref="ArticleWorkOutcome.UnexpectedFailure"/>).
+        /// </summary>
+        /// <remarks>
+        /// Must not use the planner's terminal UnexpectedFailure arm (ACK + reply). A failed or incomplete
+        /// reply publish must leave the delivery eligible for requeue while retries remain.
+        /// </remarks>
+        private ArticleWorkDisposition CreateRetryDisposition(int? deliveryCount, bool redelivered)
+        {
+            var effectiveCount = ArticleWorkDispositionPlanner.ResolveEffectiveDeliveryCount(
                 deliveryCount,
                 redelivered,
                 _deliveryLimit,
                 _treatMissingRedeliveryCountAsExhausted);
+            return new ArticleWorkDisposition(
+                Acknowledge: false,
+                Requeue: effectiveCount < _deliveryLimit,
+                PublishResponse: false);
+        }
 
         /// <summary>
-        /// Settles after a publication attempt. A required publication that is cancelled or fails NACK-requeues
-        /// while retries remain.
+        /// Settles after a publication attempt.
         /// </summary>
         /// <param name="published">Result of the publication attempt. <see cref="ArticleWorkPublishAttempt.Confirmed"/> includes attempts that were not required.</param>
         /// <param name="disposition">Plan produced before publication. Submitted only when <paramref name="published"/> is confirmed.</param>
@@ -322,11 +351,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="redelivered">AMQP redelivered flag for missing-count handling.</param>
         /// <returns>
         /// <paramref name="outcome"/> when the original disposition is submitted.
-        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication was cancelled or failed.
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication was cancelled, failed transiently, or was permanently unroutable.
         /// </returns>
         /// <remarks>
         /// Broker RPCs use <see cref="CancellationToken.None"/>. A lost publisher confirm is reported as failure, so the
         /// requeue can publish another reply with the same correlation id. That is not exactly-once delivery.
+        /// A confirmed mandatory unroutable return is terminal (NACK without requeue): the ReplyTo queue is gone and
+        /// refetching cannot repair RPC delivery. Article retrieval may already have succeeded; that is not RPC delivery.
         /// </remarks>
         private async Task<ArticleWorkOutcome> CompleteAfterPublishAttemptAsync(
             ArticleWorkPublishAttempt published,
@@ -338,6 +369,17 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             int? deliveryCount,
             bool redelivered)
         {
+            if (published == ArticleWorkPublishAttempt.Unroutable)
+            {
+                var terminal = new ArticleWorkDisposition(Acknowledge: false, Requeue: false, PublishResponse: false);
+                await lease.TrySettleAsync(
+                        terminal,
+                        channelStillCurrent() && lease.IsOriginalChannel(channel),
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                return ArticleWorkOutcome.UnexpectedFailure;
+            }
+
             if (published != ArticleWorkPublishAttempt.Confirmed)
             {
                 await SettleRetryableAsync(lease, channel, channelStillCurrent, deliveryCount, redelivered)
@@ -371,6 +413,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <returns>
         /// <see cref="ArticleWorkPublishAttempt.Confirmed"/> when publication is not required or <see cref="IArticleWorkResponsePublisher.PublishAsync"/> completes.
         /// <see cref="ArticleWorkPublishAttempt.Cancelled"/> when it throws <see cref="OperationCanceledException"/>.
+        /// <see cref="ArticleWorkPublishAttempt.Unroutable"/> when it throws <see cref="RabbitMqPublicationUnroutableException"/>.
         /// <see cref="ArticleWorkPublishAttempt.Failed"/> when it throws any other exception. Exceptions are not propagated.
         /// </returns>
         private async Task<ArticleWorkPublishAttempt> TryPublishIfRequiredAsync(
@@ -394,6 +437,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             try
             {
+                // Terminal failure replies require a non-empty error; Event 5321 may omit reason text.
+                var wireError = outcome == ArticleWorkOutcome.Success
+                    ? error
+                    : (string.IsNullOrWhiteSpace(error) ? outcome.ToString() : error);
                 await _publisher.PublishAsync(
                         new ArticleWorkResponseIntent(
                             outcome,
@@ -402,7 +449,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             backbone,
                             correlationId,
                             replyTo,
-                            error,
+                            wireError,
                             outcome == ArticleWorkOutcome.Success ? fqdn : null,
                             outcome == ArticleWorkOutcome.Success ? listenerPort : null,
                             outcome == ArticleWorkOutcome.Success ? articleIdHex : null),
@@ -413,6 +460,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             catch (OperationCanceledException)
             {
                 return ArticleWorkPublishAttempt.Cancelled;
+            }
+            catch (RabbitMqPublicationUnroutableException)
+            {
+                return ArticleWorkPublishAttempt.Unroutable;
             }
             // codeql[cs/catch-of-all-exceptions] A delivery failure must be settled or logged by this pipeline boundary.
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
@@ -430,7 +481,15 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             /// <summary>The publisher threw <see cref="OperationCanceledException"/>.</summary>
             Cancelled,
 
-            /// <summary>The publisher threw an exception other than <see cref="OperationCanceledException"/>.</summary>
+            /// <summary>
+            /// The publisher threw <see cref="RabbitMqPublicationUnroutableException"/> (mandatory basic.return).
+            /// </summary>
+            Unroutable,
+
+            /// <summary>
+            /// The publisher threw an exception other than cancellation or confirmed unroutable
+            /// (transient or ambiguous failure).
+            /// </summary>
             Failed,
         }
     }

@@ -33,19 +33,19 @@ Provider queue type is derived from the configured unique `RabbitMQ:Hosts` count
 | Outcome | Broker action | Publish terminal response |
 |---|---|---|
 | Success | Basic.Ack | Yes |
-| ArticleNotFound | Basic.Ack | Yes |
+| ArticleNotFound | Basic.Ack | Yes. Definitive provider `430` or ARTICLE `451`; callers must not republish the same logical lookup to another backbone because of this outcome. |
 | InvalidArticle | Basic.Ack | Yes. Includes an article `ArticleWorkDeliveryFraming` cannot send. That rejection happens before retention, so the article is not stored. |
 | InvalidRequest | Basic.Ack | Yes when both `CorrelationId` and `ReplyTo` are present. Otherwise ACK without publication |
-| ProviderFailure | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
-| Cancelled | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
-| UnexpectedFailure | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
-| RetentionRejected | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No |
+| ProviderFailure | Basic.Ack | Yes. Correlated failure reply (`outcome=ProviderFailure`). Must not NACK-requeue: classic queues lack enforceable delivery-count exhaustion and requeue without a reply caused unbounded redelivery plus client timeout republish. |
+| Cancelled | Basic.Nack, requeue true while delivery count &lt; limit; otherwise NACK without requeue | No. Cooperative cancel / shutdown may resume the delivery later. |
+| UnexpectedFailure | Basic.Ack | Yes. Correlated failure reply (`outcome=UnexpectedFailure`). |
+| RetentionRejected | Basic.Ack | Yes. Correlated failure reply (`outcome=RetentionRejected`). |
 
 If cancellation is already requested, the planner returns NACK (requeue while retries remain) and does not publish, including when the handler outcome was terminal.
 
 `ArticleWorkSettlementLease` is one settlement attempt for one delivery tag on the original consumer channel and connection generation. It sets the settled flag before the broker RPC. If that RPC throws, the flag stays set and the lease does not retry. If the channel is stale, closed, or not the original channel, `TrySettleAsync` returns false without ACK or NACK, and the broker may redeliver. Pipeline settlement calls use `CancellationToken.None`.
 
-When the success publisher reports that it does not complete success publication, the pipeline NACK-requeues and still returns `ArticleWorkOutcome.Success`. A required terminal response that is cancelled or that fails NACK-requeues and returns `ArticleWorkOutcome.UnexpectedFailure`, including when the planned disposition was ACK. The lease still settles at most once. A failed NACK is not retried on that lease, and a stale or replacement channel is not settled. A confirm lost after the broker has accepted the publish is indistinguishable from a failed publish, so the requeue can publish a second reply with the same correlation id. That is at-least-once for the reply when the confirm is ambiguous, not exactly-once.
+When the success publisher reports that it does not complete success publication, the pipeline NACK-requeues and still returns `ArticleWorkOutcome.Success`. A required terminal response that is cancelled or that fails for a **transient or ambiguous** reason NACK-requeues and returns `ArticleWorkOutcome.UnexpectedFailure`, including when the planned disposition was ACK. A **confirmed mandatory unroutable** reply (`RabbitMqPublicationUnroutableException` / broker basic.return on the ReplyTo queue) is terminal: NACK **without** requeue. Successful upstream article retrieval is not the same as successful RPC delivery; a permanently missing exclusive ReplyTo cannot be repaired by refetching. Because no dead-letter exchange is declared on Article Work queues, that terminal NACK **discards** the original work message at the broker. This is the same discard class as delivery-limit exhaustion. It is **not** a dead-letter. Operator visibility and recoverability for that path are the structured Warning `ReplyUnroutableTerminal` (request id, Message-ID, backbone, correlation id, ReplyTo, outcome) plus any article already retained from a successful upstream fetch. Introducing a durable failed-work queue or DLX is an explicit topology/ops decision and is not implied by the current settlement. The lease still settles at most once. A failed NACK is not retried on that lease, and a stale or replacement channel is not settled. A confirm lost after the broker has accepted the publish is indistinguishable from a failed publish, so the requeue can publish a second reply with the same correlation id. That is at-least-once for the reply when the confirm is ambiguous, not exactly-once.
 
 Publisher confirms (`BasicAcksAsync` / `BasicNacksAsync` on an async-confirm publish channel) are the broker's response to an outbound publish. They are not the consumer ACK of the inbound delivery.
 

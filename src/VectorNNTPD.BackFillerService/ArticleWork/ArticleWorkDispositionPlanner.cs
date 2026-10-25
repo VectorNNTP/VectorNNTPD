@@ -102,18 +102,21 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             return outcome switch
             {
                 ArticleWorkOutcome.Success => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
-                // Definitive absence / unusable article: processing completed successfully.
-                // ACK removes the message; NNTPD may publish a NEW request to another backbone.
+                // Definitive provider miss (430 or ARTICLE 451): ACK; do not requeue.
+                // Callers must treat NotFound as lookup-terminal (no cross-backbone republish).
                 ArticleWorkOutcome.ArticleNotFound => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
+                // Unusable article on this backbone: ACK + publish. Callers may try another backbone.
                 ArticleWorkOutcome.InvalidArticle => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
                 ArticleWorkOutcome.InvalidRequest => new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: replyable),
-                // Known retryable outcomes. The same settlement as an unrecognized value, and listed as a
-                // later change to the discard arm cannot retarget them.
+                // Provider/operation failures are terminal for this delivery: ACK + correlated failure reply.
+                // NACK-requeue without a reply caused unbounded classic-queue redelivery and client timeouts
+                // that published replacement work for an already-finished attempt.
                 ArticleWorkOutcome.ProviderFailure
-                    or ArticleWorkOutcome.Cancelled
                     or ArticleWorkOutcome.UnexpectedFailure
                     or ArticleWorkOutcome.RetentionRejected =>
-                    CreateRetryable(retriesExhausted),
+                    new ArticleWorkDisposition(Acknowledge: true, Requeue: false, PublishResponse: true),
+                // Cooperative cancel / shutdown: requeue while delivery-limit retries remain so work can resume.
+                ArticleWorkOutcome.Cancelled => CreateRetryable(retriesExhausted),
                 _ => CreateRetryable(retriesExhausted),
             };
         }

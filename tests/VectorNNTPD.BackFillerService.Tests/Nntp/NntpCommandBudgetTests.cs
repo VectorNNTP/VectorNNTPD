@@ -77,7 +77,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             }
         }
 
-        /// <summary>A stalled status read is reported as TimeoutException and retires the session.</summary>
+        /// <summary>A stalled status read is reported as TimeoutException with FormatReason text and retires the session.</summary>
         [Fact]
         public async Task Stalled_status_read_is_timeout_exception_and_not_reusable()
         {
@@ -95,7 +95,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 await statusCopied.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 using var result = await download.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
-                Assert.Equal(nameof(TimeoutException), result.Reason);
+                Assert.StartsWith(nameof(TimeoutException) + ":", result.Reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(result.Reason[(nameof(TimeoutException) + ": ").Length..]));
                 Assert.False(result.SessionReusable);
             }
             finally

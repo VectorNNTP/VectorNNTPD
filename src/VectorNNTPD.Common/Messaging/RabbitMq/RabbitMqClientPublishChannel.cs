@@ -107,10 +107,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
             catch (PublishException ex)
             {
+                // With publisherConfirmationTrackingEnabled, BasicPublishAsync completes only after
+                // confirm or return; IsReturn is the correlated mandatory-unroutable outcome.
+                if (ex.IsReturn)
+                {
+                    throw new RabbitMqPublicationUnroutableException(ex);
+                }
+
                 throw new InvalidOperationException(
-                    ex.IsReturn
-                        ? "RabbitMQ returned the publication as unroutable."
-                        : "RabbitMQ negatively acknowledged the publication.",
+                    "RabbitMQ negatively acknowledged the publication.",
                     ex);
             }
 

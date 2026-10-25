@@ -144,7 +144,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
         /// <summary>
         /// Test gate invoked after a retired session has left the live set and before that session is disposed.
-        /// Null in production. The delegate runs outside <see cref="_idleGate"/> and must not be required for accounting to stay committed.
+        /// Null in production. The delegate runs outside <see cref="_idleGate"/>.
+        /// Created-count and connection-number capacity are still held while this gate runs; they are released only after dispose completes.
         /// </summary>
         private Func<Task>? _beforeDetachedSessionDispose;
 
@@ -240,10 +241,24 @@ namespace VectorNNTPD.BackFillerService.Nntp
         private readonly SemaphoreSlim _fillGate = new(1, 1);
 
         /// <summary>
-        /// Sessions counted against the current max.
-        /// Incremented before a connection number is reserved and decremented exactly once when that attempt is abandoned or the live session is retired.
+        /// Sessions counted against the current max, including sessions whose transport is still disposing after leaving <see cref="_live"/>.
+        /// Incremented before a connection number is reserved.
+        /// Decremented exactly once when an unregistered reservation is abandoned, or when a registered session has finished
+        /// <see cref="DisposeDetachedSessionAsync"/> after winning retirement.
         /// </summary>
         private int _created;
+
+        /// <summary>
+        /// Serializes replacement of <see cref="_capacitySignal"/> so acquire waiters observe every capacity or idle-admission pulse.
+        /// Not held across await.
+        /// </summary>
+        private readonly Lock _capacityGate = new();
+
+        /// <summary>
+        /// Completes when created-count capacity is released after dispose or when a session is admitted to <see cref="_idle"/>.
+        /// Replaced under <see cref="_capacityGate"/> before the prior source is completed so a waiter cannot miss the next pulse.
+        /// </summary>
+        private TaskCompletionSource _capacitySignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>
         /// Leases whose issue slot <see cref="TryReserveIssueSlot"/> has reserved and <see cref="CompleteIssuedLeaseAsync"/> has not released.
@@ -562,7 +577,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <summary>
         /// Pauses retirement after the session has left <see cref="_live"/> and before <see cref="DisposeDetachedSessionAsync"/>.
         /// Null unless a test is holding that window. The delegate runs outside <see cref="_idleGate"/>.
-        /// Accounting for the retired session is already committed. Replacement fill runs after the pause and the dispose.
+        /// Created-count and connection-number capacity remain reserved until dispose finishes; replacement create cannot use that slot while this pause holds.
         /// </summary>
         internal Func<Task>? BeforeDetachedSessionDispose
         {
@@ -665,7 +680,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
             StartPeriodicReplenish();
-            var missing = Math.Max(0, _provider.MaxSessions - _live.Count);
+            // Use _created (includes still-disposing sessions), not _live, so fill does not open TCP above MaxSessions.
+            var missing = Math.Max(0, _provider.MaxSessions - Volatile.Read(ref _created));
             if (missing == 0)
             {
                 NotifyActiveSessionCountChanged();
@@ -687,7 +703,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <returns>A lease that owns one ready session. Disposing the lease returns or retires it.</returns>
         /// <exception cref="ObjectDisposedException">The pool is disposed before the permit is taken or before a session is issued.</exception>
         /// <exception cref="OperationCanceledException">The caller token or <see cref="_shutdown"/> cancels the wait.</exception>
-        /// <exception cref="InvalidOperationException">The created-session count is already at <see cref="BackFillerProviderDefinition.MaxSessions"/>.</exception>
+        /// <exception cref="InvalidOperationException">A created session was retired before it could be issued.</exception>
         /// <exception cref="NntpProviderConnectException">
         /// The new session did not become <see cref="NntpSessionState.Ready"/>. It is retired without replenish.
         /// </exception>
@@ -721,6 +737,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 {
                     ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
                     var retryWithoutPermit = false;
+                    var waitForCapacity = false;
                     while (TryTakeIdleSession(out var keepalive) is { } idle)
                     {
                         taken = idle;
@@ -744,7 +761,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             break;
                         }
 
-                        await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
+                        await RetireSessionAsync(
+                                idle,
+                                NntpSessionRetirementCause.SessionNotReusable,
+                                "idle session was not reusable")
+                            .ConfigureAwait(false);
                         taken = null;
                     }
 
@@ -774,42 +795,54 @@ namespace VectorNNTPD.BackFillerService.Nntp
                                 break;
                             }
 
-                            await RetireSessionAsync(idle, "idle session was not reusable").ConfigureAwait(false);
+                            await RetireSessionAsync(
+                                    idle,
+                                    NntpSessionRetirementCause.SessionNotReusable,
+                                    "idle session was not reusable")
+                                .ConfigureAwait(false);
                             taken = null;
                         }
 
                         if (!retryWithoutPermit)
                         {
+                            // Capacity includes sessions still disposing after leaving _live. Wait rather than
+                            // opening another TCP (or throwing) while that reservation is held.
                             if (Volatile.Read(ref _created) >= _provider.MaxSessions)
                             {
-                                throw new InvalidOperationException("NNTP session pool exceeded MaxSessions.");
-                            }
-
-                            var created = await CreateReadySessionAsync(linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
-                            taken = created;
-                            if (_beforeCreatedSessionIssue is { } beforeIssue)
-                            {
-                                await beforeIssue().ConfigureAwait(false);
-                            }
-
-                            var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
-                            if (issued.Lease is not null)
-                            {
-                                return issued.Lease;
-                            }
-
-                            if (issued.RejectedForCapacity)
-                            {
-                                permitHeld = false;
-                                taken = null;
-                                retryWithoutPermit = true;
+                                waitForCapacity = true;
                             }
                             else
                             {
-                                await RetireSessionAsync(created, "created session was not reusable").ConfigureAwait(false);
-                                taken = null;
-                                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
-                                throw new InvalidOperationException("NNTP session was retired before it could be issued.");
+                                var created = await CreateReadySessionAsync(linked.Token(cancellationToken, _shutdown.Token)).ConfigureAwait(false);
+                                taken = created;
+                                if (_beforeCreatedSessionIssue is { } beforeIssue)
+                                {
+                                    await beforeIssue().ConfigureAwait(false);
+                                }
+
+                                var issued = await TryIssueHeldSessionAsync(created).ConfigureAwait(false);
+                                if (issued.Lease is not null)
+                                {
+                                    return issued.Lease;
+                                }
+
+                                if (issued.RejectedForCapacity)
+                                {
+                                    permitHeld = false;
+                                    taken = null;
+                                    retryWithoutPermit = true;
+                                }
+                                else
+                                {
+                                    await RetireSessionAsync(
+                                            created,
+                                            NntpSessionRetirementCause.EstablishmentFailed,
+                                            "created session was not reusable")
+                                        .ConfigureAwait(false);
+                                    taken = null;
+                                    ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+                                    throw new InvalidOperationException("NNTP session was retired before it could be issued.");
+                                }
                             }
                         }
                     }
@@ -829,6 +862,13 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     {
                         continue;
                     }
+
+                    if (waitForCapacity)
+                    {
+                        await WaitForCapacityChangedAsync(linked.Token(cancellationToken, _shutdown.Token))
+                            .ConfigureAwait(false);
+                        continue;
+                    }
                 }
                 catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
@@ -840,7 +880,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             try
                             {
                                 // The DATE loop retires only a session that is still idle. This one was already removed.
-                                await RetireSessionAsync(taken, "idle session was not reusable").ConfigureAwait(false);
+                                await RetireSessionAsync(
+                                        taken,
+                                        NntpSessionRetirementCause.SessionNotReusable,
+                                        "idle session was not reusable")
+                                    .ConfigureAwait(false);
                             }
                             catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
                             {
@@ -912,7 +956,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 if (retire || Volatile.Read(ref _disposed) == 1 || _shutdown.IsCancellationRequested)
                 {
-                    await RetireSessionAsync(session, retire ? "lease requested retirement" : "pool is shutting down")
+                    await RetireSessionAsync(
+                            session,
+                            retire
+                                ? NntpSessionRetirementCause.LeaseRequested
+                                : NntpSessionRetirementCause.PoolShuttingDown,
+                            retire ? "lease requested retirement" : "pool is shutting down")
                         .ConfigureAwait(false);
                 }
                 else
@@ -925,13 +974,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
                         case IdleAdmission.OverBound:
                             await RetireSessionAsync(
                                     session,
+                                    NntpSessionRetirementCause.MaxSessionsShrink,
                                     "max sessions shrink",
                                     replenish: false,
                                     liveAlreadyDetached: true)
                                 .ConfigureAwait(false);
                             break;
                         default:
-                            await RetireSessionAsync(session, "session is no longer reusable").ConfigureAwait(false);
+                            await RetireSessionAsync(
+                                    session,
+                                    NntpSessionRetirementCause.SessionNotReusable,
+                                    "session is no longer reusable")
+                                .ConfigureAwait(false);
                             break;
                     }
                 }
@@ -998,7 +1052,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 while (_live.Count > bound && TryTakeIdleSession(out var keepalive) is { } idle)
                 {
                     CancelKeepAliveRegistration(keepalive);
-                    await RetireSessionAsync(idle, "max sessions shrink", replenish: false).ConfigureAwait(false);
+                    await RetireSessionAsync(
+                            idle,
+                            NntpSessionRetirementCause.MaxSessionsShrink,
+                            "max sessions shrink",
+                            replenish: false)
+                        .ConfigureAwait(false);
                 }
             }
             finally
@@ -1345,6 +1404,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 sessions,
                 session => RetireSessionAsync(
                     session,
+                    NntpSessionRetirementCause.PoolShuttingDown,
                     "pool dispose",
                     replenish: false,
                     deadline: deadline,
@@ -1686,13 +1746,18 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 case IdleAdmission.OverBound:
                     await RetireSessionAsync(
                             session,
+                            NntpSessionRetirementCause.MaxSessionsShrink,
                             "max sessions shrink",
                             replenish: false,
                             liveAlreadyDetached: true)
                         .ConfigureAwait(false);
                     break;
                 default:
-                    await RetireSessionAsync(session, "session is no longer reusable").ConfigureAwait(false);
+                    await RetireSessionAsync(
+                            session,
+                            NntpSessionRetirementCause.SessionNotReusable,
+                            "session is no longer reusable")
+                        .ConfigureAwait(false);
                     break;
             }
         }
@@ -1781,7 +1846,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 {
                     NntpLogMessages.SessionEstablishmentCompleted(_logger, _provider.Backbone, connectionNumber);
                     NotifyActiveSessionCountChanged();
-                    if (session.State == NntpSessionState.Ready && _live.ContainsKey(session))
+                    // State remains Ready on this thread; re-check live-set membership for concurrent retirement.
+                    if (_live.ContainsKey(session))
                     {
                         return session;
                     }
@@ -1837,7 +1903,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     throw new NntpProviderConnectException(
                         ArticleRetrievalKind.ProviderFailure,
                         null,
-                        ex.GetType().Name);
+                        NntpExceptionDiagnostics.FormatReason(ex));
                 }
 
                 throw;
@@ -1861,10 +1927,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// </param>
         /// <param name="reason">Retirement text used when <paramref name="registered"/> is <see langword="true"/>.</param>
         /// <remarks>
-        /// A registered session is removed through <see cref="RetireSessionAsync"/>, which decrements <see cref="_created"/>
-        /// and frees the connection number only when this call wins <c>TryRemove</c>.
+        /// A registered session is removed through <see cref="RetireSessionAsync"/>, which disposes the transport and then
+        /// decrements <see cref="_created"/> and frees the connection number only when this call wins <c>TryRemove</c>.
         /// A concurrent retire or dispose that already removed the session leaves the counters unchanged.
-        /// An unregistered reservation is released by <see cref="ReleaseUnregisteredReservation"/> before the session is disposed.
+        /// An unregistered reservation is released by <see cref="ReleaseUnregisteredReservation"/> before the session is disposed
+        /// (that path never opened a provider TCP).
         /// Expected disposal failures are logged and do not propagate. Replenishment is not requested.
         /// The periodic loop retries on its existing interval.
         /// </remarks>
@@ -1876,7 +1943,12 @@ namespace VectorNNTPD.BackFillerService.Nntp
         {
             if (registered)
             {
-                await RetireSessionAsync(session, reason, replenish: false).ConfigureAwait(false);
+                await RetireSessionAsync(
+                        session,
+                        NntpSessionRetirementCause.EstablishmentFailed,
+                        reason,
+                        replenish: false)
+                    .ConfigureAwait(false);
                 return;
             }
 
@@ -1894,7 +1966,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <returns>
         /// The connect-failure message when <paramref name="failure"/> is <see cref="NntpProviderConnectException"/>.
         /// <c>NNTP connect was cancelled</c> when <paramref name="cancellationToken"/> cancelled an <see cref="OperationCanceledException"/>.
-        /// Otherwise the exception type name, which matches <see cref="NntpProviderSession.ConnectAsync"/> failure reasons.
+        /// Otherwise the exception type name for unexpected escapes (session connect failures already use
+        /// <see cref="NntpExceptionDiagnostics.FormatReason"/> on the <see cref="NntpProviderConnectException"/> path).
         /// </returns>
         private static string CreationFailureReason(Exception failure, CancellationToken cancellationToken)
         {
@@ -2094,6 +2167,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
                     CancelKeepAliveRegistration(overBoundKeepalive);
                 }
+            }
+
+            if (admission == IdleAdmission.Admitted)
+            {
+                NotifyCapacityChanged();
             }
 
             return admission;
@@ -2352,6 +2430,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
 
             await RetireSessionAsync(
                     session,
+                    NntpSessionRetirementCause.DateKeepaliveFailed,
                     reason,
                     onlyIfIdle: true,
                     actingRegistration: registration)
@@ -2409,10 +2488,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
         }
 
         /// <summary>
-        /// Stops keepalive, frees the connection number, disposes <paramref name="session"/>, and optionally asks the pool to replace it.
+        /// Stops keepalive, disposes <paramref name="session"/>, frees the connection number after that dispose, and optionally asks the pool to replace it.
         /// </summary>
         /// <param name="session">Live session to drop. A session that is already absent is left alone.</param>
-        /// <param name="reason">Text passed to <see cref="NntpLogMessages.SessionRetired"/>.</param>
+        /// <param name="cause">Structured cause from <see cref="NntpSessionRetirementCause"/>.</param>
+        /// <param name="reason">Human-readable text passed to <see cref="NntpLogMessages.SessionRetired"/>.</param>
         /// <param name="replenish"><see langword="true"/> schedules <see cref="RequestReplenish"/> after a session was actually removed.</param>
         /// <param name="onlyIfIdle">
         /// <see langword="true"/> when the caller is the DATE loop. The session is disposed only if it is still in
@@ -2436,18 +2516,21 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// for an <see cref="IdleAdmission.OverBound"/> decision. Skips the membership lock and finishes disposal only.
         /// </param>
         /// <remarks>
-        /// <c>TryRemove</c> wins the decrement and connection-number release. A second retire, dispose, or creation rollback
-        /// observes the loss and does not change the counters again. Idle membership is removed under <see cref="_idleGate"/>
-        /// before those releases, and before the retirement log, the active-count notification, and disposal. A retired
+        /// <c>TryRemove</c> wins disposal and the later created-count / connection-number release. A second retire, dispose,
+        /// or creation rollback observes the loss and does not change the counters again. Idle membership is removed under
+        /// <see cref="_idleGate"/> before the retirement log, the active-count notification, and disposal. A retired
         /// session therefore does not stay reachable from <see cref="_idle"/> until a later <see cref="AcquireAsync"/>.
-        /// An issued session stays in <see cref="_live"/> when <paramref name="onlyIfIdle"/> is set, so <see cref="ReturnAsync"/>
-        /// is the one retire or re-enqueue. Observer failures are contained by <see cref="SignalSessionRetired"/>
-        /// so they cannot skip disposal, decrement twice, or recurse through another retire. Expected disposal failures
-        /// are logged. Any other disposal exception still requests replenishment when <paramref name="replenish"/> is
-        /// <see langword="true"/>, then propagates.
+        /// Created-count and connection-number capacity stay reserved until <see cref="DisposeDetachedSessionAsync"/> returns
+        /// (including when disposal throws), so a replacement cannot open another provider TCP while this transport is still
+        /// closing. An issued session stays in <see cref="_live"/> when <paramref name="onlyIfIdle"/> is set, so
+        /// <see cref="ReturnAsync"/> is the one retire or re-enqueue. Observer failures are contained by
+        /// <see cref="SignalSessionRetired"/> so they cannot skip disposal, decrement twice, or recurse through another retire.
+        /// Expected disposal failures are logged. Any other disposal exception still releases capacity exactly once and
+        /// requests replenishment when <paramref name="replenish"/> is <see langword="true"/>, then propagates.
         /// </remarks>
         private async Task RetireSessionAsync(
             NntpProviderSession session,
+            string cause,
             string reason,
             bool replenish = true,
             bool onlyIfIdle = false,
@@ -2516,9 +2599,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
 
             CancelKeepAliveRegistration(keepalive);
-            Interlocked.Decrement(ref _created);
-            ReleaseConnectionNumber(session.ConnectionNumber);
-            SignalSessionRetired(session, reason);
+            SignalSessionRetired(session, cause, reason);
             try
             {
                 if (_beforeDetachedSessionDispose is { } beforeDispose)
@@ -2535,6 +2616,9 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
                 finally
                 {
+                    Interlocked.Decrement(ref _created);
+                    ReleaseConnectionNumber(session.ConnectionNumber);
+                    NotifyCapacityChanged();
                     if (replenish)
                     {
                         RequestReplenish();
@@ -2547,22 +2631,29 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Logs retirement and notifies <see cref="ActiveSessionCountChanged"/> after the session has left <see cref="_live"/>.
         /// </summary>
         /// <param name="session">Session already removed from <see cref="_live"/>. Its connection number is used only in a diagnostic.</param>
-        /// <param name="reason">Text passed to <see cref="NntpLogMessages.SessionRetired"/>.</param>
+        /// <param name="cause">Structured cause from <see cref="NntpSessionRetirementCause"/>.</param>
+        /// <param name="reason">Human-readable text passed to <see cref="NntpLogMessages.SessionRetired"/>.</param>
         /// <remarks>
         /// Both calls are observers. Ordinary failures are contained so <see cref="RetireSessionAsync"/> still disposes
         /// the session once and does not enter retirement again. Process-integrity failures propagate.
-        /// <see cref="BeforeDetachedSessionDispose"/> runs after this notification and before that dispose. A fault from the gate still disposes the session.
+        /// Created-count capacity is still held: <see cref="BeforeDetachedSessionDispose"/> and dispose run after this
+        /// notification, and the reservation is released only after dispose returns. A fault from the gate still disposes the session.
         /// A logger that fails is not asked to record its own failure. A subscriber failure is recorded when the logger still works.
         /// </remarks>
-        private void SignalSessionRetired(NntpProviderSession session, string reason)
+        private void SignalSessionRetired(NntpProviderSession session, string cause, string reason)
         {
             try
             {
-                NntpLogMessages.SessionRetired(_logger, _provider.Backbone, reason);
+                NntpLogMessages.SessionRetired(
+                    _logger,
+                    _provider.Backbone,
+                    session.ConnectionId,
+                    cause,
+                    reason);
             }
             catch (Exception diagnostic) when (!IsProcessIntegrityFailure(diagnostic))
             {
-                // Accounting is already committed. The failing logger cannot record this diagnostic. Disposal still runs.
+                // Live membership is already removed; capacity is released after dispose. Disposal still runs.
             }
 
             try
@@ -2576,10 +2667,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         }
 
         /// <summary>
-        /// Disposes a session whose created-count and connection number have already been released.
+        /// Disposes a session that has left <see cref="_live"/> but whose created-count and connection number are still reserved.
         /// </summary>
         /// <param name="session">Detached session.</param>
-        /// <param name="connectionNumber">Connection number already returned to the free set. Used only in the cleanup diagnostic.</param>
+        /// <param name="connectionNumber">Connection number still reserved for this session. Used in the cleanup diagnostic.</param>
         /// <param name="deadline">Shared shutdown instant. Forwarded unchanged so this session does not receive a new QUIT budget.</param>
         /// <param name="cancellationToken">Caller cancellation forwarded only to the QUIT write.</param>
         /// <remarks>
@@ -2587,7 +2678,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <see cref="ObjectDisposedException"/> are logged and do not propagate.
         /// <see cref="ObjectDisposedException"/> is expected when pool dispose and session dispose close the same
         /// transport, and <see cref="CancelKeepAliveRegistration"/> already treats it as shutdown. Other exceptions propagate so a
-        /// programming error is not hidden. This method does not change pool accounting.
+        /// programming error is not hidden. This method does not change pool accounting; the caller releases the reservation
+        /// after this method returns or throws.
         /// </remarks>
         private async Task DisposeDetachedSessionAsync(
             NntpProviderSession session,
@@ -2602,6 +2694,68 @@ namespace VectorNNTPD.BackFillerService.Nntp
             catch (Exception cleanup) when (IsExpectedSessionCleanupFailure(cleanup))
             {
                 TryLogSessionEstablishmentFailed(connectionNumber, cleanup.GetType().Name);
+            }
+        }
+
+        /// <summary>
+        /// Wakes acquire waiters that are blocked because <see cref="_created"/> is at <see cref="BackFillerProviderDefinition.MaxSessions"/>.
+        /// </summary>
+        /// <remarks>
+        /// Called after a retiring session releases its reservation, and when a session becomes idle so a waiter can take it
+        /// instead of opening a new connection. The prior signal is completed only after a replacement source is published.
+        /// </remarks>
+        private void NotifyCapacityChanged()
+        {
+            TaskCompletionSource completed;
+            lock (_capacityGate)
+            {
+                completed = _capacitySignal;
+                _capacitySignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            completed.TrySetResult();
+        }
+
+        /// <summary>
+        /// Waits until created-count capacity may allow a new session, an idle session is available, the pool is shutting down,
+        /// or a capacity pulse arrives.
+        /// </summary>
+        /// <param name="cancellationToken">Caller or shutdown cancellation for the wait.</param>
+        /// <remarks>
+        /// The fill gate is not held. After this returns, <see cref="AcquireAsync"/> rechecks idle membership and <see cref="_created"/>.
+        /// Idle is observed before awaiting so an admission that raced with this call is not missed by waiting on the
+        /// replacement <see cref="_capacitySignal"/> alone. A single pulse returns to the acquire loop; that loop waits again
+        /// if the pool is still at capacity with an empty idle queue.
+        /// </remarks>
+        private Task WaitForCapacityChangedAsync(CancellationToken cancellationToken)
+        {
+            Task wait;
+            lock (_capacityGate)
+            {
+                if (Volatile.Read(ref _created) < _provider.MaxSessions
+                    || Volatile.Read(ref _disposed) == 1
+                    || _shutdown.IsCancellationRequested)
+                {
+                    return Task.CompletedTask;
+                }
+
+                wait = _capacitySignal.Task;
+            }
+
+            if (IdleSessionAvailable())
+            {
+                return Task.CompletedTask;
+            }
+
+            return wait.WaitAsync(cancellationToken);
+        }
+
+        /// <summary>Whether <see cref="_idle"/> has a session a capacity waiter can take instead of creating.</summary>
+        private bool IdleSessionAvailable()
+        {
+            lock (_idleGate)
+            {
+                return _idle.Count > 0;
             }
         }
 
@@ -2742,7 +2896,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
             {
                 while (!cancellationToken.IsCancellationRequested
                        && Volatile.Read(ref _disposed) == 0
-                       && _live.Count < _provider.MaxSessions)
+                       && _live.Count < _provider.MaxSessions
+                       && Volatile.Read(ref _created) < _provider.MaxSessions)
                 {
                     if (!await TryCreateIdleSessionAsync(cancellationToken).ConfigureAwait(false))
                     {
@@ -2780,7 +2935,11 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 var session = await CreateReadySessionAsync(cancellationToken).ConfigureAwait(false);
                 if (TryAdmitIdle(session, enforceBound: false) != IdleAdmission.Admitted)
                 {
-                    await RetireSessionAsync(session, "session is no longer reusable").ConfigureAwait(false);
+                    await RetireSessionAsync(
+                            session,
+                            NntpSessionRetirementCause.SessionNotReusable,
+                            "session is no longer reusable")
+                        .ConfigureAwait(false);
                     return false;
                 }
 

@@ -169,22 +169,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
         /// <summary>Unit and environment-file lines that systemd treats as settings.</summary>
         /// <param name="text">File text.</param>
         /// <returns>Non-empty lines whose first non-space character is not a comment marker.</returns>
-        private static List<string> ActiveLines(string text)
-        {
-            var lines = new List<string>();
-            foreach (var raw in text.Split('\n'))
-            {
-                var line = raw.TrimEnd('\r').Trim();
-                if (line.Length == 0 || line[0] is '#' or ';')
-                {
-                    continue;
-                }
-
-                lines.Add(line);
-            }
-
-            return lines;
-        }
+        private static List<string> ActiveLines(string text) =>
+            text.Split('\n')
+                .Select(static raw => raw.TrimEnd('\r').Trim())
+                .Where(static line => line.Length > 0 && line[0] is not '#' and not ';')
+                .ToList();
 
         /// <summary>Markdown fenced blocks, without the fence markers.</summary>
         /// <param name="text">Markdown document.</param>
@@ -194,9 +183,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             var blocks = new List<string>();
             var current = new System.Text.StringBuilder();
             var inside = false;
-            foreach (var raw in text.Split('\n'))
+            foreach (var line in text.Split('\n').Select(static raw => raw.TrimEnd('\r')))
             {
-                var line = raw.TrimEnd('\r');
                 if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
                 {
                     if (inside)

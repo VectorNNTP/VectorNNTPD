@@ -198,7 +198,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
 
                 AssertWithinCeiling(elapsed);
                 Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
-                Assert.Equal(nameof(IOException), result.Reason);
+                Assert.StartsWith("IOException:", result.Reason, StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(result.Reason["IOException: ".Length..]));
                 Assert.Equal(1, gate.MaxWriteDepth);
                 Assert.Equal(NntpSessionState.Closed, busy.Session.State);
                 Assert.Equal(1, articleServer.ClientStreamDisposeCount);

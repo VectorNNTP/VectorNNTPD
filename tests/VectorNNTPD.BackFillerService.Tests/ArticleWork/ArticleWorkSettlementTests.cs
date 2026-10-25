@@ -23,10 +23,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         [InlineData(nameof(ArticleWorkOutcome.ArticleNotFound), true, false, true)]
         [InlineData(nameof(ArticleWorkOutcome.InvalidArticle), true, false, true)]
         [InlineData(nameof(ArticleWorkOutcome.InvalidRequest), true, false, true)]
-        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure), false, true, false)]
+        [InlineData(nameof(ArticleWorkOutcome.ProviderFailure), true, false, true)]
+        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure), true, false, true)]
+        [InlineData(nameof(ArticleWorkOutcome.RetentionRejected), true, false, true)]
         [InlineData(nameof(ArticleWorkOutcome.Cancelled), false, true, false)]
-        [InlineData(nameof(ArticleWorkOutcome.UnexpectedFailure), false, true, false)]
-        [InlineData(nameof(ArticleWorkOutcome.RetentionRejected), false, true, false)]
         public void Planner_maps_terminal_and_retryable_outcomes(
             string outcomeName,
             bool acknowledge,
@@ -85,13 +85,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// When broker delivery count reaches the configured limit, retryable outcomes NACK without requeue.
+        /// When broker delivery count reaches the configured limit, cancel/retryable settlements NACK without requeue.
         /// </summary>
         [Fact]
         public void Delivery_limit_exhaustion_nacks_without_requeue()
         {
             var disposition = ArticleWorkDispositionPlanner.Create(
-                ArticleWorkOutcome.ProviderFailure,
+                ArticleWorkOutcome.Cancelled,
                 replyable: true,
                 cancellationRequested: false,
                 deliveryCount: 10,
@@ -101,6 +101,25 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.False(disposition.Acknowledge);
             Assert.False(disposition.Requeue);
             Assert.False(disposition.PublishResponse);
+        }
+
+        /// <summary>
+        /// ProviderFailure is terminal regardless of delivery count (ACK + publish; no classic unbounded requeue).
+        /// </summary>
+        [Fact]
+        public void ProviderFailure_is_terminal_even_when_delivery_count_is_high()
+        {
+            var disposition = ArticleWorkDispositionPlanner.Create(
+                ArticleWorkOutcome.ProviderFailure,
+                replyable: true,
+                cancellationRequested: false,
+                deliveryCount: 10,
+                redelivered: true,
+                deliveryLimit: 10);
+
+            Assert.True(disposition.Acknowledge);
+            Assert.False(disposition.Requeue);
+            Assert.True(disposition.PublishResponse);
         }
 
         /// <summary>
@@ -123,7 +142,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Deferred handler (not completed) surfaces provider failure with requeue and no published terminal JSON.
+        /// Deferred handler surfaces provider failure as ACK + correlated failure reply (not Success, not requeue).
         /// </summary>
         [Fact]
         public async Task Valid_work_is_admitted_as_provider_failure_without_a_fake_success()
@@ -143,10 +162,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CancellationToken.None);
 
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, outcome);
-            Assert.Empty(publisher.Published);
+            var intent = Assert.Single(publisher.Published);
+            Assert.Equal(ArticleWorkOutcome.ProviderFailure, intent.Outcome);
+            Assert.False(string.IsNullOrWhiteSpace(intent.Error));
+            Assert.NotEqual(ArticleWorkOutcome.Success, intent.Outcome);
             var settlement = Assert.Single(channel.Settlements);
-            Assert.False(settlement.Acknowledge);
-            Assert.True(settlement.Requeue);
+            Assert.True(settlement.Acknowledge);
+            Assert.False(settlement.Requeue);
             Assert.Equal(7UL, settlement.DeliveryTag);
         }
 
@@ -217,10 +239,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
-        /// Handler exception maps to UnexpectedFailure with nack/requeue and empty publisher log.
+        /// Handler exception maps to UnexpectedFailure with ACK, correlated failure reply, and prepared type+message error.
         /// </summary>
         [Fact]
-        public async Task Retryable_failures_nack_requeue_without_a_terminal_response()
+        public async Task Unexpected_handler_failure_acks_with_terminal_failure_reply()
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
             var publisher = new RecordingArticleWorkResponsePublisher();
@@ -235,8 +257,12 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 CancellationToken.None);
 
             Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, outcome);
-            Assert.Empty(publisher.Published);
-            Assert.True(Assert.Single(channel.Settlements).Requeue);
+            Assert.Equal("InvalidOperationException: boom", pipeline.LastEscapedHandlerFailureError);
+            var intent = Assert.Single(publisher.Published);
+            Assert.Equal(ArticleWorkOutcome.UnexpectedFailure, intent.Outcome);
+            Assert.Equal("InvalidOperationException: boom", intent.Error);
+            Assert.True(Assert.Single(channel.Settlements).Acknowledge);
+            Assert.False(Assert.Single(channel.Settlements).Requeue);
         }
 
         /// <summary>

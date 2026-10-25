@@ -258,6 +258,41 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             string reason);
 
         /// <summary>
+        /// Writes a Warning when a mandatory Success/terminal reply is returned as unroutable.
+        /// </summary>
+        /// <remarks>
+        /// Article retrieval may already have succeeded. This event means RPC delivery to ReplyTo failed permanently;
+        /// the delivery pipeline settles NACK without requeue so the work is not re-fetched indefinitely.
+        /// No dead-letter exchange is declared on Article Work queues, so this settlement discards the broker message.
+        /// Structured fields (request id, Message-ID, backbone, correlation, ReplyTo, outcome) are the durable
+        /// diagnostic and operator-recovery trail for that intentional discard — not a claim that the broker
+        /// dead-lettered the delivery.
+        /// </remarks>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="generation">Publish-channel generation that attempted the reply.</param>
+        /// <param name="requestId">Request id in <c>D</c> format, or <c>(none)</c>.</param>
+        /// <param name="messageId">Work Message-ID when known, or <c>(none)</c>.</param>
+        /// <param name="backbone">Provider backbone label when known, or <c>(none)</c>.</param>
+        /// <param name="correlationId">AMQP correlation id from the original work.</param>
+        /// <param name="replyTo">AMQP ReplyTo queue name that was missing.</param>
+        /// <param name="outcome">Handler outcome that required the reply (typically Success).</param>
+        /// <param name="reason">Exception message from the unroutable classification.</param>
+        [LoggerMessage(
+            EventId = 5330,
+            Level = LogLevel.Warning,
+            Message = "Article Work reply permanently unroutable generation={Generation} requestId={RequestId} messageId={MessageId} backbone={Backbone} correlationId={CorrelationId} replyTo={ReplyTo} outcome={Outcome}: {Reason}. Article may have been retrieved; RPC response was not delivered. Work will not be requeued for refetch; broker message is discarded without a dead-letter exchange.")]
+        internal static partial void ReplyUnroutableTerminal(
+            ILogger logger,
+            long generation,
+            string requestId,
+            string messageId,
+            string backbone,
+            string correlationId,
+            string replyTo,
+            string outcome,
+            string reason);
+
+        /// <summary>
         /// Writes a Debug event after the broker confirms a response, and the publication generation and channel are still current.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
@@ -338,8 +373,18 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="messageId">Request Message-ID, or <c>(none)</c> when it was not resolved.</param>
         /// <param name="backbone">Request backbone, or <c>(none)</c> when it was not resolved.</param>
+        /// <param name="connectionId">
+        /// <see cref="VectorNNTPD.BackFillerService.Nntp.NntpProviderSession.ConnectionId"/> as a "D" GUID string,
+        /// or empty when no physical session was leased for this outcome.
+        /// </param>
         /// <param name="outcome"><c>Found</c>, <c>NotFound</c>, <c>ValidationFailed</c>, or <c>Failed</c>.</param>
-        /// <param name="reason">Validation failure reason. Empty when <paramref name="outcome"/> is not <c>ValidationFailed</c>.</param>
+        /// <param name="reason">
+        /// Validation failure reason, or provider/retrieval diagnostic for <c>Failed</c>. Empty for <c>Found</c>
+        /// and typically empty for <c>NotFound</c>.
+        /// </param>
+        /// <param name="statusCode">
+        /// NNTP status as decimal text when the server produced one; empty otherwise.
+        /// </param>
         /// <param name="elapsed">
         /// Elapsed seconds from the ARTICLE send. Zero when ARTICLE was not sent.
         /// The message renders this value with three fractional digits (<c>0.000</c>).
@@ -347,13 +392,15 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         [LoggerMessage(
             EventId = 5321,
             Level = LogLevel.Information,
-            Message = "Article processed messageId={MessageId} backbone={Backbone} outcome={Outcome} reason={Reason} elapsed={Elapsed:0.000} s")]
+            Message = "Article processed messageId={MessageId} backbone={Backbone} connectionId={ConnectionId} outcome={Outcome} reason={Reason} statusCode={StatusCode} elapsed={Elapsed:0.000} s")]
         internal static partial void ArticleProcessed(
             ILogger logger,
             string messageId,
             string backbone,
+            string connectionId,
             string outcome,
             string reason,
+            string statusCode,
             double elapsed);
 
         /// <summary>
