@@ -188,7 +188,9 @@ namespace VectorNNTPD.BackFillerService.Configuration
                     PublishConfirmTimeoutSeconds: rabbitMq.PublishConfirmTimeoutSeconds ?? 10,
                     ConsumerPrefetchCount: rabbitMq.ConsumerPrefetchCount,
                     QueueTopology: ArticleWorkQueueTopology.FromConfiguredHosts(rabbitMq.Hosts),
-                    DeliveryLimit: rabbitMq.ArticleWorkDeliveryLimit ?? 10),
+                    DeliveryLimit: rabbitMq.ArticleWorkDeliveryLimit ?? 5,
+                    QueueMaxLength: rabbitMq.ArticleWorkQueueMaxLength ?? 10000,
+                    QueueMessageTtlMilliseconds: rabbitMq.ArticleWorkQueueMessageTtlMilliseconds ?? 60000),
                 NntpDb: new NntpDbRuntimeOptions(
                     nntpDb.ConnectionString.Trim(),
                     nntpDbBuilder.Server ?? string.Empty,

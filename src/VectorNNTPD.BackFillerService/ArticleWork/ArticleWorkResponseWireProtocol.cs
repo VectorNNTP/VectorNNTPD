@@ -28,10 +28,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// Applied when BackFiller publishes a terminal reply to the caller's exclusive ReplyTo queue.
         /// Leftover replies should not linger if the caller has already abandoned the correlation.
         /// This is RabbitMQ message TTL on the reply path, not a processing deadline for a work
-        /// delivery already handed to a consumer, and not a TTL for work <em>requests</em> waiting
-        /// in <c>backfiller.{backbone}</c>. Work requests must remain eligible for broker buffering
-        /// until a consumer delivers them; they must not carry this expiration. Queue declarations
-        /// must not set <c>x-message-ttl</c> that silently drops ready work.
+        /// delivery already handed to a consumer, and not the provider-queue ready-message TTL
+        /// declared as <c>x-message-ttl</c> via <c>RabbitMQ:ArticleWorkQueueMessageTtlMilliseconds</c>.
+        /// Work-request publishes must not carry this reply-path expiration; queue-level TTL is a
+        /// separate broker policy argument on <c>backfiller.{backbone}</c>.
         /// </remarks>
         internal const string ExpirationMilliseconds = "1000";
 

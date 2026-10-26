@@ -205,10 +205,18 @@ namespace VectorNNTPD.BackFillerService.Configuration
     /// Declared <c>x-delivery-limit</c> on quorum queues and application requeue cap when broker delivery-count
     /// metadata is available.
     /// </param>
+    /// <param name="QueueMaxLength">
+    /// Declared <c>x-max-length</c> on classic and quorum Article Work provider queues (ready-message cap).
+    /// </param>
+    /// <param name="QueueMessageTtlMilliseconds">
+    /// Declared <c>x-message-ttl</c> on classic and quorum Article Work provider queues (ready-message lifetime).
+    /// </param>
     internal sealed record BackFillerRabbitMqRuntimeOptions(
         int WorkRequestMaxPayloadBytes,
         int PublishConfirmTimeoutSeconds,
         ushort? ConsumerPrefetchCount,
         VectorNNTPD.Common.Messaging.RabbitMq.ArticleWorkQueueTopology QueueTopology,
-        int DeliveryLimit);
+        int DeliveryLimit,
+        int QueueMaxLength,
+        int QueueMessageTtlMilliseconds);
 }

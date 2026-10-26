@@ -41,7 +41,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
             Assert.Equal(VectorNNTPD.Common.Messaging.RabbitMq.ArticleWorkQueueKind.Quorum, runtime.RabbitMq.QueueTopology.Kind);
             Assert.Equal(2, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
             Assert.Equal(2, runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
-            Assert.Equal(10, runtime.RabbitMq.DeliveryLimit);
+            Assert.Equal(5, runtime.RabbitMq.DeliveryLimit);
+            Assert.Equal(10000, runtime.RabbitMq.QueueMaxLength);
+            Assert.Equal(60000, runtime.RabbitMq.QueueMessageTtlMilliseconds);
             Assert.True(Path.IsPathRooted(runtime.LogDirectory));
             Assert.True(Path.IsPathRooted(runtime.CertificateDirectory));
             Assert.Equal("127.0.0.1", runtime.NntpDb.Server);
