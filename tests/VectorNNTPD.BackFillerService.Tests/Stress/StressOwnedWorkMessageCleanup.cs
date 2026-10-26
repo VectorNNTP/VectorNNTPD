@@ -5,14 +5,15 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
     /// <summary>
     /// Removes only work-queue messages published by a specific stress run (<c>StressRunId</c> header).
-    /// Non-matching messages are parked and republished; shared/production traffic is never purged wholesale.
+    /// Foreign deliveries stay unacknowledged and are requeued when the cleanup channel is disposed.
     /// </summary>
     /// <remarks>
-    /// Foreign messages cannot be <c>basic.reject(requeue=true)</c>'d while scanning: on classic queues that
-    /// often resurfaces the same head message immediately, so owned payloads behind foreign backlog would
-    /// never be reached. Park+ack then republish avoids that spin. Unavoidable limitations: brief absence
-    /// of parked messages until republish; relative order vs messages published during cleanup may change;
-    /// a process crash between ack and republish can lose a parked foreign message.
+    /// Foreign messages must not be <c>basic.reject(requeue=true)</c>'d during the scan: on classic queues
+    /// that often resurfaces the same head message. They also must not be acked and republished: that
+    /// creates a loss window on crash. Holding foreign deliveries unacked lets <c>basic.get</c> advance
+    /// through ready messages; channel/connection dispose returns unacked foreign work to the queue.
+    /// Concurrent publishers may still change relative order when foreign messages are requeued.
+    /// Brief unacked occupancy is far below typical broker consumer-timeout defaults (minutes).
     /// </remarks>
     public static class StressOwnedWorkMessageCleanup
     {
@@ -20,7 +21,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         public const string StressRunIdHeader = "StressRunId";
 
         /// <summary>
-        /// Upper bound on basic.get visits per cleanup (owned discards + foreign parks).
+        /// Upper bound on basic.get visits per cleanup (owned discards + foreign holds).
         /// Prevents unbounded scans when the queue holds unrelated backlog.
         /// </summary>
         internal const int DefaultMaxVisits = 512;
@@ -71,15 +72,15 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         }
 
         /// <summary>
-        /// Connects briefly and removes ready messages on <c>backfiller.{backbone}</c> whose
-        /// <c>StressRunId</c> equals <paramref name="stressRunId"/>. Foreign messages are parked
-        /// (acked) and republished after the scan so owned messages behind them can be reached.
+        /// Connects briefly and discards ready messages on <c>backfiller.{backbone}</c> whose
+        /// <c>StressRunId</c> equals <paramref name="stressRunId"/>. Foreign deliveries remain
+        /// unacknowledged and are requeued when the cleanup channel is disposed.
         /// Best-effort: failures are written to stderr and do not throw (harness teardown must proceed).
         /// </summary>
         /// <param name="options">Broker connection settings (credentials never logged).</param>
         /// <param name="backbone">Provider backbone used to compose the work queue name.</param>
         /// <param name="stressRunId">Run id that owns messages to delete.</param>
-        /// <param name="cancellationToken">Cancels connect/get/settle/republish.</param>
+        /// <param name="cancellationToken">Cancels connect/get/settle.</param>
         /// <param name="maxVisits">Maximum basic.get operations this call may perform.</param>
         /// <returns>Count of owned messages discarded.</returns>
         public static async Task<int> RemoveOwnedAsync(
@@ -117,58 +118,17 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 await using var channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
-                var removed = 0;
-                var visits = 0;
-                var parkedForeign = new List<ParkedForeignMessage>();
-                while (visits < maxVisits)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var got = await channel.BasicGetAsync(queueName, autoAck: false, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (got is null)
-                    {
-                        break;
-                    }
+                var removed = await DiscardOwnedHoldingForeignAsync(
+                        new LiveCleanupChannel(channel, queueName),
+                        stressRunId,
+                        maxVisits,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
-                    visits++;
-                    if (IsOwnedByRun(got.BasicProperties.Headers, stressRunId))
-                    {
-                        await channel.BasicNackAsync(
-                                got.DeliveryTag,
-                                multiple: false,
-                                requeue: false,
-                                cancellationToken)
-                            .ConfigureAwait(false);
-                        removed++;
-                        continue;
-                    }
-
-                    // Park foreign so the scan can continue past them (reject+requeue spins on classic head).
-                    parkedForeign.Add(
-                        new ParkedForeignMessage(
-                            CopyProperties(got.BasicProperties),
-                            got.Body.ToArray()));
-                    await channel.BasicAckAsync(got.DeliveryTag, multiple: false, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                foreach (var foreign in parkedForeign)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await channel.BasicPublishAsync(
-                            exchange: queueName,
-                            routingKey: queueName,
-                            mandatory: false,
-                            basicProperties: foreign.Properties,
-                            body: foreign.Body,
-                            cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-                }
-
-                if (removed > 0 || parkedForeign.Count > 0)
+                if (removed > 0)
                 {
                     Console.WriteLine(
-                        $"stress-owned-cleanup queue={queueName} runId={stressRunId} removed={removed} parkedForeign={parkedForeign.Count} visits={visits}");
+                        $"stress-owned-cleanup queue={queueName} runId={stressRunId} removed={removed}");
                 }
 
                 return removed;
@@ -181,39 +141,95 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
         }
 
-        /// <summary>Copies settlement-relevant AMQP properties for a temporary foreign park/republish.</summary>
-        /// <param name="source">Properties from the gotten delivery.</param>
-        /// <returns>A new <see cref="BasicProperties"/> suitable for republish.</returns>
-        internal static BasicProperties CopyProperties(IReadOnlyBasicProperties source)
+        /// <summary>
+        /// Scans ready deliveries: nack-discards owned messages; leaves foreign unacked.
+        /// Caller must dispose the channel so foreign deliveries are requeued by the broker.
+        /// </summary>
+        /// <param name="channel">Cleanup channel (get + discard only; no foreign ack).</param>
+        /// <param name="stressRunId">Owned run id.</param>
+        /// <param name="maxVisits">Visit bound.</param>
+        /// <param name="cancellationToken">Cancels get/discard.</param>
+        /// <returns>Owned messages discarded.</returns>
+        internal static async Task<int> DiscardOwnedHoldingForeignAsync(
+            IStressCleanupChannel channel,
+            string stressRunId,
+            int maxVisits,
+            CancellationToken cancellationToken)
         {
-            ArgumentNullException.ThrowIfNull(source);
-            IDictionary<string, object?>? headers = null;
-            if (source.Headers is { Count: > 0 })
+            ArgumentNullException.ThrowIfNull(channel);
+            ArgumentException.ThrowIfNullOrWhiteSpace(stressRunId);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxVisits);
+
+            var removed = 0;
+            var visits = 0;
+            while (visits < maxVisits)
             {
-                headers = new Dictionary<string, object?>(source.Headers, StringComparer.Ordinal);
+                cancellationToken.ThrowIfCancellationRequested();
+                var got = await channel.BasicGetAsync(cancellationToken).ConfigureAwait(false);
+                if (got is not { } delivery)
+                {
+                    break;
+                }
+
+                visits++;
+                if (IsOwnedByRun(delivery.Headers, stressRunId))
+                {
+                    await channel.BasicNackDiscardAsync(delivery.DeliveryTag, cancellationToken)
+                        .ConfigureAwait(false);
+                    removed++;
+                }
+                // Foreign / missing / malformed StressRunId: leave unacked for channel dispose requeue.
             }
 
-            return new BasicProperties
-            {
-                ContentType = source.ContentType,
-                ContentEncoding = source.ContentEncoding,
-                Headers = headers,
-                DeliveryMode = source.DeliveryMode,
-                Priority = source.Priority,
-                CorrelationId = source.CorrelationId,
-                ReplyTo = source.ReplyTo,
-                Expiration = source.Expiration,
-                MessageId = source.MessageId,
-                Timestamp = source.Timestamp,
-                Type = source.Type,
-                UserId = source.UserId,
-                AppId = source.AppId,
-            };
+            return removed;
         }
 
-        /// <summary>One foreign work message held in memory until the owned scan finishes.</summary>
-        /// <param name="Properties">AMQP properties to republish.</param>
-        /// <param name="Body">Payload octets to republish.</param>
-        private readonly record struct ParkedForeignMessage(BasicProperties Properties, byte[] Body);
+        /// <summary>One gotten delivery used by the cleanup scan (headers + delivery tag only).</summary>
+        /// <param name="DeliveryTag">Broker delivery tag for nack/discard.</param>
+        /// <param name="Headers">AMQP headers; may be null.</param>
+        internal readonly record struct StressCleanupDelivery(
+            ulong DeliveryTag,
+            IDictionary<string, object?>? Headers);
+
+        /// <summary>
+        /// Minimal channel surface for owned discard while holding foreign unacked.
+        /// Implementations must not ack foreign deliveries.
+        /// </summary>
+        internal interface IStressCleanupChannel : IAsyncDisposable
+        {
+            /// <summary>Gets the next ready message, or null when the ready set is empty.</summary>
+            /// <param name="cancellationToken">Cancels the get.</param>
+            Task<StressCleanupDelivery?> BasicGetAsync(CancellationToken cancellationToken);
+
+            /// <summary>Discards one owned delivery without requeue.</summary>
+            /// <param name="deliveryTag">Tag from a prior get.</param>
+            /// <param name="cancellationToken">Cancels the nack.</param>
+            Task BasicNackDiscardAsync(ulong deliveryTag, CancellationToken cancellationToken);
+        }
+
+        /// <summary>Live RabbitMQ.Client adapter for <see cref="IStressCleanupChannel"/>.</summary>
+        private sealed class LiveCleanupChannel(IChannel channel, string queueName) : IStressCleanupChannel
+        {
+            /// <inheritdoc />
+            public async Task<StressCleanupDelivery?> BasicGetAsync(CancellationToken cancellationToken)
+            {
+                var got = await channel.BasicGetAsync(queueName, autoAck: false, cancellationToken)
+                    .ConfigureAwait(false);
+                if (got is null)
+                {
+                    return null;
+                }
+
+                return new StressCleanupDelivery(got.DeliveryTag, got.BasicProperties.Headers);
+            }
+
+            /// <inheritdoc />
+            public Task BasicNackDiscardAsync(ulong deliveryTag, CancellationToken cancellationToken) =>
+                channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken)
+                    .AsTask();
+
+            /// <inheritdoc />
+            public ValueTask DisposeAsync() => channel.DisposeAsync();
+        }
     }
 }
