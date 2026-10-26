@@ -5,9 +5,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
     /// </summary>
     /// <remarks>
     /// <see cref="ConditionSignal.Unknown"/> neither opens nor resolves: an already-open alert stays open
-    /// so a Management outage is not treated as recovery. Sustained <see cref="ConditionSignal.Active"/>
-    /// past the configured open window opens; sustained <see cref="ConditionSignal.Inactive"/> past the
-    /// resolve window resolves. Persistence clocks reset when the opposite conclusive signal arrives.
+    /// so a Management outage is not treated as recovery. Unknown also <em>freezes</em> Active/Inactive
+    /// persistence clocks (shifts clock origins by the Unknown gap) so outage wall time cannot complete an
+    /// open or resolve window. Sustained <see cref="ConditionSignal.Active"/> past the configured open
+    /// window opens; sustained <see cref="ConditionSignal.Inactive"/> past the resolve window resolves.
+    /// Persistence clocks reset when the opposite conclusive signal arrives.
     /// </remarks>
     internal sealed class ObservationStateMachine
     {
@@ -28,6 +30,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
 
         /// <summary>UTC start of the current Inactive persistence clock while open; null otherwise.</summary>
         private DateTimeOffset? _inactiveSinceUtc;
+
+        /// <summary>
+        /// UTC of the last <see cref="Apply"/> used to freeze persistence across <see cref="ConditionSignal.Unknown"/> gaps.
+        /// </summary>
+        private DateTimeOffset? _lastApplyUtc;
 
         /// <summary>Creates a machine for one observation identity.</summary>
         /// <param name="key">Stable identity (instance session key, <c>local</c>, or shared queue name).</param>
@@ -57,11 +64,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
             switch (signal)
             {
                 case ConditionSignal.Unknown:
+                    FreezePersistenceClocks(atUtc);
+                    _lastApplyUtc = atUtc;
                     return Result(signal, ObservationTransition.None, CurrentPersistence(atUtc), detail);
 
                 case ConditionSignal.Active:
                     _inactiveSinceUtc = null;
                     _activeSinceUtc ??= atUtc;
+                    _lastApplyUtc = atUtc;
                     var activeFor = atUtc - _activeSinceUtc.Value;
                     if (_phase == ObservationPhase.Clear)
                     {
@@ -81,10 +91,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
                     if (_phase == ObservationPhase.Clear)
                     {
                         _inactiveSinceUtc = null;
+                        _lastApplyUtc = atUtc;
                         return Result(signal, ObservationTransition.None, TimeSpan.Zero, detail);
                     }
 
                     _inactiveSinceUtc ??= atUtc;
+                    _lastApplyUtc = atUtc;
                     var inactiveFor = atUtc - _inactiveSinceUtc.Value;
                     if (inactiveFor >= _resolveWindow)
                     {
@@ -96,7 +108,37 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
                     return Result(signal, ObservationTransition.Continued, inactiveFor, detail);
 
                 default:
+                    _lastApplyUtc = atUtc;
                     return Result(ConditionSignal.Unknown, ObservationTransition.None, TimeSpan.Zero, "unhandled");
+            }
+        }
+
+        /// <summary>
+        /// Shifts Active/Inactive clock origins by the gap since <see cref="_lastApplyUtc"/> so Unknown
+        /// wall time does not advance open or resolve persistence.
+        /// </summary>
+        /// <param name="atUtc">Current evaluation instant.</param>
+        private void FreezePersistenceClocks(DateTimeOffset atUtc)
+        {
+            if (_lastApplyUtc is not { } last)
+            {
+                return;
+            }
+
+            var gap = atUtc - last;
+            if (gap <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            if (_activeSinceUtc is { } activeSince)
+            {
+                _activeSinceUtc = activeSince + gap;
+            }
+
+            if (_inactiveSinceUtc is { } inactiveSince)
+            {
+                _inactiveSinceUtc = inactiveSince + gap;
             }
         }
 

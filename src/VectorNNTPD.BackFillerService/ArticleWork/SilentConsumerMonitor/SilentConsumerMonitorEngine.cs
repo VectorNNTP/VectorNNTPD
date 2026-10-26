@@ -177,8 +177,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="poll"/> is null.</exception>
         /// <remarks>
         /// Non-success polls append an invalid sample so shared evaluators return <see cref="ConditionSignal.Unknown"/>.
-        /// Unknown neither opens nor resolves; an already-open shared alert remains open until a conclusive
-        /// Inactive signal, catalog prune (target gone — not broker recovery), or process restart.
+        /// Unknown neither opens nor resolves and freezes open/resolve persistence clocks; an already-open
+        /// shared alert remains open until a conclusive Inactive signal, catalog prune (target gone — not
+        /// broker recovery), or process restart.
         /// </remarks>
         public IReadOnlyList<ObservationResult> ObserveSharedQueue(
             string queueName,

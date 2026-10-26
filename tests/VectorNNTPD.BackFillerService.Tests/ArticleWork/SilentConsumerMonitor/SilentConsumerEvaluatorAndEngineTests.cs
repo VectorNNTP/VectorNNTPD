@@ -208,6 +208,48 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork.SilentConsumerMonitor
         }
 
         /// <summary>
+        /// Failed Management polls (Unknown) during Clear-phase accumulation must not complete the shared open window.
+        /// </summary>
+        [Fact]
+        public void Unknown_management_gap_does_not_complete_shared_open_window()
+        {
+            var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-26T15:00:00Z"));
+            var engine = new SilentConsumerMonitorEngine(() => "a.example", NullLogger.Instance, time);
+            var unknownPoll = new ManagementPollResult
+            {
+                Kind = ManagementPollKind.TransientFailure,
+                Reason = "timeout",
+            };
+
+            ObservationResult LastLoss(IReadOnlyList<ObservationResult> results) =>
+                results.Single(r =>
+                    r.Key.Condition == SilentConsumerCondition.ConsumerLoss
+                    && r.Key.Scope == ObservationScope.SharedQueue);
+
+            Assert.Equal(
+                ObservationTransition.None,
+                LastLoss(engine.ObserveSharedQueue("backfiller.giganews", Success(0, 5, 0, 0), true)).Transition);
+
+            time.Advance(TimeSpan.FromSeconds(60));
+            Assert.Equal(
+                ObservationTransition.None,
+                LastLoss(engine.ObserveSharedQueue("backfiller.giganews", unknownPoll, true)).Transition);
+            Assert.Equal(ObservationPhase.Clear, LastLoss(
+                engine.ObserveSharedQueue("backfiller.giganews", unknownPoll, true)).Phase);
+
+            // Wall time since first Active would meet ConsumerLoss open (45s); freeze keeps Clear.
+            time.Advance(TimeSpan.FromSeconds(30));
+            Assert.Equal(
+                ObservationTransition.None,
+                LastLoss(engine.ObserveSharedQueue("backfiller.giganews", Success(0, 5, 0, 0), true)).Transition);
+
+            time.Advance(SilentConsumerMonitorDefaults.ConsumerLoss.OpenWindow);
+            Assert.Equal(
+                ObservationTransition.Opened,
+                LastLoss(engine.ObserveSharedQueue("backfiller.giganews", Success(0, 5, 0, 0), true)).Transition);
+        }
+
+        /// <summary>
         /// Event 9113 logs once per observation key per open-window interval; distinct queue keys and advanced time emit additional entries.
         /// </summary>
         [Fact]
