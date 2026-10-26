@@ -354,6 +354,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork.SilentConsumerMonitor
                     await Task.Delay(Delay, cancellationToken);
                 }
 
+                // Returned to HttpClient; ManagementQueueClient.GetQueueAsync disposes with using.
                 return new HttpResponseMessage(_status)
                 {
                     Content = new StringContent(_body, Encoding.UTF8, "application/json"),
@@ -372,18 +373,22 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork.SilentConsumerMonitor
             public List<string> AuthorizationParameters { get; } = [];
 
             /// <inheritdoc />
-            protected override Task<HttpResponseMessage> SendAsync(
+            protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 Assert.NotNull(request.Headers.Authorization);
                 Assert.Equal("Basic", request.Headers.Authorization.Scheme);
                 AuthorizationParameters.Add(request.Headers.Authorization.Parameter ?? string.Empty);
-                return Task.FromResult(
-                    new HttpResponseMessage(status)
-                    {
-                        Content = new StringContent(body, Encoding.UTF8, "application/json"),
-                    });
+
+                // Prefer returning the message from an async method (not Task.FromResult(new ...))
+                // so ownership transfers to HttpClient the same way as StubHandler / quorum fakes.
+                // ManagementQueueClient.GetQueueAsync disposes the response with using.
+                await Task.CompletedTask.ConfigureAwait(false);
+                return new HttpResponseMessage(status)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                };
             }
         }
     }

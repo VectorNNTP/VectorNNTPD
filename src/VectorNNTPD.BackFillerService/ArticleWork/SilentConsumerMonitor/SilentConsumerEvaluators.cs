@@ -84,14 +84,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
                 return ConditionSignal.Inactive;
             }
 
-            var running = 0;
-            foreach (var session in sessions)
-            {
-                if (session.State == ArticleWorkConsumerState.Running && session.HasOpenChannel)
-                {
-                    running++;
-                }
-            }
+            var running = sessions.Count(
+                static session => session.State == ArticleWorkConsumerState.Running && session.HasOpenChannel);
 
             if (running > 0)
             {

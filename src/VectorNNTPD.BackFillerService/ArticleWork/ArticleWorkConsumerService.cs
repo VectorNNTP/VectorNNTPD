@@ -604,16 +604,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         private void ObserveInfrastructureUnavailable(int desiredSlotCount)
         {
             var streak = Interlocked.Increment(ref _consecutiveInfrastructureUnavailable);
-            var healthy = 0;
+            int healthy;
             lock (_gate)
             {
-                foreach (var session in _sessions.Values)
-                {
-                    if (IsHealthyRunningSession(session))
-                    {
-                        healthy++;
-                    }
-                }
+                healthy = _sessions.Values.Count(IsHealthyRunningSession);
             }
 
             ArticleWorkLogMessages.ConsumerInfrastructureUnavailable(
