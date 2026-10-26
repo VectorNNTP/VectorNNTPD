@@ -582,11 +582,24 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             var drainStarted = Stopwatch.GetTimestamp();
             var drainDeadline = drainStarted
                 + (long)(_options.ReplyQueueDisposeDrainTimeout.TotalSeconds * Stopwatch.Frequency);
+            // Wait for caller-visible outstanding first (waiters + delivery workers).
             while ((metrics.Outstanding > 0
                     || metrics.DeliveryOutstanding > 0
-                    || workClient.WaitingCount > 0
-                    || workClient.BrokerOutstandingCount > 0)
+                    || workClient.WaitingCount > 0)
                    && Stopwatch.GetTimestamp() < drainDeadline)
+            {
+                await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            // Short grace for late ReplyTo arrivals. Do not burn the full dispose drain waiting on
+            // broker-outstanding work that will never complete when consumers=0 (silent / absent).
+            // Owned ready messages are removed after dispose via StressRunId-scoped cleanup.
+            var lateReplyGrace = TimeSpan.FromSeconds(5);
+            var lateReplyDeadline = Stopwatch.GetTimestamp()
+                + (long)(lateReplyGrace.TotalSeconds * Stopwatch.Frequency);
+            var brokerWaitDeadline = Math.Min(drainDeadline, lateReplyDeadline);
+            while (workClient.BrokerOutstandingCount > 0
+                   && Stopwatch.GetTimestamp() < brokerWaitDeadline)
             {
                 await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
             }
@@ -596,7 +609,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             if (brokerOutstandingAtDrainEnd > 0)
             {
                 Console.Error.WriteLine(
-                    $"Harness drain ended with brokerOutstanding={brokerOutstandingAtDrainEnd} waiting={workClient.WaitingCount}; dispose will apply bounded ReplyTo drain.");
+                    $"Harness drain ended with brokerOutstanding={brokerOutstandingAtDrainEnd} waiting={workClient.WaitingCount}; dispose will apply bounded ReplyTo drain; owned work-queue cleanup follows.");
             }
 
             if (pool is not null)
@@ -623,9 +636,23 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
             finally
             {
-                if (disposeReplyClientOnFailure)
+                try
                 {
-                    await workClient.DisposeAsync().ConfigureAwait(false);
+                    if (disposeReplyClientOnFailure)
+                    {
+                        await workClient.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    // Always remove this run's ready work messages (success and failure paths).
+                    // Does not purge foreign traffic: only StressRunId-tagged payloads are removed.
+                    _ = await StressOwnedWorkMessageCleanup.RemoveOwnedAsync(
+                            _options,
+                            backbone,
+                            runId,
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
                 }
             }
         }
