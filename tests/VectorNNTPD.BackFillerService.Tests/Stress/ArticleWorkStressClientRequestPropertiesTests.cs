@@ -58,9 +58,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                 props.Expiration ?? string.Empty);
         }
 
-        /// <summary>Classic and quorum queue arguments must not declare x-message-ttl.</summary>
+        /// <summary>
+        /// Classic and quorum provider queues declare configured <c>x-message-ttl</c>; response-path expiration remains separate.
+        /// </summary>
         [Fact]
-        public void Provider_work_queue_arguments_do_not_declare_x_message_ttl()
+        public void Provider_work_queue_arguments_declare_configured_x_message_ttl()
         {
             var classic = BackFillerArticleWorkTopology.BuildQueueArguments(
                 new BackFillerRabbitMqRuntimeOptions(
@@ -71,8 +73,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                         ArticleWorkQueueKind.Classic,
                         ConfiguredHostCount: 1,
                         QuorumInitialGroupSize: null),
-                    DeliveryLimit: 10));
-            Assert.False(classic.ContainsKey("x-message-ttl"));
+                    DeliveryLimit: 5,
+                    QueueMaxLength: 10000,
+                    QueueMessageTtlMilliseconds: 60000));
+            Assert.Equal(60000L, classic[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(classic[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.NotEqual(
+                ArticleWorkResponseWireProtocol.ExpirationMilliseconds,
+                classic[BackFillerArticleWorkTopology.MessageTtlArgumentName]!.ToString());
 
             var quorum = BackFillerArticleWorkTopology.BuildQueueArguments(
                 new BackFillerRabbitMqRuntimeOptions(
@@ -83,8 +91,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
                         ArticleWorkQueueKind.Quorum,
                         ConfiguredHostCount: 3,
                         QuorumInitialGroupSize: 3),
-                    DeliveryLimit: 10));
-            Assert.False(quorum.ContainsKey("x-message-ttl"));
+                    DeliveryLimit: 5,
+                    QueueMaxLength: 10000,
+                    QueueMessageTtlMilliseconds: 60000));
+            Assert.Equal(60000L, quorum[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(quorum[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
             Assert.True(quorum.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
         }
 

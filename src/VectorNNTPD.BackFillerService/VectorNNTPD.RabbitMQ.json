@@ -7,10 +7,12 @@
     "DegradedThreshold": 0.75,
     "EnableSsl": false,
     "Hosts": [
-      "198.18.0.3"
+      "rabbitmq1a.usenet.ninja",
+      "rabbitmq1b.usenet.ninja",
+      "rabbitmq1c.usenet.ninja"
     ],
     "Management": {
-      "BaseUrl": "http://198.18.0.3:15672",
+      "BaseUrl": "http://rabbitmq1a.usenet.ninja:15672",
       "RequestTimeoutSeconds": 5
     },
     "MaxConnections": 16,
@@ -31,6 +33,8 @@
     "UnhealthyThreshold": 5,
     "VirtualHost": "/",
     "WorkRequestMaxPayloadBytes": 1024,
-    "ArticleWorkDeliveryLimit": 10
+    "ArticleWorkDeliveryLimit": 5,
+    "ArticleWorkQueueMaxLength": 10000,
+    "ArticleWorkQueueMessageTtlMilliseconds": 60000
   }
 }

@@ -511,6 +511,24 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 failures.Add("RabbitMQ:ArticleWorkDeliveryLimit must be between 1 and 1000.");
             }
 
+            if (rabbitMq.ArticleWorkQueueMaxLength is null)
+            {
+                failures.Add("RabbitMQ:ArticleWorkQueueMaxLength is required.");
+            }
+            else if (rabbitMq.ArticleWorkQueueMaxLength is < 1 or > 10_000_000)
+            {
+                failures.Add("RabbitMQ:ArticleWorkQueueMaxLength must be between 1 and 10000000.");
+            }
+
+            if (rabbitMq.ArticleWorkQueueMessageTtlMilliseconds is null)
+            {
+                failures.Add("RabbitMQ:ArticleWorkQueueMessageTtlMilliseconds is required.");
+            }
+            else if (rabbitMq.ArticleWorkQueueMessageTtlMilliseconds is < 1 or > 86_400_000)
+            {
+                failures.Add("RabbitMQ:ArticleWorkQueueMessageTtlMilliseconds must be between 1 and 86400000.");
+            }
+
             if (rabbitMq.RequestedChannelMax is null)
             {
                 failures.Add("RabbitMQ:RequestedChannelMax is required.");

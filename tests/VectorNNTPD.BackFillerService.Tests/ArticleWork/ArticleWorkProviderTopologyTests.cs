@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.BackFillerService.RabbitMq;
 using VectorNNTPD.BackFillerService.Tests.Fixtures;
@@ -44,10 +45,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.NotNull(queue.Arguments);
             Assert.True(queue.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var queueType));
             Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queueType);
+            Assert.Equal(10000L, queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal(60000L, queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
             Assert.False(queue.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
             Assert.False(queue.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
-            Assert.False(queue.Arguments.ContainsKey("x-message-ttl"));
-            Assert.Single(queue.Arguments);
+            Assert.Equal(3, queue.Arguments.Count);
             Assert.Equal(
                 ("backfiller.giganews", "backfiller.giganews", "backfiller.giganews"),
                 Assert.Single(topology.BindingDeclarations));
@@ -81,8 +85,155 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             var queue = Assert.Single(topology.QueueDeclarations);
             Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queue.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
             Assert.Equal(3L, queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
-            Assert.Equal(10L, queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
-            Assert.Equal(3, queue.Arguments.Count);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(5L, queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.Equal(10000L, queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal(60000L, queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.Equal(5, queue.Arguments.Count);
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Both provider queues declare identical classic arguments including max-length and message TTL as AMQP long.
+        /// </summary>
+        [Fact]
+        public async Task Eweka_and_giganews_declare_identical_classic_queue_arguments()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumer(
+                connections,
+                CreateCatalog([("Giganews", 1), ("Eweka", 1)]),
+                CreateCapacity([("Giganews", 1), ("Eweka", 1)]));
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            var declarations = factory.LastConnection!.Channels
+                .SelectMany(static channel => channel.QueueDeclarations)
+                .OrderBy(static q => q.Name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(["backfiller.eweka", "backfiller.giganews"], declarations.Select(static q => q.Name));
+            Assert.All(declarations, static queue =>
+            {
+                Assert.NotNull(queue.Arguments);
+                Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queue.Arguments[BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+                Assert.Equal(10000L, queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.Equal(60000L, queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+                Assert.Equal(3, queue.Arguments.Count);
+            });
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Both provider queues declare identical quorum arguments for a three-host topology.
+        /// </summary>
+        [Fact]
+        public async Task Eweka_and_giganews_declare_identical_quorum_queue_arguments()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var consumer = CreateConsumer(
+                connections,
+                CreateCatalog([("Giganews", 1), ("Eweka", 1)]),
+                CreateCapacity([("Giganews", 1), ("Eweka", 1)]),
+                hostCount: 3);
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            var declarations = factory.LastConnection!.Channels
+                .SelectMany(static channel => channel.QueueDeclarations)
+                .OrderBy(static q => q.Name, StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(["backfiller.eweka", "backfiller.giganews"], declarations.Select(static q => q.Name));
+            Assert.All(declarations, static queue =>
+            {
+                Assert.NotNull(queue.Arguments);
+                Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queue.Arguments[BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+                Assert.Equal(3L, queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+                Assert.Equal(5L, queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+                Assert.Equal(10000L, queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.Equal(60000L, queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+                Assert.Equal(5, queue.Arguments.Count);
+            });
+
+            await consumer.DisposeAsync();
+            await connections.DisposeAsync();
+        }
+
+        /// <summary>
+        /// Configured queue max length, delivery limit, and message TTL reach declarations as AMQP long.
+        /// </summary>
+        [Theory]
+        [InlineData(1, 5000, 5, 45000)]
+        [InlineData(3, 25000, 7, 90000)]
+        public async Task Configured_queue_policy_reaches_declaration(
+            int hostCount,
+            int maxLength,
+            int deliveryLimit,
+            int messageTtlMilliseconds)
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var rabbit = BackFillerTestOptions.CreateValidRabbitMqWithHostCount(hostCount);
+            rabbit.PoolReconnectBaseDelayMs = 1;
+            rabbit.PoolReconnectMaxDelayMs = 1;
+            rabbit.ArticleWorkQueueMaxLength = maxLength;
+            rabbit.ArticleWorkDeliveryLimit = deliveryLimit;
+            rabbit.ArticleWorkQueueMessageTtlMilliseconds = messageTtlMilliseconds;
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                BackFillerTestOptions.CreateValid(),
+                BackFillerTestOptions.CreateValidNntpDb(),
+                BackFillerTestOptions.CreateValidAcme(),
+                rabbit);
+            Assert.Equal(maxLength, runtime.RabbitMq.QueueMaxLength);
+            Assert.Equal(deliveryLimit, runtime.RabbitMq.DeliveryLimit);
+            Assert.Equal(messageTtlMilliseconds, runtime.RabbitMq.QueueMessageTtlMilliseconds);
+            var consumer = new ArticleWorkConsumerService(
+                connections,
+                runtime,
+                new DeferredArticleWorkHandler(),
+                new RecordingArticleWorkResponsePublisher(),
+                NullLogger<ArticleWorkConsumerService>.Instance,
+                CreateCatalog([("Giganews", 1)]),
+                CreateCapacity([("Giganews", 1)]));
+
+            await consumer.StartAsync(CancellationToken.None);
+
+            var queue = Assert.Single(factory.LastConnection!.Channels[0].QueueDeclarations);
+            Assert.Equal((long)maxLength, queue.Arguments![BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal((long)messageTtlMilliseconds, queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            if (hostCount == 1)
+            {
+                Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, queue.Arguments[BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+                Assert.False(queue.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
+                Assert.Equal(3, queue.Arguments.Count);
+            }
+            else
+            {
+                Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, queue.Arguments[BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+                Assert.Equal((long)deliveryLimit, queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+                Assert.Equal((long)hostCount, queue.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+                Assert.IsType<long>(queue.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+                Assert.Equal(5, queue.Arguments.Count);
+            }
 
             await consumer.DisposeAsync();
             await connections.DisposeAsync();
@@ -285,6 +436,10 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 Assert.NotNull(q.Arguments);
                 Assert.True(q.Arguments.TryGetValue(BackFillerArticleWorkTopology.QueueTypeArgumentName, out var type));
                 Assert.Equal(BackFillerArticleWorkTopology.ClassicQueueType, type);
+                Assert.Equal(10000L, q.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.IsType<long>(q.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+                Assert.Equal(60000L, q.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+                Assert.IsType<long>(q.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
                 Assert.False(q.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
                 Assert.False(q.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
             });

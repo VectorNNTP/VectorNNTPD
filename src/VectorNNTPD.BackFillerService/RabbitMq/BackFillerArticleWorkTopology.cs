@@ -32,6 +32,12 @@ namespace VectorNNTPD.BackFillerService.RabbitMq
         /// <summary>Broker argument that caps how many times a quorum message may be delivered before dead-letter/drop.</summary>
         internal const string DeliveryLimitArgumentName = "x-delivery-limit";
 
+        /// <summary>Broker argument that caps ready messages retained on the provider queue.</summary>
+        internal const string MaxLengthArgumentName = "x-max-length";
+
+        /// <summary>Broker argument that expires ready messages retained on the provider queue.</summary>
+        internal const string MessageTtlArgumentName = "x-message-ttl";
+
         /// <summary>Fanout exchange type used for provider endpoints.</summary>
         private const string FanoutExchangeType = "fanout";
 
@@ -52,9 +58,11 @@ namespace VectorNNTPD.BackFillerService.RabbitMq
         /// The exchange is durable <see cref="FanoutExchangeType"/> with no arguments and is not auto-delete.
         /// The queue is durable, not exclusive, and not auto-delete. Arguments follow
         /// <see cref="BackFillerRabbitMqRuntimeOptions.QueueTopology"/>:
-        /// classic queues set <see cref="QueueTypeArgumentName"/> to <see cref="ClassicQueueType"/> only;
-        /// quorum queues also set <see cref="QuorumInitialGroupSizeArgumentName"/> and
-        /// <see cref="DeliveryLimitArgumentName"/>. Classic brokers do not accept quorum-only arguments.
+        /// classic queues set <see cref="QueueTypeArgumentName"/> to <see cref="ClassicQueueType"/>,
+        /// <see cref="MaxLengthArgumentName"/>, and <see cref="MessageTtlArgumentName"/>; quorum queues also set
+        /// <see cref="QuorumInitialGroupSizeArgumentName"/> and <see cref="DeliveryLimitArgumentName"/>.
+        /// Classic brokers do not accept quorum-only arguments. Integer queue arguments are declared as AMQP
+        /// <c>long</c> so redeclaration matches existing broker policy.
         /// This method does not delete or rewrite an existing entity. Inequivalent arguments surface as
         /// broker <c>PRECONDITION_FAILED</c>. Broker failures, including cancellation, propagate from the channel.
         /// </remarks>
@@ -97,7 +105,7 @@ namespace VectorNNTPD.BackFillerService.RabbitMq
         }
 
         /// <summary>
-        /// Builds durable provider-queue arguments from the Hosts-derived topology and delivery limit.
+        /// Builds durable provider-queue arguments from the Hosts-derived topology and configured queue policy.
         /// </summary>
         /// <param name="rabbitMq">Projected Article Work RabbitMQ knobs.</param>
         /// <returns>Argument dictionary for <c>Queue.Declare</c>.</returns>
@@ -106,20 +114,26 @@ namespace VectorNNTPD.BackFillerService.RabbitMq
             ArgumentNullException.ThrowIfNull(rabbitMq);
 
             var topology = rabbitMq.QueueTopology;
+            // RabbitMQ AMQP field tables accept long for these integer arguments.
+            var maxLength = (long)rabbitMq.QueueMaxLength;
+            var messageTtl = (long)rabbitMq.QueueMessageTtlMilliseconds;
             if (topology.Kind == ArticleWorkQueueKind.Classic)
             {
                 return new Dictionary<string, object?>(StringComparer.Ordinal)
                 {
                     [QueueTypeArgumentName] = ClassicQueueType,
+                    [MaxLengthArgumentName] = maxLength,
+                    [MessageTtlArgumentName] = messageTtl,
                 };
             }
 
             return new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 [QueueTypeArgumentName] = QuorumQueueType,
-                // RabbitMQ AMQP field tables accept long for these integer arguments.
                 [QuorumInitialGroupSizeArgumentName] = (long)topology.QuorumInitialGroupSize!.Value,
                 [DeliveryLimitArgumentName] = (long)rabbitMq.DeliveryLimit,
+                [MaxLengthArgumentName] = maxLength,
+                [MessageTtlArgumentName] = messageTtl,
             };
         }
     }

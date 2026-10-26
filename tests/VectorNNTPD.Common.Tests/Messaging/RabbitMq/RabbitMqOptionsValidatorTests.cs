@@ -21,7 +21,9 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
             var options = new RabbitMqOptions();
 
             Assert.Equal(1024, options.WorkRequestMaxPayloadBytes);
-            Assert.Equal(10, options.ArticleWorkDeliveryLimit);
+            Assert.Equal(5, options.ArticleWorkDeliveryLimit);
+            Assert.Equal(10000, options.ArticleWorkQueueMaxLength);
+            Assert.Equal(60000, options.ArticleWorkQueueMessageTtlMilliseconds);
             Assert.Equal(60, options.ChannelLeaseTimeoutSeconds);
             Assert.Equal(30, options.RpcTimeoutSeconds);
             Assert.Equal(30, options.ConnectionBlockedTimeoutSeconds);
@@ -149,6 +151,38 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
                 result.Failures!,
                 static failure => failure.Contains("ArticleWorkDeliveryLimit", StringComparison.Ordinal)
                     && failure.Contains("between 1 and 1000", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Article Work queue max length outside <c>1–10000000</c> fails validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenArticleWorkQueueMaxLengthOutOfRange()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ArticleWorkQueueMaxLength = 0;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ArticleWorkQueueMaxLength", StringComparison.Ordinal)
+                    && failure.Contains("between 1 and 10000000", StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Article Work queue message TTL outside <c>1–86400000</c> fails validation.
+        /// </summary>
+        [Fact]
+        public void Validate_Fails_WhenArticleWorkQueueMessageTtlOutOfRange()
+        {
+            var options = CreateValidConnectivityOnly();
+            options.ArticleWorkQueueMessageTtlMilliseconds = 0;
+            var result = new RabbitMqOptionsValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static failure => failure.Contains("ArticleWorkQueueMessageTtlMilliseconds", StringComparison.Ordinal)
+                    && failure.Contains("between 1 and 86400000", StringComparison.Ordinal));
         }
 
         /// <summary>

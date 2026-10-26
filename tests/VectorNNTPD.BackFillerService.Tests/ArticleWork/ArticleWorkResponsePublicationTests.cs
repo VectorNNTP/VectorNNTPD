@@ -673,7 +673,9 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                                 ArticleWorkQueueKind.Classic,
                                 ConfiguredHostCount: 1,
                                 QuorumInitialGroupSize: null),
-                            DeliveryLimit: 10))
+                            DeliveryLimit: 5,
+                            QueueMaxLength: 10000,
+                            QueueMessageTtlMilliseconds: 60000))
                     .ContainsKey("x-dead-letter-exchange"));
         }
 

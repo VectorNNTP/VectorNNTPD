@@ -227,10 +227,36 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// application requeue cap when broker delivery-count metadata is available.
         /// </summary>
         /// <remarks>
-        /// Validated range is <c>1–1000</c>. Default <c>10</c>. Declared only when Article Work uses quorum queues
+        /// Validated range is <c>1–1000</c>. Default <c>5</c>. Declared only when Article Work uses quorum queues
         /// (<see cref="Hosts"/> count ≥ 2). Classic single-host queues do not support this broker argument.
+        /// Must match any value already configured on the queue; inequivalent values yield
+        /// <c>PRECONDITION_FAILED</c> and are not rewritten in place.
         /// </remarks>
-        public int? ArticleWorkDeliveryLimit { get; set; } = 10;
+        public int? ArticleWorkDeliveryLimit { get; set; } = 5;
+
+        /// <summary>
+        /// Maximum ready-message length declared on Article Work provider queues (<c>x-max-length</c>).
+        /// </summary>
+        /// <remarks>
+        /// Validated range is <c>1–10_000_000</c>. Default <c>10000</c>. Declared as AMQP <c>long</c> on both
+        /// classic and quorum Article Work queues so redeclaration matches existing broker policy.
+        /// Must match the value already configured on the queue; inequivalent values yield
+        /// <c>PRECONDITION_FAILED</c> and are not rewritten in place.
+        /// </remarks>
+        public int? ArticleWorkQueueMaxLength { get; set; } = 10000;
+
+        /// <summary>
+        /// Ready-message TTL declared on Article Work provider queues (<c>x-message-ttl</c>), in milliseconds.
+        /// </summary>
+        /// <remarks>
+        /// Validated range is <c>1–86_400_000</c> (one day). Default <c>60000</c>. Declared as AMQP <c>long</c>
+        /// on both classic and quorum Article Work queues so redeclaration matches existing broker policy.
+        /// Distinct from per-message expiration on Article Work <em>response</em> publications and from
+        /// <c>BackFiller:ArticleRetention:RetentionTtlSeconds</c> (in-process retained article lifetime).
+        /// Must match any value already configured on the queue; inequivalent values yield
+        /// <c>PRECONDITION_FAILED</c> and are not rewritten in place.
+        /// </remarks>
+        public int? ArticleWorkQueueMessageTtlMilliseconds { get; set; } = 60000;
 
         /// <summary>
         /// Optional AMQP CorrelationId used to gate temporary payload diagnostics.

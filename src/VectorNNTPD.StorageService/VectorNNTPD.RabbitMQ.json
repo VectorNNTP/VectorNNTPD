@@ -31,6 +31,8 @@
     "UnhealthyThreshold": 5,
     "VirtualHost": "/",
     "WorkRequestMaxPayloadBytes": 1024,
-    "ArticleWorkDeliveryLimit": 10
+    "ArticleWorkDeliveryLimit": 5,
+    "ArticleWorkQueueMaxLength": 10000,
+    "ArticleWorkQueueMessageTtlMilliseconds": 60000
   }
 }

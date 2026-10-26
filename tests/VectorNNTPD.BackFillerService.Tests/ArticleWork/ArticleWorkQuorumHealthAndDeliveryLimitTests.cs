@@ -44,8 +44,13 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
             Assert.Equal(
                 BackFillerArticleWorkTopology.ClassicQueueType,
                 declaration.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+            Assert.Equal(10000L, declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal(60000L, declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
             Assert.False(declaration.Arguments.ContainsKey(BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName));
             Assert.False(declaration.Arguments.ContainsKey(BackFillerArticleWorkTopology.DeliveryLimitArgumentName));
+            Assert.Equal(3, declaration.Arguments.Count);
             Assert.Equal(ArticleWorkQueueKind.Classic, runtime.RabbitMq.QueueTopology.Kind);
             Assert.Equal(1, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
             Assert.Null(runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
@@ -73,6 +78,11 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
                 declaration.Arguments![BackFillerArticleWorkTopology.QueueTypeArgumentName]);
             Assert.Equal(2L, declaration.Arguments[BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
             Assert.Equal(7L, declaration.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.Equal(10000L, declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal(60000L, declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.Equal(5, declaration.Arguments.Count);
             Assert.Equal(2, runtime.RabbitMq.QueueTopology.QuorumInitialGroupSize);
         }
 
@@ -83,7 +93,7 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         public async Task Three_hosts_declare_quorum_topology_with_group_size_3()
         {
             var channel = new FakeBackFillerRabbitMqChannel(1);
-            var runtime = CreateRuntime(hostCount: 3, deliveryLimit: 10);
+            var runtime = CreateRuntime(hostCount: 3, deliveryLimit: 5);
 
             await BackFillerArticleWorkTopology.DeclareProviderEndpointAsync(
                 channel,
@@ -93,6 +103,14 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 
             var declaration = Assert.Single(channel.QueueDeclarations);
             Assert.Equal(3L, declaration.Arguments![BackFillerArticleWorkTopology.QuorumInitialGroupSizeArgumentName]);
+            Assert.Equal(5L, declaration.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.Equal(10000L, declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.Equal(60000L, declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.DeliveryLimitArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MaxLengthArgumentName]);
+            Assert.IsType<long>(declaration.Arguments[BackFillerArticleWorkTopology.MessageTtlArgumentName]);
+            Assert.Equal(BackFillerArticleWorkTopology.QuorumQueueType, declaration.Arguments[BackFillerArticleWorkTopology.QueueTypeArgumentName]);
+            Assert.Equal(5, declaration.Arguments.Count);
             Assert.Equal(3, runtime.RabbitMq.QueueTopology.ConfiguredHostCount);
         }
 
