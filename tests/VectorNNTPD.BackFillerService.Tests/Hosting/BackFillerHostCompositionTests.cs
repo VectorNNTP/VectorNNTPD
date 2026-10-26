@@ -7,6 +7,7 @@ using MySqlConnector;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
@@ -35,7 +36,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
     /// </summary>
     public sealed class BackFillerHostCompositionTests
     {
-        /// <summary>Hosted service order, application-service triple (DNS, ACME, listener), and key singleton aliases match the current composition contract.</summary>
+        /// <summary>
+        /// Hosted service order (eleven BackFiller-hosted services ending with
+        /// <see cref="SilentConsumerMonitorHostedService"/> after <see cref="ArticleWorkConsumerService"/>),
+        /// application-service triple (DNS, ACME, listener), and key singleton aliases match the current composition contract.
+        /// </summary>
         [Fact]
         public void AddBackFillerHosting_registers_rabbitmq_then_article_work_consumers()
         {
@@ -45,7 +50,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             var hosted = host.Services.GetServices<IHostedService>()
                 .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
                 .ToArray();
-            Assert.Equal(10, hosted.Length);
+            Assert.Equal(11, hosted.Length);
             Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
             Assert.IsType<SystemdWatchdogService>(hosted[1]);
             Assert.IsType<NntpDbServiceHostedAdapter>(hosted[2]);
@@ -59,6 +64,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[7]);
             Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[8]);
             Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[9]);
+            Assert.IsType<SilentConsumerMonitorHostedService>(hosted[10]);
             Assert.Same(
                 host.Services.GetRequiredService<BackFillerApplicationHealth>(),
                 host.Services.GetRequiredService<IApplicationHealth>());
