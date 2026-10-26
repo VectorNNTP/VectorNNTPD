@@ -57,6 +57,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Shutdown policy captured at construction. Not re-read from options later.</summary>
         private readonly BackFillerShutdownRuntimeOptions _shutdown;
 
+        /// <summary>Clock for processing-progress stamps. Production uses <see cref="TimeProvider.System"/>.</summary>
+        private readonly TimeProvider _time;
+
+        /// <summary>
+        /// UTC ticks of the last admit or active-pipeline progress mark. Zero until the first admit.
+        /// </summary>
+        private long _lastProgressUtcTicks;
+
         /// <summary>
         /// Guards lifecycle state, the channel, the consumer tag, and the admitted-delivery count.
         /// Non-recursive. No caller enters it again on the same call stack.
@@ -100,6 +108,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         private int _disposed;
 
         /// <summary>
+        /// When non-zero, retirement cancels queued and active work even if the captured shutdown policy would finish them.
+        /// Used for processing-stall recovery so a hung handler cannot block membership rebuild.
+        /// </summary>
+        private int _forceCancelWorkOnRetire;
+
+        /// <summary>
         /// Optional callback invoked when an unexpected channel fault retires this session while it was running.
         /// The consumer service uses it to schedule an observed reconcile without reconnecting.
         /// </summary>
@@ -113,6 +127,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="pipeline">Parse/classify/settle pipeline.</param>
         /// <param name="connections">Process connection owner. Must not be used to open a second connection.</param>
         /// <param name="logger">Session logger.</param>
+        /// <param name="time">
+        /// Clock for processing-progress stamps. Null uses <see cref="TimeProvider.System"/>.
+        /// </param>
         /// <exception cref="ArgumentException">Thrown when <paramref name="backbone"/> is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="pipeline"/>, <paramref name="connections"/>, or <paramref name="logger"/> is null.
@@ -123,8 +140,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             ushort prefetch,
             ArticleWorkDeliveryPipeline pipeline,
             IRabbitMqService connections,
-            ILogger logger)
-            : this(backbone, prefetch, pipeline, connections, logger, DefaultShutdown, connectionNumber: 1, connectionLimit: 1)
+            ILogger logger,
+            TimeProvider? time = null)
+            : this(backbone, prefetch, pipeline, connections, logger, DefaultShutdown, connectionNumber: 1, connectionLimit: 1, time)
         {
         }
 
@@ -139,6 +157,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <param name="shutdown">Immutable runtime shutdown policy. Must not be re-read from options.</param>
         /// <param name="connectionNumber">One-based consume slot (old NNTP connection number).</param>
         /// <param name="connectionLimit">Desired NNTP slot count for this backbone.</param>
+        /// <param name="time">
+        /// Clock for processing-progress stamps. Null uses <see cref="TimeProvider.System"/>.
+        /// Should match the consumer service clock so stall detection and progress marks share one timeline.
+        /// </param>
         /// <exception cref="ArgumentException">Thrown when <paramref name="backbone"/> is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">
         /// Thrown when <paramref name="pipeline"/>, <paramref name="connections"/>, <paramref name="logger"/>, or <paramref name="shutdown"/> is null.
@@ -155,7 +177,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             ILogger logger,
             BackFillerShutdownRuntimeOptions shutdown,
             int connectionNumber = 1,
-            int connectionLimit = 1)
+            int connectionLimit = 1,
+            TimeProvider? time = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(backbone);
             ArgumentNullException.ThrowIfNull(pipeline);
@@ -180,6 +203,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             _connections = connections;
             _logger = logger;
             _shutdown = shutdown;
+            _time = time ?? TimeProvider.System;
         }
 
         /// <summary>Provider backbone label for this consume session. Not case-folded.</summary>
@@ -221,6 +245,53 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>Deliveries that hold <see cref="_dispatch"/> and are inside the pipeline handler.</summary>
         internal int ActiveCount => Volatile.Read(ref _active);
+
+        /// <summary>
+        /// UTC instant of the last active-pipeline enter or exit progress mark.
+        /// <see langword="null"/> until a delivery becomes active pipeline work.
+        /// </summary>
+        /// <remarks>
+        /// Admission alone does not stamp progress. A queued delivery must not reset the stall clock while
+        /// another delivery remains hung in the active pipeline.
+        /// </remarks>
+        internal DateTimeOffset? LastProgressUtc
+        {
+            get
+            {
+                var ticks = Volatile.Read(ref _lastProgressUtcTicks);
+                return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+            }
+        }
+
+        /// <summary>
+        /// True when an admitted delivery still holds the dispatch path (active pipeline work).
+        /// Queued-only waiters are not treated as processing stalls; the active holder is.
+        /// </summary>
+        internal bool HasActiveProcessing => Volatile.Read(ref _active) > 0;
+
+        /// <summary>
+        /// True when active pipeline work has made no progress for at least <paramref name="threshold"/>.
+        /// Idle sessions (no active work) never stall. Legitimate ARTICLE receive budgets are covered by
+        /// choosing a threshold above <see cref="Nntp.NntpSessionOptions"/> command and receive timeouts.
+        /// </summary>
+        /// <param name="threshold">Minimum age of the last progress mark before stall is declared.</param>
+        /// <returns>Whether the session should be retired and rebuilt by membership reconcile.</returns>
+        internal bool IsActiveProcessingStalled(TimeSpan threshold)
+        {
+            if (!HasActiveProcessing)
+            {
+                return false;
+            }
+
+            var ticks = Volatile.Read(ref _lastProgressUtcTicks);
+            if (ticks == 0)
+            {
+                return false;
+            }
+
+            var age = _time.GetUtcNow() - new DateTimeOffset(ticks, TimeSpan.Zero);
+            return age >= threshold;
+        }
 
         /// <summary>Cancelled when retirement or dispose must not admit new queued pipeline work.</summary>
         private CancellationToken QueueCancellationToken => _queueCts.Token;
@@ -378,6 +449,26 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         internal Task RetireAsync() => RetireAsync(CancellationToken.None);
 
         /// <summary>
+        /// Retires the session for recovery, cancelling queued and active work even when the shutdown policy would finish them.
+        /// </summary>
+        /// <param name="shutdownToken">Forwarded to <see cref="RetireAsync(CancellationToken)"/>.</param>
+        /// <returns>The session retirement task.</returns>
+        /// <remarks>
+        /// Used when active pipeline work is stalled past <see cref="ArticleWorkConsumerService.ProcessingStallThreshold"/>.
+        /// Without forced cancel, a hung handler would block drain forever and prevent consumer rebuild.
+        /// </remarks>
+        internal Task RetireForRecoveryAsync(CancellationToken shutdownToken)
+        {
+            Interlocked.Exchange(ref _forceCancelWorkOnRetire, 1);
+            var retireTask = RetireAsync(shutdownToken);
+            // If a non-recovery RetireAsync already won publication, RetireCore may still be waiting
+            // under FinishActiveArticles. Cancel both tokens so a hung handler cannot deadlock rebuild.
+            _queueCts.Cancel();
+            _workCts.Cancel();
+            return retireTask;
+        }
+
+        /// <summary>
         /// Cancels the consumer, applies the captured shutdown policy, and waits until admitted work drains or <paramref name="shutdownToken"/> is cancelled.
         /// </summary>
         /// <param name="shutdownToken">
@@ -420,7 +511,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 _retireTask = retireTask;
             }
 
-            if (!_shutdown.DrainQueuedWork)
+            if (!_shutdown.DrainQueuedWork || Volatile.Read(ref _forceCancelWorkOnRetire) == 1)
             {
                 _queueCts.Cancel();
             }
@@ -499,12 +590,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 _ = await TryBasicCancelAsync(channel, consumerTag).ConfigureAwait(false);
             }
 
-            if (!_shutdown.DrainQueuedWork)
+            var forceCancel = Volatile.Read(ref _forceCancelWorkOnRetire) == 1;
+            if (!_shutdown.DrainQueuedWork || forceCancel)
             {
                 await _queueCts.CancelAsync().ConfigureAwait(false);
             }
 
-            if (!_shutdown.FinishActiveArticles)
+            if (!_shutdown.FinishActiveArticles || forceCancel)
             {
                 await _workCts.CancelAsync().ConfigureAwait(false);
             }
@@ -651,12 +743,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     }
 
                     Interlocked.Increment(ref _active);
+                    MarkProgress();
                     try
                     {
                         await ProcessCurrentAsync(delivery, _workCts.Token).ConfigureAwait(false);
                     }
                     finally
                     {
+                        MarkProgress();
                         Interlocked.Decrement(ref _active);
                     }
                 }
@@ -805,6 +899,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 return true;
             }
         }
+
+        /// <summary>
+        /// Records an active-pipeline progress stamp on <see cref="_time"/> for stall detection during membership reconcile.
+        /// </summary>
+        private void MarkProgress() =>
+            Volatile.Write(ref _lastProgressUtcTicks, _time.GetUtcNow().UtcTicks);
 
         /// <summary>
         /// Decrements the admitted count and completes drain when retirement is waiting and nothing admitted remains.

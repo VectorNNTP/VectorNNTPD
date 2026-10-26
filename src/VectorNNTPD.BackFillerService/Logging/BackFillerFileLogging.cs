@@ -56,7 +56,13 @@ namespace VectorNNTPD.BackFillerService.Logging
         /// <summary>
         /// When true, the async file and RabbitMQ wrappers block once <see cref="AsyncBufferSize"/> events are queued.
         /// </summary>
-        private const bool AsyncBlockWhenFull = true;
+        /// <remarks>
+        /// False so a stalled file sink (disk full, day-roll gzip under lock) drops excess events instead of
+        /// blocking article-path loggers and delaying settlement. Daily rotation, compression, and retention
+        /// are unchanged. Critical diagnostics may be lost under sustained backpressure; Serilog SelfLog may
+        /// record drops. Prefer ops alerts on log-volume disk pressure over blocking the data plane.
+        /// </remarks>
+        private const bool AsyncBlockWhenFull = false;
 
         /// <summary>Passed as the File sink <c>buffered</c> flag. True leaves that sink buffered.</summary>
         private const bool FileBuffered = true;

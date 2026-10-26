@@ -344,13 +344,18 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
 
             await consumer.StartAsync(CancellationToken.None);
             Assert.Empty(consumer.Sessions);
+            Assert.True(consumer.ConsecutiveInfrastructureUnavailable >= 1);
+
+            await consumer.ReconcileAsync(CancellationToken.None);
+            Assert.True(consumer.ConsecutiveInfrastructureUnavailable >= 2);
 
             probe.Next = Healthy(required: 3, observed: 3, online: 3);
             await consumer.ReconcileAsync(CancellationToken.None);
 
             var session = Assert.Single(consumer.Sessions);
             Assert.Equal(ArticleWorkConsumerState.Running, session.State);
-            Assert.True(probe.InspectCount >= 2);
+            Assert.Equal(0, consumer.ConsecutiveInfrastructureUnavailable);
+            Assert.True(probe.InspectCount >= 3);
 
             await consumer.DisposeAsync();
             await connections.DisposeAsync();

@@ -32,6 +32,19 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Upper bound for the reconcile-loop backoff after repeated unexpected faults or topology-not-ready passes.</summary>
         private static readonly TimeSpan ReconcileBackoffCap = TimeSpan.FromMinutes(2);
 
+        /// <summary>
+        /// Age of the last active-pipeline progress mark before a healthy-looking session is retired and rebuilt.
+        /// </summary>
+        /// <remarks>
+        /// Exceeds default NNTP connect, command, and ARTICLE receive budgets so a legitimate long retrieval is not
+        /// treated as a stall. Idle sessions (no active work) are never retired by this threshold.
+        /// </remarks>
+        internal static readonly TimeSpan ProcessingStallThreshold =
+            NntpSessionOptions.Default.ConnectTimeout
+            + NntpSessionOptions.Default.CommandTimeout
+            + NntpSessionOptions.Default.ReceiveTimeout
+            + TimeSpan.FromMinutes(1);
+
         /// <summary>Process RabbitMQ connection owner. This service opens channels on it and does not open another connection.</summary>
         private readonly IRabbitMqService _connections;
 
@@ -72,6 +85,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>How many times the loop has armed its delay. Used by tests to observe backoff without a second loop.</summary>
         private int _reconcileWaitsStarted;
+
+        /// <summary>
+        /// Consecutive reconcile passes that returned <see cref="ReconcilePass.InfrastructureUnavailable"/>.
+        /// Reset when a pass succeeds. Used for sustained topology/quorum unavailability observability.
+        /// </summary>
+        private int _consecutiveInfrastructureUnavailable;
 
         /// <summary>
         /// Guards the session dictionary, <see cref="_stopping"/>, and publication of <see cref="_replaceTask"/>.
@@ -193,6 +212,12 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
         /// <summary>How many reconcile delays the loop has armed, including the delay that follows a fault.</summary>
         internal int ReconcileWaitsStarted => Volatile.Read(ref _reconcileWaitsStarted);
+
+        /// <summary>
+        /// Consecutive infrastructure-unavailable reconcile passes. Zero after a successful membership pass.
+        /// </summary>
+        internal int ConsecutiveInfrastructureUnavailable =>
+            Volatile.Read(ref _consecutiveInfrastructureUnavailable);
 
         /// <summary>Delay the loop will use for the wait it has armed or will arm next.</summary>
         internal TimeSpan CurrentReconcileDelay => TimeSpan.FromTicks(Volatile.Read(ref _reconcileDelayTicks));
@@ -571,6 +596,42 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             session.State == ArticleWorkConsumerState.Running
             && session.Channel is { IsOpen: true };
 
+        /// <summary>
+        /// Records a topology/quorum unavailability pass and logs desired capacity versus healthy consumers.
+        /// Does not change fail-closed membership policy.
+        /// </summary>
+        /// <param name="desiredSlotCount">Slots desired at the start of this reconcile pass.</param>
+        private void ObserveInfrastructureUnavailable(int desiredSlotCount)
+        {
+            var streak = Interlocked.Increment(ref _consecutiveInfrastructureUnavailable);
+            int healthy;
+            lock (_gate)
+            {
+                healthy = _sessions.Values.Count(IsHealthyRunningSession);
+            }
+
+            ArticleWorkLogMessages.ConsumerInfrastructureUnavailable(
+                _logger,
+                desiredSlotCount,
+                healthy,
+                streak);
+        }
+
+        /// <summary>
+        /// Clears a prior infrastructure-unavailable streak after a successful membership pass.
+        /// </summary>
+        /// <param name="desiredSlotCount">Slots desired at the start of the recovering pass.</param>
+        private void ObserveInfrastructureRecovered(int desiredSlotCount)
+        {
+            var prior = Interlocked.Exchange(ref _consecutiveInfrastructureUnavailable, 0);
+            if (prior <= 0)
+            {
+                return;
+            }
+
+            ArticleWorkLogMessages.ConsumerInfrastructureRecovered(_logger, desiredSlotCount, prior);
+        }
+
         /// <summary>Reconciles after a capacity snapshot.</summary>
         /// <returns>
         /// A task that completes when <see cref="ReconcileAsync"/> finishes or its exception has been logged.
@@ -621,14 +682,30 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 : (ushort)1;
 
             var desired = BuildDesiredSessions();
+            var desiredSlotCount = desired.Count;
             var started = new List<ArticleWorkConsumerSession>();
             List<ArticleWorkConsumerSession> stale = [];
+            HashSet<ArticleWorkConsumerSession> stalled = [];
             lock (_gate)
             {
                 foreach (var pair in _sessions.ToArray())
                 {
                     if (desired.ContainsKey(pair.Key) && IsHealthyRunningSession(pair.Value))
                     {
+                        if (pair.Value.IsActiveProcessingStalled(ProcessingStallThreshold))
+                        {
+                            ArticleWorkLogMessages.ConsumerProcessingStalled(
+                                _logger,
+                                pair.Value.Backbone,
+                                pair.Value.Generation,
+                                pair.Value.ActiveCount,
+                                ProcessingStallThreshold);
+                            _sessions.Remove(pair.Key);
+                            stale.Add(pair.Value);
+                            stalled.Add(pair.Value);
+                            continue;
+                        }
+
                         desired.Remove(pair.Key);
                         continue;
                     }
@@ -640,7 +717,10 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             foreach (var session in stale)
             {
-                await session.RetireAsync(cancellationToken).ConfigureAwait(false);
+                var retire = stalled.Contains(session)
+                    ? session.RetireForRecoveryAsync(cancellationToken)
+                    : session.RetireAsync(cancellationToken);
+                await retire.ConfigureAwait(false);
                 await session.DisposeAsync().ConfigureAwait(false);
             }
 
@@ -657,6 +737,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 infrastructureUnavailable = requestedBackbones.Any(backbone => !readyBackbones.Contains(backbone));
                 if (readyBackbones.Count == 0)
                 {
+                    ObserveInfrastructureUnavailable(desiredSlotCount);
                     return ReconcilePass.InfrastructureUnavailable;
                 }
 
@@ -680,7 +761,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                         _logger,
                         _runtime.Shutdown,
                         identity.ConnectionNumber,
-                        identity.ConnectionLimit)
+                        identity.ConnectionLimit,
+                        _time)
                     {
                         UnexpectedChannelFault = OnSessionChannelFaulted,
                     };
@@ -722,9 +804,11 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
 
             if (infrastructureUnavailable)
             {
+                ObserveInfrastructureUnavailable(desiredSlotCount);
                 return ReconcilePass.InfrastructureUnavailable;
             }
 
+            ObserveInfrastructureRecovered(desiredSlotCount);
             ArticleWorkLogMessages.ConsumerReconcileCompleted(_logger, Sessions.Count);
             return ReconcilePass.Succeeded;
         }

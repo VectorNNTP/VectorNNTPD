@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Console;
 using VectorNNTPD.BackFillerService.Accounts;
 using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor;
 using VectorNNTPD.BackFillerService.Configuration;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
@@ -60,7 +61,11 @@ namespace VectorNNTPD.BackFillerService.Hosting
         /// <see cref="RabbitMqServiceHostedAdapter"/>, <see cref="NntpProviderRegistry"/>,
         /// <see cref="BackFillerApplicationHostedService"/>,
         /// <see cref="ArticleRetentionSweepService"/>, <see cref="ArticleWorkResponsePublisher"/>,
-        /// then <see cref="ArticleWorkConsumerService"/>.
+        /// <see cref="ArticleWorkConsumerService"/>, then <see cref="SilentConsumerMonitorHostedService"/>.
+        /// Silent-consumer registration also binds <see cref="SilentConsumerMonitorOptions"/>,
+        /// registers <see cref="ManagementQueueClient"/> with named HTTP client
+        /// <see cref="ManagementQueueClient.HttpClientName"/>, and a singleton
+        /// <see cref="SilentConsumerMonitorEngine"/> keyed by runtime FQDN.
         /// The notifier is first so it is constructed before later hosted services and can observe
         /// <see cref="IHostApplicationLifetime.ApplicationStarted"/> and
         /// <see cref="IHostApplicationLifetime.ApplicationStopping"/>.
@@ -300,6 +305,28 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 provider.GetRequiredService<ArticleWorkConsumerService>());
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<ArticleWorkConsumerService>());
+
+            builder.Services
+                .AddOptions<SilentConsumerMonitorOptions>()
+                .BindConfiguration(
+                    BackFillerOptions.SectionName + ":" + SilentConsumerMonitorOptions.SectionRelativeName)
+                .ValidateOnStart();
+            builder.Services.AddSingleton<IValidateOptions<SilentConsumerMonitorOptions>, SilentConsumerMonitorOptionsValidator>();
+            builder.Services.AddHttpClient(ManagementQueueClient.HttpClientName, static client =>
+            {
+                client.Timeout = Timeout.InfiniteTimeSpan;
+                client.DefaultRequestHeaders.ExpectContinue = false;
+            });
+            builder.Services.AddSingleton<ManagementQueueClient>();
+            builder.Services.AddSingleton(static provider =>
+            {
+                var runtime = provider.GetRequiredService<BackFillerRuntimeOptions>();
+                return new SilentConsumerMonitorEngine(
+                    () => runtime.Fqdn,
+                    provider.GetRequiredService<ILogger<SilentConsumerMonitorEngine>>(),
+                    provider.GetRequiredService<TimeProvider>());
+            });
+            builder.Services.AddHostedService<SilentConsumerMonitorHostedService>();
 
             return builder;
         }

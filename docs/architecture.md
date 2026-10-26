@@ -24,6 +24,92 @@ Article Work shutdown uses `BackFillerShutdownOptions`:
 
 The consumer membership loop waits 15 seconds after a pass that started every desired consumer, including a pass with nothing to start. A pass that cannot declare topology because RabbitMQ is not ready, because channel creation or declaration failed for a desired backbone, or because Management-plane quorum membership is deficient or unverifiable, does not reset that delay. The next wait doubles, up to 2 minutes. An unexpected exception uses the same delay and does not end the loop. Shutdown cancellation ends the loop and is not a failure. The host stays healthy while RabbitMQ is temporarily unavailable. Capacity snapshots and connection replacement reconcile once on the shared gate and do not change the delay. If replacement cannot restore a session, the same periodic loop retries it. A later successful pass resets the delay to 15 seconds.
 
+Active-processing stalls (`IsActiveProcessingStalled` / Event 5328) are remediated only by that reconcile path (`RetireForRecoveryAsync`). Silent-consumer monitoring may observe the same predicate but does not introduce a second recovery action.
+
+## Silent-consumer monitoring (in-process)
+
+Monitoring runs inside each `BackFillerService` process as `SilentConsumerMonitorHostedService`. There is no separate monitor executable. Multiple concurrent BackFiller instances consuming the same provider queues are the intended operating model. The monitor is observational only: it does not call `RetireForRecoveryAsync` or otherwise compete with Article Work reconcile recovery (Event 5328).
+
+### RabbitMQ configuration sources (traced)
+
+| Setting | Authoritative source | Runtime update |
+|---|---|---|
+| AMQP `Hosts`, `Port`, `VirtualHost`, TLS | Bound `RabbitMQ` section (`VectorNNTPD.RabbitMQ.json` / env). **Not** columns in `nntpsharedconfig`. | Captured into `RabbitMqService`'s start-time `RabbitMqRuntimeOptions` for logging, reconnect backoff, and related fields. Each `ConnectAndInstallAsync` dials via `ConnectAsync(_options.Value, …)` so the factory builds from the **live** `RabbitMqOptions` at that attempt. Hosts/vhost/TLS are not database-managed; changing the bound JSON/env still requires a process restart to pick up new endpoints in practice (they are not projected from MySQL). |
+| Management `BaseUrl`, `RequestTimeoutSeconds` | `RabbitMQ:Management` in the same section. Distinct from AMQP port 5672. | Read live from `IOptions<RabbitMqOptions>` on each Management HTTP call (monitor and quorum probe). |
+| Username / password | MySQL `nntpsharedconfig.rabbitmqusername` / `rabbitmqpassword` via `ProviderAccountConfigurationService.Project` → `NntpSharedConfiguration.CopyRabbitMqCredentialsTo`. Bound JSON/env credentials are discarded at options PostConfigure. | Written onto the live `RabbitMqOptions` instance each account refresh. Management clients see new credentials on the next HTTP request. AMQP uses those live credentials on the **next** connection attempt (`ConnectAndInstallAsync` → factory `ToRuntimeOptions()` from `_options.Value`); an already-open connection is not re-authenticated in place. |
+| Article Work queues | MySQL provider catalog (`nntpbackfilleraccounts` → `ProviderConfigurationCatalog`). Queue name = `BackFillerRabbitMqTopology.ComposeProviderEntity(backbone)` → `backfiller.{normalized}`. | Catalog `Publish` replaces the list; monitor resolves targets every cycle. |
+| Expected capacity for shared ConsumerLoss | `MaxSessions > 0` and `IBackboneUsableCapacityProvider.HasUsableCapacityForBackbone` (same gate as `BuildDesiredSessions`). | Capacity snapshots publish from `NntpProviderRegistry`; monitor re-reads each cycle. |
+
+There is no database column for Management URL or AMQP hosts in this repository. The monitor does not invent Management from the AMQP host/port. Missing `RabbitMQ:Management:BaseUrl` or credentials yields a clear unavailable diagnostic; instance-local monitoring continues.
+
+Optional public switch only: `BackFiller:SilentConsumerMonitor:Enabled` (default true). Detection windows live in `SilentConsumerMonitorDefaults` (`ProcessingStall` / `DispatchStall` / `ConsumerLoss`).
+
+### Observation pipeline
+
+Each monitor cycle: project live `ArticleWorkConsumerSession` counters via `SilentConsumerSessionObservation.FromSession` → `SilentConsumerMonitorEngine.ObserveInstance` → (when Management is configured) `ManagementQueueClient.GetQueueAsync` → `ObserveSharedQueue`. Instance evaluation always runs before the Management gate, so missing BaseUrl, missing credentials, or Management HTTP failures do not disable local Detection. Opened / Continued / Resolved transitions emit structured events 9110–9112 with `scope`, `condition`, `target` (session key or queue name), and `instanceId`.
+
+| Condition | Observation source | Open window / resolve | Alert identity | Opens when | Resolves when |
+|---|---|---|---|---|---|
+| Instance ProcessingStall | Session `IsActiveProcessingStalled` (progress clock; same predicate as Event 5328) | 90s / 20s | `Instance` + session key | Running and actively stalled | Predicate clears for resolve window, or session removed |
+| Instance DispatchStall | Session `QueuedCount` / `ActiveCount` from admit → `_dispatch` → `_active++` | 90s / 20s | `Instance` + session key | Running, queued &gt; 0, active == 0 | Queued clears / active advances for resolve window, or session removed |
+| Instance ConsumerLoss | Desired slot count vs Running+open-channel sessions on this process | 45s / 20s | `Instance` + `local` | Desired &gt; 0 and zero usable local consumers | A local consumer returns, or desired becomes 0 |
+| Shared ProcessingStall | Management unacked + near-zero ack rate with consumers ≥ 1 | 90s / 20s | `SharedQueue` + queue name | Aggregate looks stalled | Aggregate progress returns, or target pruned |
+| Shared DispatchStall | Management ready backlog + near-zero deliver/ack | 90s / 20s | `SharedQueue` + queue name | Aggregate looks stalled | Aggregate progress returns, or target pruned |
+| Shared ConsumerLoss | Management `consumers == 0` + ready floor while expected-active | 45s / 20s | `SharedQueue` + queue name | Fleet-wide empty consumers with backlog | A consumer reappears, capacity not expected, or target pruned |
+
+### Dispatch-acquisition failure mode
+
+Admission increments `_inFlight` before the dispatch lock. `QueuedCount` is `_inFlight - _active`. The session waits on `_dispatch`, optionally on the test seam `DispatchAcquireHold`, then increments `_active` and enters the pipeline. A hold (or any block) after the lock and before `_active++` leaves the consumer registered, the channel open, local work queued, and `IsActiveProcessingStalled` false because active processing never started. Instance DispatchStall covers that gap; active-processing recovery (Event 5328) remains authoritative once `_active &gt; 0`.
+
+Legitimate idleness is `QueuedCount == 0` (and typically `ActiveCount == 0`): no DispatchStall. Broker ready count is not used for instance DispatchStall.
+
+### Per-instance health
+
+Local session projections only (no Management call). Events include `instanceId` = runtime FQDN. ProcessingStall and DispatchStall are keyed by the canonical session identity `ArticleWorkConsumerSession.ComposeSessionKey` (`backbone/connectionNumber`) so multiple `MaxSessions` slots on the same backbone — and distinct backbones — keep independent observation state. Shared-queue observations remain keyed by queue name only. Removing one session applies Inactive `"session removed"` only to that session key.
+
+| Condition | Investigation label | Predicate | Idle vs fault |
+|---|---|---|---|
+| ProcessingStall | D | Running session with `IsActiveProcessingStalled` (same as reconcile) | Idle sessions never stall (`HasActiveProcessing` false). |
+| DispatchStall | D2 | Running, `QueuedCount > 0`, `ActiveCount == 0` (dispatch hold before `_active++`, including `DispatchAcquireHold`) | `QueuedCount == 0` is legitimate idle, not a stall. |
+| ConsumerLoss | E | Desired slots (usable capacity × MaxSessions) &gt; 0 and zero Running sessions with an open channel on **this** process | Desired=0 → inactive. |
+
+A healthy sibling session on the same process, or a sibling instance advancing aggregate ACK/deliver rates, cannot clear these local observations.
+
+### Shared queue health
+
+Management polling of catalog-derived queues when BaseUrl and projected credentials exist. Aggregate gauges/rates describe the queue, not a consumer identity. A healthy sibling keeps shared ProcessingStall/DispatchStall/ConsumerLoss inactive while still leaving local stalls visible on the broken instance. Shared ConsumerLoss requires `consumers == 0`, ready backlog, and expected-active capacity on this instance. Idle or capacity-empty queues are not faults.
+
+Every polling instance may emit the same shared observation independently (**no cross-process deduplication**). Removing a provider from the catalog emits an explicit Resolved event for any open shared observation on that queue (target gone — not broker recovery), then drops history; reintroducing the provider recreates fresh history and state machines (next Open is a new Opened, not Continued). In-memory alert state is per process and is lost on restart.
+
+### Management outages and `Unknown`
+
+Two distinct unavailability paths:
+
+1. **Management not ready to poll** (missing `BaseUrl` or credentials): HostedService skips `ObserveSharedQueue` and emits Event 9123 once per transition into unavailable. No `Unknown` signal is applied; any already-open shared alerts simply remain as last evaluated.
+2. **Management polled but sample unusable** (HTTP auth/timeout/transport/incomplete gauges): `ObserveSharedQueue` records a failure sample; shared evaluators return `ConditionSignal.Unknown`. The state machine neither opens nor resolves on `Unknown`. Event 9113 may log (rate-limited per observation key = scope + condition + queue/session target, interval = ProcessingStall open window) that an already-open alert received Unavailable/`Unknown` and was retained — not that Management was never configured.
+
+Consequences:
+
+- An already-`Open` shared alert **remains Open** for the duration of a Management outage or while polls return non-success. That freeze is intentional: lack of observation must not be treated as recovery or as proof the underlying queue condition cleared.
+- An `Open` shared alert during an outage does **not** establish that the broker condition is still present; it only means the last successful evaluation left the alert open and no conclusive Inactive signal has been observed since.
+- `Unknown` is not healthy and is not recovery.
+- Instance-local monitoring continues on every cycle before the Management gate (`ObserveInstance` always runs). Missing BaseUrl, missing credentials, or HTTP failures do not disable local ProcessingStall / DispatchStall / ConsumerLoss.
+- When valid Management samples resume, shared conditions are reevaluated: Active continues an open alert, Inactive starts the resolve window, and catalog prune still emits Resolved with the target-removed reason (monitoring-scope change, not broker recovery).
+- Event 9113 / Continued rate-limit state is keyed per observation identity (not global across queues or conditions). Shared prune removes that rate-limit entry with the machine.
+
+### Known limitations
+
+- Shared metrics cannot identify which consumer is unhealthy; they only describe the queue aggregate.
+- Duplicate shared Opens across BackFiller instances are expected.
+- Shared alerts may remain `Open` while Management observations are unavailable (`Unknown` or no poll); operators must not read that freeze as confirmed ongoing fault or as recovery.
+- Instance DispatchStall sees only this process’s admitted queue, not another instance’s waiting work on the same broker queue.
+- `MaxSessions &gt; 0` with usable capacity means desired consume slots exist; it does not prove a broker consumer tag is present until the session reaches Running with an open channel.
+- Monitor observations do not recover sessions; reconcile remains the only remediation for Event 5328.
+
+### Isolation
+
+Monitor HTTP never enters Article Work dispatch, settlement, NNTP, or ACK/NACK paths. Failed/missing metrics are `Unknown` (never invented as zero). The monitor does not change reconcile, topology, or logging retention.
+
 Provider queue type is derived from the configured unique `RabbitMQ:Hosts` count (never from reachable hosts or live cluster members). Exactly one host declares a durable classic queue (`x-queue-type=classic`) without quorum arguments or Management quorum health. Two or more hosts declare a durable quorum queue with `x-quorum-initial-group-size` and readiness membership floor equal to that host count, plus configured `x-delivery-limit`. All configured hosts must belong to the same RabbitMQ cluster; the client host list does not establish membership. Successful AMQP quorum declaration alone does not mark a backbone ready: readiness also requires Management HTTP verification of members, online members, and leader. Pre-existing queues with inequivalent type or immutable arguments are not deleted or recreated; operators must migrate or grow membership explicitly. Changing `Hosts` from one entry to multiple (or the reverse) changes the desired queue type and is not a safe in-place conversion. Management outages and timeouts leave multi-host backbones unready and follow the same reconcile backoff.
 
 ## Article Work settlement
