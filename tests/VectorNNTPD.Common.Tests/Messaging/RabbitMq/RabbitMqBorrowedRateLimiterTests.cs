@@ -1,5 +1,6 @@
 using System.Threading.RateLimiting;
 using RabbitMQ.Client;
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 
 namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
@@ -72,23 +73,18 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         [Fact]
         public async Task Dispose_of_inner_limiter_rejects_further_acquires()
         {
-            var inner = new ThrottlingRateLimiter(4);
-            try
+            // DisposableOwnership makes mid-test owner disposal a using-friendly no-op at scope exit
+            // (atomic exchange clears the held resource before Dispose runs on the limiter).
+            using var ownership = new DisposableOwnership<ThrottlingRateLimiter>(
+                new ThrottlingRateLimiter(4));
+            await using (var borrowed = new RabbitMqBorrowedRateLimiter(ownership.Resource))
             {
-                await using (var borrowed = new RabbitMqBorrowedRateLimiter(inner))
-                {
-                    inner.Dispose();
+                ownership.Dispose();
 
-                    await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-                    {
-                        _ = await borrowed.AcquireAsync(1);
-                    });
-                }
-            }
-            finally
-            {
-                // Idempotent if already disposed above; covers assertion-failure paths before Dispose.
-                inner.Dispose();
+                await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+                {
+                    _ = await borrowed.AcquireAsync(1);
+                });
             }
         }
     }
