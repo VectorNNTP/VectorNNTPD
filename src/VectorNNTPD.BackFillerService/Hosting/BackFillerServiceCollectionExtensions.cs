@@ -5,6 +5,7 @@ using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
 using VectorNNTPD.BackFillerService.Listener;
@@ -203,10 +204,38 @@ namespace VectorNNTPD.BackFillerService.Hosting
                 provider.GetRequiredService<IOptions<BackFillerOptions>>(),
                 provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
                 provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>(),
-                provider.GetRequiredService<IOptions<RabbitMqOptions>>()));
+                provider.GetRequiredService<IOptions<RabbitMqOptions>>(),
+                provider.GetRequiredService<IOptions<LabUpstreamIsolationOptions>>()));
             builder.Services.AddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
                 provider.GetRequiredService<ProviderAccountConfigurationService>());
-            builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();
+            builder.Services
+                .AddOptions<LabUpstreamIsolationOptions>()
+                .BindConfiguration(
+                    BackFillerOptions.SectionName + ":" + LabUpstreamIsolationOptions.SectionRelativeName)
+                .ValidateOnStart();
+            builder.Services.AddSingleton<IValidateOptions<LabUpstreamIsolationOptions>, LabUpstreamIsolationOptionsValidator>();
+
+            builder.Services
+                .AddOptions<LabStageProfilingOptions>()
+                .BindConfiguration(
+                    BackFillerOptions.SectionName + ":" + LabStageProfilingOptions.SectionRelativeName)
+                .ValidateOnStart();
+            builder.Services.AddSingleton<IValidateOptions<LabStageProfilingOptions>, LabStageProfilingOptionsValidator>();
+
+            // Concrete TCP factory is always registered; INntpTransportFactory wraps it with the lab
+            // allowlist only when BackFiller:LabUpstreamIsolation:Enabled is true (default false).
+            builder.Services.TryAddSingleton<TcpNntpTransportFactory>();
+            builder.Services.AddSingleton<INntpTransportFactory>(static provider =>
+            {
+                var inner = provider.GetRequiredService<TcpNntpTransportFactory>();
+                var lab = provider.GetRequiredService<IOptions<LabUpstreamIsolationOptions>>().Value;
+                if (!lab.Enabled)
+                {
+                    return inner;
+                }
+
+                return new LabUpstreamAllowlistNntpTransportFactory(inner, lab);
+            });
             builder.Services.AddSingleton<BackboneUsableCapacityState>();
             builder.Services.AddSingleton<IBackboneUsableCapacityProvider>(static provider =>
                 provider.GetRequiredService<BackboneUsableCapacityState>());
@@ -245,6 +274,8 @@ namespace VectorNNTPD.BackFillerService.Hosting
             builder.Services.AddSingleton(static provider => new ArticleRetentionSweepService(
                 provider.GetRequiredService<IArticleRetentionAuthority>(),
                 provider.GetRequiredService<ILogger<ArticleRetentionSweepService>>()));
+            builder.Services.AddSingleton(static provider => new ArticleRetentionMetrics(
+                provider.GetRequiredService<IArticleRetentionAuthority>()));
             builder.Services.AddSingleton(static provider => new CacheListenerService(
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
                 provider.GetRequiredService<ITlsCertificateContextProvider>(),
@@ -261,6 +292,11 @@ namespace VectorNNTPD.BackFillerService.Hosting
             builder.Services.AddSingleton<IHostedService, BackFillerApplicationHostedService>();
             builder.Services.AddSingleton<IHostedService>(static provider =>
                 provider.GetRequiredService<ArticleRetentionSweepService>());
+            builder.Services.AddSingleton<IHostedService>(static provider =>
+                provider.GetRequiredService<ArticleRetentionMetrics>());
+            builder.Services.AddSingleton<ArticleWorkStageProfilingHostedService>();
+            builder.Services.AddHostedService(static provider =>
+                provider.GetRequiredService<ArticleWorkStageProfilingHostedService>());
             // Rebuild when the runtime FQDN changes after nntpsharedconfig projection. A plain
             // singleton NntpArticleParser would keep the config-file identity forever.
             builder.Services.AddSingleton(static provider =>

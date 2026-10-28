@@ -5,20 +5,21 @@ using VectorNNTPD.BackFillerService.Nntp;
 namespace VectorNNTPD.BackFillerService.Tests.Nntp
 {
     /// <summary>
-    /// Rent, growth, trim, and disposal of <see cref="NntpStreamReader"/> payload scratch.
-    /// The retained request after a payload read is 1 MiB. A larger rental is returned once that read finishes.
+    /// Rent, growth, release, and disposal of <see cref="NntpStreamReader"/> payload scratch.
+    /// After each ARTICLE payload finishes (including when the consumer throws), the scratch lease is returned.
+    /// The next ARTICLE rents again. Disposal must not double-return.
     /// </summary>
     public sealed class NntpPayloadScratchPoolTests
     {
-        /// <summary>Request size the reader keeps for later ordinary articles.</summary>
+        /// <summary>Initial rent request size for ordinary articles (matches production).</summary>
         private const int WorkingSetBytes = 1024 * 1024;
 
         /// <summary>Article ceiling used when a test must be allowed to pass 1 MiB.</summary>
         private const int MaximumArticleBytes = 5 * 1024 * 1024;
 
-        /// <summary>Two small payloads on one reader rent a single scratch.</summary>
+        /// <summary>Two small payloads on one reader each return their scratch; bytes stay correct.</summary>
         [Fact]
-        public async Task Ordinary_payloads_reuse_one_scratch_without_corruption()
+        public async Task Ordinary_payloads_return_scratch_between_articles_without_corruption()
         {
             var first = Pattern(48);
             var second = Pattern(80, seed: 9);
@@ -26,14 +27,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             using var reader = Reader(Frame(first).Concat(Frame(second)).ToArray(), pool);
 
             Assert.Equal(first, await ReadExactAsync(reader, WorkingSetBytes));
-            var rentsAfterFirst = pool.RentCount;
-            Assert.Equal(second, await ReadExactAsync(reader, WorkingSetBytes));
+            Assert.Equal(1, pool.RentCount);
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(0, pool.OutstandingCount);
 
-            Assert.Equal(rentsAfterFirst, pool.RentCount);
-            Assert.Equal(0, pool.ReturnCount);
-            Assert.Equal(1, pool.OutstandingCount);
-            Assert.True(pool.OutstandingRequests().Single() <= WorkingSetBytes);
-            Assert.True(pool.OutstandingLengths().Single() >= pool.OutstandingRequests().Single());
+            Assert.Equal(second, await ReadExactAsync(reader, WorkingSetBytes));
+            Assert.Equal(2, pool.RentCount);
+            Assert.Equal(2, pool.ReturnCount);
+            Assert.Equal(0, pool.OutstandingCount);
         }
 
         /// <summary>An array longer than the rental request still carries the payload and is returned once.</summary>
@@ -45,8 +46,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             using var reader = Reader(Frame(payload), pool);
             Assert.Equal(payload, await ReadExactAsync(reader, maxBytes: 256));
             Assert.Equal(1, pool.RentCount);
-            Assert.True(pool.OutstandingLengths().Single() >= pool.OutstandingRequests().Single() + 128);
-            Assert.Equal(0, pool.ReturnCount);
+            Assert.Equal(1, pool.ReturnCount);
+            Assert.Equal(0, pool.OutstandingCount);
+            Assert.True(pool.ReturnedArrays.Single().Length >= 256 + 128);
 
             reader.Dispose();
             reader.Dispose();
@@ -54,26 +56,27 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(0, pool.OutstandingCount);
         }
 
-        /// <summary>A payload that crosses 1 MiB returns the replaced scratch, and the destuffed bytes match.</summary>
+        /// <summary>Growth returns replaced buffers; the final lease is released after the article.</summary>
         [Fact]
-        public async Task Growth_returns_the_replaced_buffer_and_preserves_received_bytes()
+        public async Task Growth_returns_replaced_buffers_and_releases_after_article()
         {
             var payload = Pattern(WorkingSetBytes + 64);
             var pool = CreatePooled();
             using (var reader = Reader(Frame(payload), pool))
             {
                 Assert.Equal(payload, await ReadExactAsync(reader, MaximumArticleBytes));
+                Assert.True(pool.RentCount > 1);
+                Assert.Equal(0, pool.OutstandingCount);
+                Assert.Equal(pool.RentCount, pool.ReturnCount);
                 Assert.Contains(pool.ReturnedRequests, static request => request > 0 && request <= WorkingSetBytes);
-                Assert.Equal(WorkingSetBytes, pool.OutstandingRequests().Single());
-                Assert.True(pool.OutstandingLengths().Single() >= WorkingSetBytes);
             }
 
             Assert.Equal(pool.RentCount, pool.ReturnCount);
         }
 
-        /// <summary>Exactly 1 MiB does not grow. One byte past it is trimmed back to a 1 MiB request.</summary>
+        /// <summary>Exactly 1 MiB rents once and returns. One byte past it grows then releases all leases.</summary>
         [Fact]
-        public async Task Working_set_boundary_trims_only_after_the_request_grows()
+        public async Task Working_set_boundary_releases_after_exact_and_grown_payloads()
         {
             var exact = Pattern(WorkingSetBytes);
             var exactPool = CreatePooled();
@@ -81,8 +84,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             {
                 Assert.Equal(exact, await ReadExactAsync(reader, MaximumArticleBytes));
                 Assert.Equal(1, exactPool.RentCount);
-                Assert.Equal(WorkingSetBytes, exactPool.OutstandingRequests().Single());
-                Assert.Empty(exactPool.ReturnedRequests);
+                Assert.Equal(1, exactPool.ReturnCount);
+                Assert.Equal(0, exactPool.OutstandingCount);
             }
 
             var over = Pattern(WorkingSetBytes + 1);
@@ -91,13 +94,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             {
                 Assert.Equal(over, await ReadExactAsync(reader, MaximumArticleBytes));
                 Assert.True(overPool.RentCount > 1);
-                Assert.Equal(WorkingSetBytes, overPool.OutstandingRequests().Single());
+                Assert.Equal(0, overPool.OutstandingCount);
+                Assert.Equal(overPool.RentCount, overPool.ReturnCount);
             }
         }
 
-        /// <summary>A 5 MiB article is received, then the next ordinary article reuses the trimmed 1 MiB request.</summary>
+        /// <summary>A 5 MiB article releases its scratch; the next ordinary article rents again and succeeds.</summary>
         [Fact]
-        public async Task Large_article_is_trimmed_before_the_next_ordinary_article()
+        public async Task Large_article_release_then_ordinary_article_rents_again()
         {
             var large = Pattern(MaximumArticleBytes);
             var ordinary = Pattern(120, seed: 3);
@@ -105,18 +109,20 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             using var reader = Reader(Frame(large).Concat(Frame(ordinary)).ToArray(), pool);
 
             Assert.Equal(large, await ReadExactAsync(reader, MaximumArticleBytes));
-            Assert.Equal(WorkingSetBytes, pool.OutstandingRequests().Single());
+            Assert.Equal(0, pool.OutstandingCount);
             var rentsAfterLarge = pool.RentCount;
+            var returnsAfterLarge = pool.ReturnCount;
+            Assert.Equal(rentsAfterLarge, returnsAfterLarge);
 
             Assert.Equal(ordinary, await ReadExactAsync(reader, MaximumArticleBytes));
-            Assert.Equal(rentsAfterLarge, pool.RentCount);
-            Assert.Equal(WorkingSetBytes, pool.OutstandingRequests().Single());
-            Assert.True(pool.OutstandingLengths().Single() >= WorkingSetBytes);
+            Assert.True(pool.RentCount > rentsAfterLarge);
+            Assert.Equal(0, pool.OutstandingCount);
+            Assert.Equal(pool.RentCount, pool.ReturnCount);
         }
 
         /// <summary>Bytes still in the receive buffer after a large article are the following article.</summary>
         [Fact]
-        public async Task Trim_between_articles_keeps_the_unread_tail()
+        public async Task Release_between_articles_keeps_the_unread_tail()
         {
             var large = Pattern(WorkingSetBytes + 32);
             var ordinary = Pattern(24, seed: 5);
@@ -124,10 +130,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             using var reader = Reader(Frame(large).Concat(Frame(ordinary)).ToArray(), pool);
 
             Assert.Equal(large, await ReadExactAsync(reader, MaximumArticleBytes));
-            Assert.Equal(WorkingSetBytes, pool.OutstandingRequests().Single());
+            Assert.Equal(0, pool.OutstandingCount);
             Assert.Equal(ordinary, await ReadExactAsync(reader, MaximumArticleBytes));
+            Assert.Equal(0, pool.OutstandingCount);
         }
-
         /// <summary>An immediate terminator rents nothing, and a second disposal does not return a buffer.</summary>
         [Fact]
         public async Task Empty_payload_and_repeated_disposal_return_nothing()
@@ -142,9 +148,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(0, pool.ReturnCount);
         }
 
-        /// <summary>The callback observes the scratch before disposal, and disposal returns it once.</summary>
+        /// <summary>
+        /// The callback still owns the scratch while it runs; after it throws, finally returns the lease.
+        /// Dispose must not double-return.
+        /// </summary>
         [Fact]
-        public async Task Callback_failure_does_not_return_the_active_scratch()
+        public async Task Callback_failure_returns_scratch_only_after_consume_unwinds()
         {
             var payload = Pattern(48);
             var pool = new TrackingArrayPool(slackBytes: 32);
@@ -156,14 +165,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                     memory => FailWhileScratchIsLive(memory, payload, pool),
                     CancellationToken.None));
             Assert.Equal("consumer failed", exception.Message);
-            Assert.Equal(1, pool.OutstandingCount);
-            Assert.True(pool.ReturnCount < pool.RentCount);
+            Assert.Equal(0, pool.OutstandingCount);
+            Assert.Equal(pool.RentCount, pool.ReturnCount);
             reader.Dispose();
 
             Assert.Equal(pool.RentCount, pool.ReturnCount);
             Assert.Equal(0, pool.OutstandingCount);
         }
-
         /// <summary>A cancelled read returns any scratch it rented when the reader is disposed.</summary>
         [Fact]
         public async Task Cancellation_before_the_payload_stays_balanced()
@@ -257,11 +265,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
         }
 
         /// <summary>
-        /// Prints scratch rent traffic for ordinary, large, and repeated-session reads.
+        /// Prints scratch rent traffic for ordinary, large, and repeated-session reads under Policy B.
         /// Counts are evidence. They are not a pass/fail budget.
         /// </summary>
         [Fact]
-        public async Task Measure_payload_scratch_rent_and_retained_request()
+        public async Task Measure_payload_scratch_rent_and_release_after_article()
         {
             var ordinary = Pattern(4096);
             var ordinaryWire = Frame(ordinary);
@@ -271,11 +279,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
                 for (var i = 0; i < 16; i++)
                 {
                     Assert.Equal(ordinary.Length, await ReadLengthAsync(reader, MaximumArticleBytes));
+                    Assert.Equal(0, pool.OutstandingCount);
                 }
             }
 
             Console.WriteLine(
                 $"payload-scratch ordinary n=16 rents={pool.RentCount} returns={pool.ReturnCount} outstanding={pool.OutstandingCount}");
+            Assert.Equal(16, pool.RentCount);
             Assert.Equal(pool.RentCount, pool.ReturnCount);
 
             pool.ResetCounts();
@@ -283,14 +293,16 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             using (var reader = Reader(Frame(large).Concat(ordinaryWire).ToArray(), pool))
             {
                 Assert.Equal(large.Length, await ReadLengthAsync(reader, MaximumArticleBytes));
-                var afterLarge = pool.OutstandingRequests().Single();
+                Assert.Equal(0, pool.OutstandingCount);
                 var rentsForLarge = pool.RentCount;
                 Assert.Equal(ordinary.Length, await ReadLengthAsync(reader, MaximumArticleBytes));
                 Console.WriteLine(
-                    $"payload-scratch large-then-ordinary largeRents={rentsForLarge} retainedRequest={afterLarge} ordinaryExtraRents={pool.RentCount - rentsForLarge} outstandingRequest={pool.OutstandingRequests().Single()}");
-                Assert.Equal(WorkingSetBytes, afterLarge);
-                Assert.Equal(0, pool.RentCount - rentsForLarge);
+                    $"payload-scratch large-then-ordinary largeRents={rentsForLarge} ordinaryExtraRents={pool.RentCount - rentsForLarge} outstanding={pool.OutstandingCount}");
+                Assert.True(pool.RentCount > rentsForLarge);
+                Assert.Equal(0, pool.OutstandingCount);
             }
+
+            Assert.Equal(pool.RentCount, pool.ReturnCount);
 
             pool.ResetCounts();
             long secondArticleAllocated;
@@ -321,7 +333,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Nntp
             Assert.Equal(0, pool.OutstandingCount);
             Assert.Equal(pool.RentCount, pool.ReturnCount);
         }
-
         /// <summary>Creates the same pool shape the reader uses in production.</summary>
         private static TrackingArrayPool CreatePooled() =>
             new(ArrayPool<byte>.Create(maxArrayLength: 8 * 1024 * 1024, maxArraysPerBucket: 4));

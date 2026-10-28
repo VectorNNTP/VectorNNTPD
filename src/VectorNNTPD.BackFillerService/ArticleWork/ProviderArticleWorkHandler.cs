@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.Common.NntpDb;
 using VectorNNTPD.BackFillerService.Retention;
@@ -303,6 +304,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 endpointFqdn = prepared.EndpointFqdn;
             }
 
+            var handlerStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             try
             {
                 try
@@ -446,12 +448,14 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                             "Canonical ArtData is not an owned contiguous buffer.");
                     }
 
+                    var retainStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
                     var retained = _retention.RetainCanonical(
                         item.Request.MessageId,
                         item.Request.RequestId,
                         record,
                         created.SelectedDateHeaderName,
                         endpointFqdn);
+                    ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.Retain, retainStarted);
                     LastRetentionKind = retained.Kind;
                     LastFqdn = retained.Fqdn;
                     LastListenerPort = retained.ListenerPort;
@@ -477,6 +481,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             }
             finally
             {
+                ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.HandlerTotal, handlerStarted);
                 if (created.IsAccepted)
                 {
                     created.Record.ReleaseUnusedCanonicalBuffer();

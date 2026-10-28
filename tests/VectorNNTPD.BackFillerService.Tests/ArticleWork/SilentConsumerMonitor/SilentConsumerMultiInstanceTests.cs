@@ -334,6 +334,49 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork.SilentConsumerMonitor
                 afterResolve.Single(r =>
                     r.Key.Condition == SilentConsumerCondition.ProcessingStall
                     && r.Key.QueueOrBackbone == key2).Phase);
+
+            // Resolved session-removed machines are dropped; a later cycle must not re-emit that identity.
+            var afterPrune = engine.ObserveInstance(remaining, 1);
+            Assert.DoesNotContain(
+                afterPrune,
+                r => r.Key.Condition == SilentConsumerCondition.ProcessingStall
+                     && r.Key.QueueOrBackbone == key1);
+            Assert.DoesNotContain(
+                afterPrune,
+                r => r.Key.Condition == SilentConsumerCondition.DispatchStall
+                     && r.Key.QueueOrBackbone == key1);
+            Assert.Contains(
+                afterPrune,
+                r => r.Key.Condition == SilentConsumerCondition.ProcessingStall
+                     && r.Key.QueueOrBackbone == key2);
+        }
+
+        /// <summary>
+        /// A never-opened session machine is dropped immediately on session removal (Clear + Inactive).
+        /// </summary>
+        [Fact]
+        public void Session_removal_drops_clear_machines_without_waiting_for_resolve_window()
+        {
+            var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-25T21:00:00Z"));
+            var engine = new SilentConsumerMonitorEngine(() => "a.example", NullLogger.Instance, time);
+            var key1 = ArticleWorkConsumerSession.ComposeSessionKey("Eweka", 1);
+
+            var both = new[]
+            {
+                Session("Eweka", 1, stalled: false, queued: 0, active: 0),
+                Session("Eweka", 2, stalled: false, queued: 0, active: 0),
+            };
+            _ = engine.ObserveInstance(both, 2);
+
+            var remaining = new[] { Session("Eweka", 2, stalled: false, queued: 0, active: 0) };
+            var afterRemoval = engine.ObserveInstance(remaining, 1);
+            Assert.Contains(
+                afterRemoval,
+                r => r.Key.QueueOrBackbone == key1
+                     && (r.Detail?.Contains("session removed", StringComparison.OrdinalIgnoreCase) ?? false));
+
+            var afterPrune = engine.ObserveInstance(remaining, 1);
+            Assert.DoesNotContain(afterPrune, r => r.Key.QueueOrBackbone == key1);
         }
 
         /// <summary>

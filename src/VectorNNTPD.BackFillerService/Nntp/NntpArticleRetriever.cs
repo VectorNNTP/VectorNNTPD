@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using VectorNNTPD.BackFillerService.ArticleWork;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Core;
 
@@ -95,12 +97,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
 
             NntpSessionLease lease;
+            var acquireStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             try
             {
                 lease = await pool.AcquireAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.SessionAcquire);
                 return ArticleRetrievalResult.Failed(
                     ArticleRetrievalKind.Cancelled,
                     null,
@@ -109,13 +113,17 @@ namespace VectorNNTPD.BackFillerService.Nntp
             }
             catch (NntpProviderConnectException ex)
             {
+                ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.SessionAcquire);
                 return ArticleRetrievalResult.Failed(ex.Kind, ex.StatusCode, ex.Message, sessionReusable: false);
             }
+
+            ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.SessionAcquire, acquireStarted);
 
             await using (lease)
             {
                 try
                 {
+                    var downloadStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
                     var result = await lease.Session
                         .DownloadArticleAsync(
                             item.Request.MessageId,
@@ -123,6 +131,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                             consumePayload,
                             maxArticleBytes)
                         .ConfigureAwait(false);
+                    ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.NntpDownload, downloadStarted);
                     if (!result.SessionReusable)
                     {
                         lease.Retire();

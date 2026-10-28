@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.BackFillerService.Logging;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Messaging.RabbitMq;
@@ -15,10 +17,22 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
     /// and never ACK/NACKs deliveries.
     /// Completing <see cref="PublishAsync"/> means the broker confirmed and the publication generation was still current afterward.
     /// Confirmation is not permission to ACK the original delivery.
-    /// One publication holds <see cref="_publishGate"/>. The confirmation wait is cancelled by the caller token, disposal, or the configured confirmation timeout.
+    /// Up to <see cref="MaxConcurrentConfirmedPublications"/> publications may hold <see cref="_publishGate"/> while overlapping
+    /// broker confirmation waits on the shared tracking-enabled channel. The confirmation wait is cancelled by the caller token,
+    /// disposal, or the configured confirmation timeout.
     /// </remarks>
     internal sealed class ArticleWorkResponsePublisher : IArticleWorkResponsePublisher, IHostedService, IAsyncDisposable
     {
+        /// <summary>
+        /// Maximum concurrent confirmed publications on the shared channel.
+        /// Matches <see cref="RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations"/> used when opening
+        /// the confirm-tracked publish channel. The client serializes publish-sequence assignment and frame send,
+        /// then overlaps per-message confirm waits; this bound prevents unbounded app-level in-flight confirms
+        /// and enables dispose drain.
+        /// </summary>
+        internal const int MaxConcurrentConfirmedPublications =
+            RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations;
+
         /// <summary>Process RabbitMQ connection owner. This publisher opens channels on it and does not open another connection.</summary>
         private readonly IRabbitMqService _connections;
 
@@ -31,8 +45,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <summary>Guards the publication channel, lifecycle state, the stopping flag, and the replacement task.</summary>
         private readonly Lock _gate = new();
 
-        /// <summary>Serializes confirmed publications. Disposal waits until the current holder releases it.</summary>
-        private readonly SemaphoreSlim _publishGate = new(1, 1);
+        /// <summary>
+        /// Bounds concurrent confirmed publications to <see cref="MaxConcurrentConfirmedPublications"/>.
+        /// Disposal acquires every permit before disposing the semaphore so in-flight publishes have finished or cancelled.
+        /// </summary>
+        private readonly SemaphoreSlim _publishGate = new(
+            MaxConcurrentConfirmedPublications,
+            MaxConcurrentConfirmedPublications);
 
         /// <summary>Serializes startup, channel replacement, and disposal of the publication channel.</summary>
         private readonly SemaphoreSlim _replaceGate = new(1, 1);
@@ -197,7 +216,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// <remarks>
         /// Waits for the tracked replacement task and logs its failure without rethrowing.
         /// The replacement-gate wait is not cancellable. After the channel is disposed, disposal waits up to the confirmation timeout
-        /// for <see cref="_publishGate"/> and then releases it. A timeout is ignored, so disposal still finishes.
+        /// to acquire every <see cref="_publishGate"/> permit (drain). A timeout is ignored, so disposal still finishes.
         /// The stopped log reads <see cref="Generation"/> after the channel is cleared, so that value is zero.
         /// </remarks>
         public async ValueTask DisposeAsync()
@@ -284,7 +303,9 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         /// That exception is not written as a publication-failed log.
         /// </exception>
         /// <remarks>
-        /// Publications on this instance are serialized by <see cref="_publishGate"/>.
+        /// Publications on this instance share one confirm-tracked channel. Up to
+        /// <see cref="MaxConcurrentConfirmedPublications"/> may await confirmation concurrently;
+        /// <see cref="_publishGate"/> bounds that depth (it does not serialize confirm waits to one).
         /// The AMQP message id is a new GUID, not the request id. App id is null. Delivery is non-persistent and mandatory.
         /// The routing key is <see cref="ArticleWorkResponseIntent.ReplyTo"/> and the exchange is empty.
         /// Content type, expiration, and body come from <see cref="ArticleWorkResponseWireProtocol"/>.
@@ -300,12 +321,19 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                 throw new InvalidOperationException("Response publication requires CorrelationId and ReplyTo.");
             }
 
+            var serializeStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             var body = ArticleWorkResponseWireProtocol.SerializeV1(intent);
+            ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ReplySerialize, serializeStarted);
+
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runCts.Token);
             linked.CancelAfter(TimeSpan.FromSeconds(_runtime.RabbitMq.PublishConfirmTimeoutSeconds));
 
+            var gateWaitStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             await _publishGate.WaitAsync(linked.Token).ConfigureAwait(false);
+            ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ReplyPublishGateWait, gateWaitStarted);
+
             var generation = 0L;
+            var confirmStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             try
             {
                 ThrowIfNotRunning();
@@ -326,6 +354,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
                     ArticleWorkResponseWireProtocol.ExpirationMilliseconds,
                     body);
 
+                // RabbitMQ.Client 7.x with publisherConfirmationTrackingEnabled: BasicPublishAsync
+                // completes only after broker confirm (or return). Confirm wait is not separable.
                 await channel.PublishConfirmedAsync(
                         new RabbitMqConfirmedPublication(
                             Exchange: string.Empty,
@@ -388,6 +418,7 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             }
             finally
             {
+                ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ReplyPublishConfirm, confirmStarted);
                 _publishGate.Release();
             }
         }
@@ -678,20 +709,24 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
         }
 
         /// <summary>
-        /// Waits until <see cref="_publishGate"/> can be acquired, then releases it so disposal can dispose of the semaphore.
+        /// Acquires every <see cref="_publishGate"/> permit so no confirmed publish still holds a slot, then leaves them held
+        /// until <see cref="DisposeShutdownHandles"/> disposes the semaphore.
         /// </summary>
         /// <returns>
-        /// A task that completes when the gate has been observed free. The wait is bounded by the confirmation timeout, with a minimum of one second.
-        /// <see cref="OperationCanceledException"/> from that timeout is swallowed.
+        /// A task that completes when all permits are held or the confirmation-timeout bound elapses.
+        /// <see cref="OperationCanceledException"/> from that timeout is swallowed; any permits acquired are not released.
         /// </returns>
         private async Task WaitForPublishGateReleaseAsync()
         {
             using var waitCts = new CancellationTokenSource(
                 TimeSpan.FromSeconds(Math.Max(1, _runtime.RabbitMq.PublishConfirmTimeoutSeconds)));
+            var acquired = 0;
             try
             {
-                await _publishGate.WaitAsync(waitCts.Token).ConfigureAwait(false);
-                _publishGate.Release();
+                for (; acquired < MaxConcurrentConfirmedPublications; acquired++)
+                {
+                    await _publishGate.WaitAsync(waitCts.Token).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException)
             {

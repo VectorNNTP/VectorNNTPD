@@ -9,6 +9,7 @@ using VectorNNTPD.BackFillerService.Acme;
 using VectorNNTPD.BackFillerService.ArticleWork;
 using VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor;
 using VectorNNTPD.BackFillerService.Configuration;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.BackFillerService.Hosting;
 using VectorNNTPD.BackFillerService.Hosting.Systemd;
@@ -26,6 +27,7 @@ using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.Common.Configuration;
+using RabbitMQ.Client;
 using System.Net.Sockets;
 using System.Net;
 
@@ -37,7 +39,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
     public sealed class BackFillerHostCompositionTests
     {
         /// <summary>
-        /// Hosted service order (eleven BackFiller-hosted services ending with
+        /// Hosted service order (thirteen BackFiller-hosted services ending with
         /// <see cref="SilentConsumerMonitorHostedService"/> after <see cref="ArticleWorkConsumerService"/>),
         /// application-service triple (DNS, ACME, listener), and key singleton aliases match the current composition contract.
         /// </summary>
@@ -50,7 +52,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             var hosted = host.Services.GetServices<IHostedService>()
                 .Where(static service => service.GetType().Assembly == typeof(BackFillerServiceCollectionExtensions).Assembly)
                 .ToArray();
-            Assert.Equal(11, hosted.Length);
+            Assert.Equal(13, hosted.Length);
             Assert.IsType<SystemdLifecycleNotifier>(hosted[0]);
             Assert.IsType<SystemdWatchdogService>(hosted[1]);
             Assert.IsType<NntpDbServiceHostedAdapter>(hosted[2]);
@@ -62,9 +64,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
             Assert.IsType<VectorNNTPD.BackFillerService.Core.ApplicationServiceManager>(
                 host.Services.GetRequiredService<VectorNNTPD.BackFillerService.Core.ApplicationServiceManager>());
             Assert.Same(host.Services.GetRequiredService<ArticleRetentionSweepService>(), hosted[7]);
-            Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[8]);
-            Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[9]);
-            Assert.IsType<SilentConsumerMonitorHostedService>(hosted[10]);
+            Assert.Same(host.Services.GetRequiredService<ArticleRetentionMetrics>(), hosted[8]);
+            Assert.Same(host.Services.GetRequiredService<ArticleWorkStageProfilingHostedService>(), hosted[9]);
+            Assert.Same(host.Services.GetRequiredService<ArticleWorkResponsePublisher>(), hosted[10]);
+            Assert.Same(host.Services.GetRequiredService<ArticleWorkConsumerService>(), hosted[11]);
+            Assert.IsType<SilentConsumerMonitorHostedService>(hosted[12]);
             Assert.Same(
                 host.Services.GetRequiredService<BackFillerApplicationHealth>(),
                 host.Services.GetRequiredService<IApplicationHealth>());
@@ -126,6 +130,49 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                     or "ArticleTypeClassifier"
                     or "ArticlePathCanonicalizer"
                     or "NewsDateParser");
+        }
+
+        /// <summary>
+        /// Production DI defaults leave lab isolation and stage profiling off, keep the plain TCP transport,
+        /// and wire the pipelined response publisher with a confirm bound matching RabbitMQ.Client 7.2.2's
+        /// default outstanding-confirm rate limiter (128).
+        /// </summary>
+        [Fact]
+        public void AddBackFillerHosting_production_defaults_isolate_lab_features_and_pipeline_publisher()
+        {
+            using var host = CreateHost();
+
+            var lab = host.Services.GetRequiredService<IOptions<LabUpstreamIsolationOptions>>().Value;
+            Assert.False(lab.Enabled);
+            Assert.False(lab.RewritePublishedDestinations);
+
+            var profiling = host.Services.GetRequiredService<IOptions<LabStageProfilingOptions>>().Value;
+            Assert.False(profiling.Enabled);
+
+            Assert.IsType<TcpNntpTransportFactory>(host.Services.GetRequiredService<INntpTransportFactory>());
+            Assert.Same(
+                host.Services.GetRequiredService<ArticleWorkResponsePublisher>(),
+                host.Services.GetRequiredService<IArticleWorkResponsePublisher>());
+            Assert.Equal(
+                RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations,
+                ArticleWorkResponsePublisher.MaxConcurrentConfirmedPublications);
+            Assert.Equal(128, ArticleWorkResponsePublisher.MaxConcurrentConfirmedPublications);
+
+            // Production CreatePublishChannelAsync must not use the two-arg CreateChannelOptions overload:
+            // that leaves OutstandingPublisherConfirmationsRateLimiter null (unlimited). Explicit limiter required.
+            var unboundedDefaults = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true);
+            Assert.Null(unboundedDefaults.OutstandingPublisherConfirmationsRateLimiter);
+
+            var productionOptions = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true,
+                outstandingPublisherConfirmationsRateLimiter: new ThrottlingRateLimiter(
+                    RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations));
+            Assert.True(productionOptions.PublisherConfirmationsEnabled);
+            Assert.True(productionOptions.PublisherConfirmationTrackingEnabled);
+            Assert.NotNull(productionOptions.OutstandingPublisherConfirmationsRateLimiter);
         }
 
         /// <summary>

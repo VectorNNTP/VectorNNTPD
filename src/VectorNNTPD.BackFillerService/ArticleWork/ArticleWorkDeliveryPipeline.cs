@@ -1,4 +1,5 @@
-
+using System.Diagnostics;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.BackFillerService.Nntp;
 using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.Common.Core;
@@ -145,153 +146,172 @@ namespace VectorNNTPD.BackFillerService.ArticleWork
             LastEscapedHandlerFailureError = null;
             ArgumentNullException.ThrowIfNull(channelStillCurrent);
 
-            var parsed = preParsed ?? ArticleWorkRequestParser.Parse(delivery, consumingBackbone, _maxPayloadBytes);
-            var lease = new ArticleWorkSettlementLease(channel, delivery.DeliveryTag, delivery.Generation);
-            var replyable = !string.IsNullOrWhiteSpace(delivery.CorrelationId)
-                            && !string.IsNullOrWhiteSpace(delivery.ReplyTo);
-
-            if (!parsed.IsValid)
+            var pipelineStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
+            var profiler = ArticleWorkStageProfiler.Installed;
+            profiler?.BeginActive();
+            var pipelineFailed = false;
+            try
             {
-                var failure = parsed.Failure!;
-                var invalid = ArticleWorkDispositionPlanner.Create(
-                    ArticleWorkOutcome.InvalidRequest,
-                    replyable,
-                    cancellationRequested: false,
+                var parsed = preParsed ?? ArticleWorkRequestParser.Parse(delivery, consumingBackbone, _maxPayloadBytes);
+                var lease = new ArticleWorkSettlementLease(channel, delivery.DeliveryTag, delivery.Generation);
+                var replyable = !string.IsNullOrWhiteSpace(delivery.CorrelationId)
+                                && !string.IsNullOrWhiteSpace(delivery.ReplyTo);
+
+                if (!parsed.IsValid)
+                {
+                    pipelineFailed = true;
+                    var failure = parsed.Failure!;
+                    var invalid = ArticleWorkDispositionPlanner.Create(
+                        ArticleWorkOutcome.InvalidRequest,
+                        replyable,
+                        cancellationRequested: false,
+                        delivery.DeliveryCount,
+                        delivery.Redelivered,
+                        _deliveryLimit,
+                        _treatMissingRedeliveryCountAsExhausted);
+                    if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
+                    {
+                        return ArticleWorkOutcome.InvalidRequest;
+                    }
+
+                    var replyStartedInvalid = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
+                    var invalidPublished = await TryPublishIfRequiredAsync(
+                            invalid,
+                            ArticleWorkOutcome.InvalidRequest,
+                            failure.Identities.RequestId,
+                            failure.Identities.MessageId,
+                            failure.Identities.Backbone,
+                            delivery.CorrelationId,
+                            delivery.ReplyTo,
+                            failure.Reason,
+                            fqdn: null,
+                            listenerPort: null,
+                            articleIdHex: null,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ReplyPublish, replyStartedInvalid);
+                    var publishOutcome = await CompleteAfterPublishAttemptAsync(
+                            invalidPublished,
+                            invalid,
+                            ArticleWorkOutcome.InvalidRequest,
+                            lease,
+                            channel,
+                            channelStillCurrent,
+                            delivery.DeliveryCount,
+                            delivery.Redelivered)
+                        .ConfigureAwait(false);
+                    return publishOutcome;
+                }
+
+                var item = new ArticleWorkItem(
+                    parsed.Request!,
+                    delivery.CorrelationId!,
+                    delivery.ReplyTo!,
+                    lease);
+
+                ArticleWorkOutcome outcome;
+                string? error;
+                string? fqdn = null;
+                int? listenerPort = null;
+                string? articleIdHex = null;
+                try
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        outcome = ArticleWorkOutcome.Cancelled;
+                        error = null;
+                    }
+                    else
+                    {
+                        var result = await _handler.HandleAsync(item, cancellationToken).ConfigureAwait(false);
+                        outcome = result.Outcome == ArticleWorkOutcome.InvalidRequest
+                            ? ArticleWorkOutcome.UnexpectedFailure
+                            : result.Outcome;
+                        error = result.Error;
+                        fqdn = result.Fqdn;
+                        listenerPort = result.ListenerPort;
+                        articleIdHex = result.ArticleId?.ToLowerHexString();
+                        result.Article?.Dispose();
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    outcome = ArticleWorkOutcome.Cancelled;
+                    error = null;
+                }
+                // codeql[cs/catch-of-all-exceptions] A delivery failure must be settled or logged by this pipeline boundary.
+                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+                {
+                    outcome = ArticleWorkOutcome.UnexpectedFailure;
+                    error = NntpExceptionDiagnostics.FormatReason(ex);
+                    LastEscapedHandlerFailureError = error;
+                }
+
+                pipelineFailed = outcome is not ArticleWorkOutcome.Success and not ArticleWorkOutcome.Cancelled;
+
+                var disposition = ArticleWorkDispositionPlanner.Create(
+                    outcome,
+                    replyable: true,
+                    cancellationToken.IsCancellationRequested || outcome == ArticleWorkOutcome.Cancelled,
                     delivery.DeliveryCount,
                     delivery.Redelivered,
                     _deliveryLimit,
                     _treatMissingRedeliveryCountAsExhausted);
+
                 if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
                 {
-                    return ArticleWorkOutcome.InvalidRequest;
+                    return outcome;
                 }
 
-                var invalidPublished = await TryPublishIfRequiredAsync(
-                        invalid,
-                        ArticleWorkOutcome.InvalidRequest,
-                        failure.Identities.RequestId,
-                        failure.Identities.MessageId,
-                        failure.Identities.Backbone,
-                        delivery.CorrelationId,
-                        delivery.ReplyTo,
-                        failure.Reason,
-                        fqdn: null,
-                        listenerPort: null,
-                        articleIdHex: null,
-                        cancellationToken)
+                if (outcome == ArticleWorkOutcome.Success && !_publisher.CompletesSuccessPublication)
+                {
+                    var pending = CreateRetryDisposition(delivery.DeliveryCount, delivery.Redelivered);
+                    await lease.TrySettleAsync(
+                            pending,
+                            channelStillCurrent() && lease.IsOriginalChannel(channel),
+                            CancellationToken.None)
                     .ConfigureAwait(false);
-                var publishOutcome = await CompleteAfterPublishAttemptAsync(
-                        invalidPublished,
-                        invalid,
-                        ArticleWorkOutcome.InvalidRequest,
+                    return outcome;
+                }
+
+                var published = ArticleWorkPublishAttempt.Confirmed;
+                if (disposition.PublishResponse)
+                {
+                    var replyStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
+                    published = await TryPublishIfRequiredAsync(
+                            disposition,
+                            outcome,
+                            item.Request.RequestId,
+                            item.Request.MessageId,
+                            item.Request.Backbone,
+                            item.CorrelationId,
+                            item.ReplyTo,
+                            error,
+                            fqdn,
+                            listenerPort,
+                            articleIdHex,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ReplyPublish, replyStarted);
+                }
+
+                ArticleWorkOutcome finalOutcome = await CompleteAfterPublishAttemptAsync(
+                        published,
+                        disposition,
+                        outcome,
                         lease,
                         channel,
                         channelStillCurrent,
                         delivery.DeliveryCount,
                         delivery.Redelivered)
                     .ConfigureAwait(false);
-                return publishOutcome;
+                return finalOutcome;
             }
-
-            var item = new ArticleWorkItem(
-                parsed.Request!,
-                delivery.CorrelationId!,
-                delivery.ReplyTo!,
-                lease);
-
-            ArticleWorkOutcome outcome;
-            string? error;
-            string? fqdn = null;
-            int? listenerPort = null;
-            string? articleIdHex = null;
-            try
+            finally
             {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    outcome = ArticleWorkOutcome.Cancelled;
-                    error = null;
-                }
-                else
-                {
-                    var result = await _handler.HandleAsync(item, cancellationToken).ConfigureAwait(false);
-                    outcome = result.Outcome == ArticleWorkOutcome.InvalidRequest
-                        ? ArticleWorkOutcome.UnexpectedFailure
-                        : result.Outcome;
-                    error = result.Error;
-                    fqdn = result.Fqdn;
-                    listenerPort = result.ListenerPort;
-                    articleIdHex = result.ArticleId?.ToLowerHexString();
-                    result.Article?.Dispose();
-                }
+                profiler?.Record(ArticleWorkStageId.PipelineTotal, pipelineStarted);
+                profiler?.EndActive(pipelineFailed);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                outcome = ArticleWorkOutcome.Cancelled;
-                error = null;
-            }
-            // codeql[cs/catch-of-all-exceptions] A delivery failure must be settled or logged by this pipeline boundary.
-            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
-            {
-                outcome = ArticleWorkOutcome.UnexpectedFailure;
-                error = NntpExceptionDiagnostics.FormatReason(ex);
-                LastEscapedHandlerFailureError = error;
-            }
-
-            var disposition = ArticleWorkDispositionPlanner.Create(
-                outcome,
-                replyable: true,
-                cancellationToken.IsCancellationRequested || outcome == ArticleWorkOutcome.Cancelled,
-                delivery.DeliveryCount,
-                delivery.Redelivered,
-                _deliveryLimit,
-                _treatMissingRedeliveryCountAsExhausted);
-
-            if (!channelStillCurrent() || !lease.IsOriginalChannel(channel))
-            {
-                return outcome;
-            }
-
-            if (outcome == ArticleWorkOutcome.Success && !_publisher.CompletesSuccessPublication)
-            {
-                var pending = CreateRetryDisposition(delivery.DeliveryCount, delivery.Redelivered);
-                await lease.TrySettleAsync(
-                        pending,
-                        channelStillCurrent() && lease.IsOriginalChannel(channel),
-                        CancellationToken.None)
-                .ConfigureAwait(false);
-                return outcome;
-            }
-
-            var published = ArticleWorkPublishAttempt.Confirmed;
-            if (disposition.PublishResponse)
-            {
-                published = await TryPublishIfRequiredAsync(
-                        disposition,
-                        outcome,
-                        item.Request.RequestId,
-                        item.Request.MessageId,
-                        item.Request.Backbone,
-                        item.CorrelationId,
-                        item.ReplyTo,
-                        error,
-                        fqdn,
-                        listenerPort,
-                        articleIdHex,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            ArticleWorkOutcome finalOutcome = await CompleteAfterPublishAttemptAsync(
-                    published,
-                    disposition,
-                    outcome,
-                    lease,
-                    channel,
-                    channelStillCurrent,
-                    delivery.DeliveryCount,
-                    delivery.Redelivered)
-                .ConfigureAwait(false);
-            return finalOutcome;
         }
 
         /// <summary>NACK with requeue while retries remain; NACK without requeue when the delivery limit is exhausted.</summary>

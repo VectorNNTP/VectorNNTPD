@@ -596,7 +596,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Accounts
 
         private static ServiceHarness CreateHarness(
             FakeProviderAccountSource source,
-            TimeSpan? refreshInterval = null)
+            TimeSpan? refreshInterval = null,
+            LabUpstreamIsolationOptions? labUpstreamIsolation = null)
         {
             var options = BackFillerTestOptions.CreateValid();
             options.BackFillerAccountRefreshIntervalSeconds = 3600;
@@ -643,8 +644,110 @@ namespace VectorNNTPD.BackFillerService.Tests.Accounts
                 Options.Create(new BackFillerOptions()),
                 acme,
                 logger,
-                rabbit);
+                rabbit,
+                Options.Create(labUpstreamIsolation ?? new LabUpstreamIsolationOptions()));
             return new ServiceHarness(service, catalog, registry, transport, logger, shared, acme, rabbit);
+        }
+
+        /// <summary>
+        /// Lab rewrite retargets published dial fields to the allowlist without mutating source rows.
+        /// </summary>
+        [Fact]
+        public async Task Lab_rewrite_publishes_loopback_cleartext_without_credentials()
+        {
+            var source = new FakeProviderAccountSource
+            {
+                Rows = [ProviderAccountTestRows.Create()],
+            };
+            var lab = new LabUpstreamIsolationOptions
+            {
+                Enabled = true,
+                AllowedHost = "127.0.0.1",
+                AllowedPort = 11119,
+                RejectTls = true,
+                RewritePublishedDestinations = true,
+            };
+            await using var harness = CreateHarness(source, labUpstreamIsolation: lab);
+
+            await harness.Service.StartAsync(CancellationToken.None);
+
+            var provider = Assert.Single(harness.Service.PublishedProviders);
+            Assert.Equal("Giganews", provider.Backbone);
+            Assert.Equal("127.0.0.1", provider.Host);
+            Assert.Equal(11119, provider.Port);
+            Assert.False(provider.UseTls);
+            Assert.Null(provider.Username);
+            Assert.Null(provider.Password);
+            Assert.False(provider.RequiresAuthentication);
+            Assert.Equal("news.example.test", source.Rows[0].Hostname);
+            Assert.Equal(ProviderAccountTestRows.SecretPassword, source.Rows[0].Password);
+            Assert.All(
+                harness.Logger.Messages,
+                message => Assert.DoesNotContain(
+                    ProviderAccountTestRows.SecretPassword,
+                    message,
+                    StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Refresh with rewrite enabled cannot restore a WAN dial target from MySQL-shaped rows.
+        /// </summary>
+        [Fact]
+        public async Task Lab_rewrite_survives_refresh_when_source_still_lists_wan_host()
+        {
+            var source = new FakeProviderAccountSource
+            {
+                Rows = [ProviderAccountTestRows.Create()],
+            };
+            var lab = new LabUpstreamIsolationOptions
+            {
+                Enabled = true,
+                AllowedHost = "127.0.0.1",
+                AllowedPort = 11119,
+                RejectTls = true,
+                RewritePublishedDestinations = true,
+            };
+            await using var harness = CreateHarness(source, labUpstreamIsolation: lab);
+            await harness.Service.StartAsync(CancellationToken.None);
+
+            source.Rows =
+            [
+                ProviderAccountTestRows.Create(hostname: "news.giganews.example", port: 563, useSsl: "y"),
+            ];
+            Assert.True(await harness.Service.RefreshOnceAsync(CancellationToken.None));
+
+            var provider = Assert.Single(harness.Service.PublishedProviders);
+            Assert.Equal("127.0.0.1", provider.Host);
+            Assert.Equal(11119, provider.Port);
+            Assert.False(provider.UseTls);
+            Assert.Null(provider.Username);
+            Assert.Null(provider.Password);
+            Assert.Contains(
+                harness.Logger.Messages,
+                static message => message.Contains("snapshot unchanged", StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// With rewrite disabled, production dial fields and credentials remain as mapped from source rows.
+        /// </summary>
+        [Fact]
+        public async Task Production_mode_retains_mapped_host_and_credentials()
+        {
+            var source = new FakeProviderAccountSource
+            {
+                Rows = [ProviderAccountTestRows.Create()],
+            };
+            await using var harness = CreateHarness(source);
+
+            await harness.Service.StartAsync(CancellationToken.None);
+
+            var provider = Assert.Single(harness.Service.PublishedProviders);
+            Assert.Equal("news.example.test", provider.Host);
+            Assert.Equal(563, provider.Port);
+            Assert.True(provider.UseTls);
+            Assert.Equal("nntp-user", provider.Username);
+            Assert.Equal(ProviderAccountTestRows.SecretPassword, provider.Password);
+            Assert.True(provider.RequiresAuthentication);
         }
 
         /// <summary>
