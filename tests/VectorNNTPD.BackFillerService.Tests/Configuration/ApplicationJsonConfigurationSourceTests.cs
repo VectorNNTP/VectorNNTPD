@@ -240,7 +240,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
 
                 var configuration = builder.Build();
                 Assert.Equal("5672", configuration["RabbitMQ:Port"]);
-                Assert.Equal("rabbitmq1a.usenet.ninja", configuration["RabbitMQ:Hosts:0"]);
+                Assert.Equal("198.18.0.3", configuration["RabbitMQ:Hosts:0"]);
                 Assert.Equal(bool.FalseString, configuration["RabbitMQ:EnableSsl"]);
                 Assert.Equal("/", configuration["RabbitMQ:VirtualHost"]);
 
@@ -249,9 +249,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 var validation = new RabbitMqOptionsValidator().Validate(null, rabbit);
                 Assert.True(validation.Succeeded, string.Join("; ", validation.Failures ?? []));
                 Assert.NotNull(rabbit.Hosts);
-                Assert.Equal(
-                    ["rabbitmq1a.usenet.ninja", "rabbitmq1b.usenet.ninja", "rabbitmq1c.usenet.ninja"],
-                    rabbit.Hosts);
+                Assert.Equal(["198.18.0.3"], rabbit.Hosts);
                 Assert.Equal(5672, rabbit.Port);
                 Assert.Equal(false, rabbit.EnableSsl);
                 Assert.Equal("/", rabbit.VirtualHost);
@@ -260,7 +258,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Configuration
                 Assert.Equal(5, rabbit.ArticleWorkDeliveryLimit);
                 Assert.Equal(10000, rabbit.ArticleWorkQueueMaxLength);
                 Assert.Equal(60000, rabbit.ArticleWorkQueueMessageTtlMilliseconds);
-                Assert.Equal("http://rabbitmq1a.usenet.ninja:15672", rabbit.Management.BaseUrl);
+                Assert.Equal("http://198.18.0.3:15672", rabbit.Management.BaseUrl);
                 Assert.Equal(5, rabbit.Management.RequestTimeoutSeconds);
             }
             finally

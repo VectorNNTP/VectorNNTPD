@@ -146,13 +146,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
             }
 
-            var options = new CreateChannelOptions(
-                publisherConfirmationsEnabled: true,
-                publisherConfirmationTrackingEnabled: true);
-            var channel = await _connection
-                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+            // Confirm-tracked publish channels own an explicit outstanding-confirm limiter (see
+            // RabbitMqClientPublishChannel.CreateConfirmTrackedAsync). The two-arg CreateChannelOptions
+            // overload leaves OutstandingPublisherConfirmationsRateLimiter null (unlimited).
+            return await RabbitMqClientPublishChannel
+                .CreateConfirmTrackedAsync(_connection, generation, cancellationToken)
                 .ConfigureAwait(false);
-            return new RabbitMqClientPublishChannel(channel, generation);
         }
 
         /// <inheritdoc />

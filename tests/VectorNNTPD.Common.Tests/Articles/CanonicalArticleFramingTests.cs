@@ -128,6 +128,55 @@ namespace VectorNNTPD.Common.Tests.Articles
             AssertRejected("Subject: s\r\n\0\r\n\r\nbody\r\n"u8.ToArray());
         }
 
+        /// <summary>
+        /// A single bare LF between otherwise CRLF header lines is not frameable (RFC 3977 §3.1.1 exclusive CRLF).
+        /// Matches the observed .artifacts/Articles defect: one bare LF in the header region, exclusive CRLF body.
+        /// </summary>
+        [Fact]
+        public void Single_bare_lf_in_header_region_is_not_frameable()
+        {
+            var article = "Message-ID: <bare-lf@example.test>\r\nPath: peer!for-mail\nLines: 1\r\n\r\nbody\r\n"u8.ToArray();
+            var framing = CanonicalArticleFraming.Analyze(article);
+            Assert.False(framing.IsFrameable);
+            Assert.True(framing.BodyStart > 0);
+        }
+
+        /// <summary>
+        /// Inserting CR before that bare LF yields exclusive CRLF and a frameable article; bodies stay unchanged.
+        /// </summary>
+        [Fact]
+        public void Normalizing_header_bare_lf_to_crlf_makes_article_frameable()
+        {
+            var bare = "Message-ID: <bare-lf@example.test>\r\nPath: peer!for-mail\nLines: 1\r\n\r\nbody\r\n"u8.ToArray();
+            Assert.False(CanonicalArticleFraming.Analyze(bare).IsFrameable);
+
+            var normalized = NormalizeBareLfToCrlf(bare);
+            var framing = CanonicalArticleFraming.Analyze(normalized);
+            Assert.True(framing.IsFrameable);
+            Assert.Equal("body\r\n"u8, normalized.AsSpan(framing.BodyStart));
+            Assert.Equal(bare.Length + 1, normalized.Length);
+        }
+
+        /// <summary>Replaces each bare LF with CRLF; existing CRLF pairs are left intact.</summary>
+        private static byte[] NormalizeBareLfToCrlf(ReadOnlySpan<byte> source)
+        {
+            var buffer = new byte[source.Length + 16];
+            var written = 0;
+            byte previous = 0;
+            foreach (var value in source)
+            {
+                if (value == (byte)'\n' && previous != (byte)'\r')
+                {
+                    buffer[written++] = (byte)'\r';
+                }
+
+                buffer[written++] = value;
+                previous = value;
+            }
+
+            return buffer.AsSpan(0, written).ToArray();
+        }
+
         /// <summary>Asserts <paramref name="article"/> is not a multiline block.</summary>
         private static void AssertRejected(byte[] article)
         {

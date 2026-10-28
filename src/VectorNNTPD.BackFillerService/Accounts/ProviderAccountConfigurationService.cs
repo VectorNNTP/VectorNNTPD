@@ -43,6 +43,11 @@ namespace VectorNNTPD.BackFillerService.Accounts
         /// <summary>Live RabbitMQ options. Username and password are replaced from each published snapshot.</summary>
         private readonly IOptions<RabbitMqOptions> _rabbitMq;
 
+        /// <summary>
+        /// Lab isolation options. When rewrite is enabled, published dial targets are replaced after mapping.
+        /// </summary>
+        private readonly IOptions<LabUpstreamIsolationOptions> _labUpstreamIsolation;
+
         /// <summary>Control-plane logger. Events are written through <see cref="ProviderAccountLogMessages"/>.</summary>
         private readonly ILogger<ProviderAccountConfigurationService> _logger;
 
@@ -91,6 +96,9 @@ namespace VectorNNTPD.BackFillerService.Accounts
         /// <param name="acmeOptions">Live ACME options updated from each shared snapshot.</param>
         /// <param name="logger">Logger passed to <see cref="ProviderAccountLogMessages"/>.</param>
         /// <param name="rabbitMqOptions">Live RabbitMQ options. Username and password are replaced from each shared snapshot.</param>
+        /// <param name="labUpstreamIsolation">
+        /// Lab isolation options. Optional in tests; defaults to disabled rewrite when omitted.
+        /// </param>
         /// <exception cref="ArgumentNullException">Any argument is null.</exception>
         /// <remarks>
         /// The live <see cref="ProviderConfigurationCatalog"/> is owned by <see cref="NntpProviderRegistry"/>.
@@ -104,7 +112,8 @@ namespace VectorNNTPD.BackFillerService.Accounts
             IOptions<BackFillerOptions> backFillerOptions,
             IOptions<AcmeCloudflareOptions> acmeOptions,
             ILogger<ProviderAccountConfigurationService> logger,
-            IOptions<RabbitMqOptions>? rabbitMqOptions = null)
+            IOptions<RabbitMqOptions>? rabbitMqOptions = null,
+            IOptions<LabUpstreamIsolationOptions>? labUpstreamIsolation = null)
         {
             ArgumentNullException.ThrowIfNull(source);
             ArgumentNullException.ThrowIfNull(sharedConfiguration);
@@ -118,6 +127,7 @@ namespace VectorNNTPD.BackFillerService.Accounts
             _registry = registry;
             _runtime = runtime;
             _backFillerOptions = backFillerOptions;
+            _labUpstreamIsolation = labUpstreamIsolation ?? Options.Create(new LabUpstreamIsolationOptions());
             _acmeOptions = acmeOptions;
             _rabbitMq = rabbitMqOptions ?? Options.Create(new RabbitMqOptions());
             _logger = logger;
@@ -278,13 +288,19 @@ namespace VectorNNTPD.BackFillerService.Accounts
                     ProviderAccountLogMessages.RowRejected(_logger, rejected.Backbone, rejected.Reason);
                 }
 
+                // Lab rewrite runs after mapping so pools never publish WAN dial targets while enabled.
+                // MySQL rows are not updated; credentials are cleared so AUTHINFO is not sent to the peer.
+                var effectiveProviders = LabUpstreamDestinationRewriter.Apply(
+                    mapped.Providers,
+                    _labUpstreamIsolation.Value);
+
                 IReadOnlyList<BackFillerProviderDefinition> previous;
                 lock (_gate)
                 {
                     previous = _published;
                 }
 
-                if (SnapshotsEqual(previous, mapped.Providers))
+                if (SnapshotsEqual(previous, effectiveProviders))
                 {
                     lock (_gate)
                     {
@@ -292,10 +308,10 @@ namespace VectorNNTPD.BackFillerService.Accounts
                         _shared = shared;
                     }
 
-                    ProviderAccountLogMessages.SnapshotUnchanged(_logger, mapped.Providers.Count);
+                    ProviderAccountLogMessages.SnapshotUnchanged(_logger, effectiveProviders.Count);
                     if (_lastRefreshFailed)
                     {
-                        ProviderAccountLogMessages.RefreshRecovered(_logger, mapped.Providers.Count);
+                        ProviderAccountLogMessages.RefreshRecovered(_logger, effectiveProviders.Count);
                     }
 
                     _lastRefreshFailed = false;
@@ -303,19 +319,19 @@ namespace VectorNNTPD.BackFillerService.Accounts
                     return true;
                 }
 
-                await _registry.ApplySnapshotAsync(mapped.Providers, cancellationToken).ConfigureAwait(false);
+                await _registry.ApplySnapshotAsync(effectiveProviders, cancellationToken).ConfigureAwait(false);
                 lock (_gate)
                 {
                     Project(shared, fqdn);
-                    _published = mapped.Providers;
+                    _published = effectiveProviders;
                     _shared = shared;
                 }
 
-                LogDelta(previous, mapped.Providers);
+                LogDelta(previous, effectiveProviders);
                 ProviderAccountLogMessages.SnapshotLoaded(
                     _logger,
                     _runtime.ServerId,
-                    mapped.Providers.Count,
+                    effectiveProviders.Count,
                     mapped.Rejected.Count);
                 if (_lastRefreshFailed)
                 {

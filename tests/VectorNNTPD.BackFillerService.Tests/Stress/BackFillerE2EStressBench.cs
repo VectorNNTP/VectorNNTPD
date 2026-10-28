@@ -1,4 +1,5 @@
 using System.Text.Json;
+using VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer;
 
 namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
@@ -589,6 +590,198 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             }
 
             return [25, 50, 75, 100, 150, 200];
+        }
+
+        /// <summary>
+        /// Lab-only: builds provenanced workload Message-IDs from <c>.artifacts/Articles</c> for the local peer.
+        /// Requires <c>VECTORNNTPD_BACKFILLER_E2E_STRESS=1</c> and
+        /// <c>VECTORNNTPD_BACKFILLER_E2E_STRESS_REQUIRE_LOCAL_UPSTREAM=1</c>.
+        /// Does not start BackFiller, the peer, or contact real upstreams.
+        /// </summary>
+        [Fact]
+        public async Task Discover_workload_from_articles_for_local_peer_when_enabled()
+        {
+            if (!StressHarnessOptions.IsEnabled() || !StressHarnessOptions.RequiresLocalUpstream())
+            {
+                return;
+            }
+
+            _ = LocalUpstreamIsolationGate.EnsureDeclaredEndpointOrThrow(
+                LocalUpstreamIsolationGate.FromEnvironment());
+            var options = StressHarnessOptions.FromEnvironment();
+            var articlesRoot = options.NewsLogDirectory;
+            if (!Directory.Exists(articlesRoot))
+            {
+                Assert.Fail(
+                    "Local-peer discovery requires VECTORNNTPD_BACKFILLER_E2E_STRESS_NEWSLOGS to point at "
+                    + $".artifacts/Articles (got missing path: {articlesRoot}).");
+            }
+
+            var index = await CorpusArticleIndex.BuildAsync(articlesRoot);
+            Assert.True(index.Count > 0);
+            var (count, fingerprint) = await LocalArticlePeerWorkload.WriteAsync(
+                index,
+                options.WorkloadDirectory,
+                options.Seed);
+            await StressWorkloadGuard.RequireProvenancedWorkloadAsync(options, CancellationToken.None);
+            Console.WriteLine(
+                $"local-peer workload articles={count} fingerprint={fingerprint} dir={options.WorkloadDirectory}");
+        }
+
+        /// <summary>
+        /// Lab-only short smoke against a pre-started local ARTICLE peer and lab-pointed BackFiller.
+        /// Phase <c>LocalPeerSmoke</c>. Fail-closed unless local-upstream env is set to loopback.
+        /// Does not start/stop BackFiller, RabbitMQ, or the peer.
+        /// </summary>
+        [Fact]
+        public async Task LocalPeerSmoke_when_enabled()
+        {
+            if (!StressHarnessOptions.IsEnabled())
+            {
+                return;
+            }
+
+            var phase = StressHarnessOptions.GetPhaseOrDefault("LocalPeerSmoke");
+            if (!string.Equals(phase, "LocalPeerSmoke", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(phase, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Fail closed on declared env + sanitized published-provider snapshot + peer reachability.
+            // Does not inject into a separately running BackFiller transport; see ISOLATION_AND_ACCOUNTING_FIXES.md.
+            var (host, port) = LocalUpstreamIsolationGate.EnsureReadyOrThrow(
+                LocalUpstreamIsolationGate.FromEnvironment());
+            Console.WriteLine(
+                $"LocalPeerSmoke isolation gate passed peer={host}:{port}; snapshot providers verified local-only.");
+
+            var options = StressHarnessOptions.FromEnvironment();
+            EnsureWorkload(options);
+            var harness = new BackFillerE2EStressHarness(options);
+            var backbone = StressHarnessOptions.GetBackboneOrDefault("Giganews");
+            var file = Path.Join(options.WorkloadDirectory, "warmup-message-ids.txt");
+            var concurrency = StressHarnessOptions.GetConcurrencyOrDefault(1);
+            var durationSeconds = StressHarnessOptions.GetDurationSecondsOrDefault(20);
+            var summary = await harness.RunAsync(
+                "local-peer-smoke-c" + concurrency,
+                backbone,
+                file,
+                concurrency,
+                maxInFlight: Math.Max(2, concurrency * 2),
+                duration: TimeSpan.FromSeconds(durationSeconds),
+                maxRequests: 20,
+                CancellationToken.None);
+            Console.WriteLine(summary.FormatTableRow());
+
+            long? peerRequests = null;
+            long? peerSuccess = null;
+            long? peerMissing = null;
+            long? peerProtocol = null;
+            var peerMetricsPath = Environment.GetEnvironmentVariable(
+                "VECTORNNTPD_LAB_LOCAL_ARTICLE_PEER_METRICS_JSON");
+            if (!string.IsNullOrWhiteSpace(peerMetricsPath) && File.Exists(peerMetricsPath))
+            {
+                using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(peerMetricsPath));
+                var root = doc.RootElement;
+                if (root.TryGetProperty("ArticleRequests", out var ar))
+                {
+                    peerRequests = ar.GetInt64();
+                }
+
+                if (root.TryGetProperty("ArticleSuccess", out var asuc))
+                {
+                    peerSuccess = asuc.GetInt64();
+                }
+
+                if (root.TryGetProperty("ArticleMissing", out var am))
+                {
+                    peerMissing = am.GetInt64();
+                }
+
+                if (root.TryGetProperty("ProtocolErrors", out var pe))
+                {
+                    peerProtocol = pe.GetInt64();
+                }
+            }
+
+            LocalPeerSmokeAccounting.AssertSuccessfulSmokeOrThrow(
+                new LocalPeerSmokeAccounting.Evidence(
+                    summary.RequestsStarted,
+                    summary.WorkSuccess,
+                    summary.WorkNotFound,
+                    summary.WorkOtherFailure,
+                    summary.ArticlesDelivered,
+                    summary.OutstandingAtEnd,
+                    summary.Timeouts,
+                    summary.UnresolvedAtDispose,
+                    summary.LateRepliesAfterTimeout,
+                    peerRequests,
+                    peerSuccess,
+                    peerMissing,
+                    peerProtocol));
+        }
+
+        /// <summary>
+        /// Lab-only controlled concurrency ramp against the local ARTICLE peer.
+        /// Phase <c>LocalPeerRamp</c>. Same fail-closed isolation as <see cref="LocalPeerSmoke_when_enabled"/>.
+        /// </summary>
+        [Fact]
+        public async Task LocalPeerRamp_when_enabled()
+        {
+            if (!StressHarnessOptions.IsEnabled())
+            {
+                return;
+            }
+
+            var phase = StressHarnessOptions.GetPhaseOrDefault("LocalPeerRamp");
+            if (!string.Equals(phase, "LocalPeerRamp", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(phase, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var (host, port) = LocalUpstreamIsolationGate.EnsureReadyOrThrow(
+                LocalUpstreamIsolationGate.FromEnvironment());
+            Console.WriteLine($"LocalPeerRamp isolation gate passed peer={host}:{port}");
+
+            var options = StressHarnessOptions.FromEnvironment();
+            EnsureWorkload(options);
+            var harness = new BackFillerE2EStressHarness(options);
+            var backbone = StressHarnessOptions.GetBackboneOrDefault("Giganews");
+            var file = Path.Join(options.WorkloadDirectory, StressCorpusPaths.MainIdsAuditFileName);
+            var durationSeconds = StressHarnessOptions.GetDurationSecondsOrDefault(30);
+            var levels = ParseConcurrencyLevels();
+            // Lab peer MaxSessions is typically 128; do not exceed that without an explicit peer raise.
+            // Stages above production provider MaxSessions still measure queueing; stop on timeouts/outstanding.
+            const int maxLabPeerConcurrency = 128;
+            foreach (var concurrency in levels.Where(static c => c <= maxLabPeerConcurrency).DefaultIfEmpty(1))
+            {
+                // Scale in-flight with the stage. Do not honor VECTORNNTPD_BACKFILLER_E2E_STRESS_MAX_INFLIGHT:
+                // a leftover value of 2 from LocalPeerSmoke silently caps PeakOutstanding and invents a
+                // false throughput plateau while ConfiguredConcurrency appears to ramp.
+                var maxInFlight = concurrency * 2;
+                Console.WriteLine(
+                    $"LocalPeerRamp stage c={concurrency} maxInFlight={maxInFlight} durationSec={durationSeconds}");
+                var summary = await harness.RunAsync(
+                    $"local-peer-ramp-c{concurrency}",
+                    backbone,
+                    file,
+                    concurrency,
+                    maxInFlight,
+                    TimeSpan.FromSeconds(durationSeconds),
+                    maxRequests: null,
+                    CancellationToken.None);
+                Console.WriteLine(summary.FormatTableRow());
+                Console.WriteLine(
+                    $"LocalPeerRamp stage done c={concurrency} peakOut={summary.PeakOutstanding} "
+                    + $"art/s={summary.ArticlesPerSecond:F1} Gbps={summary.PayloadGbps:F3}");
+                if (summary.Timeouts > summary.RequestsStarted * 0.25
+                    || summary.OutstandingAtEnd > 0)
+                {
+                    Console.WriteLine($"LocalPeerRamp stopping after c={concurrency}");
+                    break;
+                }
+            }
         }
     }
 }

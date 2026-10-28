@@ -811,6 +811,15 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 
     internal sealed class FakeBackFillerRabbitMqPublishChannel(long generation) : IRabbitMqPublishChannel
     {
+        /// <summary>Guards <see cref="Publications"/> for concurrent confirmed publishes.</summary>
+        private readonly Lock _publicationsGate = new();
+
+        /// <summary>Current confirm-wait depth for overlap observation.</summary>
+        private int _confirmInFlight;
+
+        /// <summary>Peak confirm-wait depth observed on this channel.</summary>
+        private int _maxConfirmInFlight;
+
         /// <summary>Broker publish-channel generation supplied at creation.</summary>
         public long Generation { get; } = generation;
 
@@ -834,6 +843,9 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
 
         /// <summary>Optional hook invoked immediately after enqueue and before confirm simulation.</summary>
         public Action? AfterEnqueue { get; set; }
+
+        /// <summary>Peak number of overlapping confirm waits observed on this channel.</summary>
+        internal int MaxConfirmInFlight => Volatile.Read(ref _maxConfirmInFlight);
 
         /// <summary>Publications accepted by this channel in invocation order.</summary>
         public List<RabbitMqConfirmedPublication> Publications { get; } = [];
@@ -892,37 +904,64 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 throw new InvalidOperationException("publish failed");
             }
 
-            Publications.Add(publication);
-            Enqueued?.TrySetResult();
-            AfterEnqueue?.Invoke();
-
-            switch (ConfirmBehavior)
+            lock (_publicationsGate)
             {
-                case FakePublishConfirmBehavior.Confirm:
-                    return;
-                case FakePublishConfirmBehavior.Nack:
-                    throw new InvalidOperationException("publisher nack");
-                case FakePublishConfirmBehavior.Unroutable:
-                    throw new RabbitMqPublicationUnroutableException();
-                case FakePublishConfirmBehavior.Timeout:
-                    throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
-                case FakePublishConfirmBehavior.CloseChannel:
-                    IsOpen = false;
-                    ChannelFaulted?.Invoke(
-                        this,
-                        new RabbitMqChannelFaultedEventArgs(
-                            RabbitMqChannelFaultKind.ChannelShutdown,
-                            "channel closed during confirmation"));
-                    throw new InvalidOperationException("RabbitMQ publish channel closed during confirmation.");
-                default:
+                Publications.Add(publication);
+            }
+
+            var inFlight = Interlocked.Increment(ref _confirmInFlight);
+            try
+            {
+                int observed;
+                while ((observed = Volatile.Read(ref _maxConfirmInFlight)) < inFlight
+                    && Interlocked.CompareExchange(ref _maxConfirmInFlight, inFlight, observed) != observed)
+                {
+                    // CAS retry: work occurs in the loop condition.
+                }
+
+                Enqueued?.TrySetResult();
+                AfterEnqueue?.Invoke();
+
+                if (ConfirmBehavior == FakePublishConfirmBehavior.Wait)
+                {
                     if (ConfirmGate is not null)
                     {
                         await ConfirmGate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-                        return;
                     }
+                    else
+                    {
+                        await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                        throw new OperationCanceledException(cancellationToken);
+                    }
+                }
 
-                    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
-                    throw new OperationCanceledException(cancellationToken);
+                // Re-read after an optional Wait gate so tests can switch outcome for overlapping callers.
+                switch (ConfirmBehavior)
+                {
+                    case FakePublishConfirmBehavior.Confirm:
+                    case FakePublishConfirmBehavior.Wait:
+                        return;
+                    case FakePublishConfirmBehavior.Nack:
+                        throw new InvalidOperationException("publisher nack");
+                    case FakePublishConfirmBehavior.Unroutable:
+                        throw new RabbitMqPublicationUnroutableException();
+                    case FakePublishConfirmBehavior.Timeout:
+                        throw new OperationCanceledException("publisher confirm timeout", cancellationToken);
+                    case FakePublishConfirmBehavior.CloseChannel:
+                        IsOpen = false;
+                        ChannelFaulted?.Invoke(
+                            this,
+                            new RabbitMqChannelFaultedEventArgs(
+                                RabbitMqChannelFaultKind.ChannelShutdown,
+                                "channel closed during confirmation"));
+                        throw new InvalidOperationException("RabbitMQ publish channel closed during confirmation.");
+                    default:
+                        return;
+                }
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _confirmInFlight);
             }
         }
 

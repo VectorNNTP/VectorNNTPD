@@ -7,6 +7,7 @@ using System.Net.Security;
 using VectorNNTPD.Common.Articles;
 using System.Buffers;
 using System.Text;
+using VectorNNTPD.BackFillerService.Diagnostics;
 using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.BackFillerService.Nntp
@@ -430,7 +431,9 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 await beforeBusy().ConfigureAwait(false);
             }
 
+            var busyWaitStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
             await _busy.WaitAsync(cancellationToken).ConfigureAwait(false);
+            ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.SessionBusyWait, busyWaitStarted);
             var previous = State;
             ExceptionDispatchInfo? consumerError = null;
             try
@@ -447,6 +450,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 AssignState(NntpSessionState.Busy);
                 var commandLength = NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length + NntpProtocolIo.Crlf.Length;
                 var command = ArrayPool<byte>.Shared.Rent(commandLength);
+                var commandStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
                 try
                 {
                     NntpProtocolIo.ArticlePrefix.CopyTo(command.AsSpan());
@@ -466,6 +470,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
 
                 var statusLine = await ReadStatusLineAsync(cancellationToken).ConfigureAwait(false);
+                ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ArticleCommandToStatus, commandStarted);
                 if (statusLine is null)
                 {
                     return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, null, "NNTP ARTICLE status was empty.");
@@ -485,29 +490,35 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     if (consumePayload is null)
                     {
                         byte[] payload;
+                        var payloadStarted = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
                         try
                         {
                             payload = await reader
                                 .ReadArticlePayloadAsync(maxArticleBytes, _options.ReceiveTimeout, cancellationToken)
                                 .ConfigureAwait(false);
                             NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, payload.Length);
+                            ArticleWorkStageProfiler.Installed?.Record(ArticleWorkStageId.ArticlePayloadReceive, payloadStarted);
                         }
                         catch (EndOfStreamException)
                         {
+                            ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                             return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "NNTP article ended before terminator.");
                         }
                         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                         {
+                            ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                             return MarkUnhealthy(ArticleRetrievalKind.Cancelled, code, "ARTICLE receive was cancelled.");
                         }
                         catch (OperationCanceledException)
                         {
+                            ArticleWorkStageProfiler.Installed?.RecordTimeout(ArticleWorkStageId.ArticlePayloadReceive);
                             return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "ARTICLE receive timed out.");
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("MaxArticleBytes", StringComparison.Ordinal))
                         {
                             // Destuffed size exceeded the hard ceiling: permanently unusable for Article Work.
                             // Retire the session because the multiline response is no longer synchronized.
+                            ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                             return MarkUnhealthy(ArticleRetrievalKind.InvalidArticle, code, "NNTP article exceeded MaxArticleBytes.");
                         }
 
@@ -526,6 +537,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                     }
 
                     var accepted = false;
+                    var payloadStartedWithConsumer = ArticleWorkStageProfiler.IsEnabled ? Stopwatch.GetTimestamp() : 0;
                     try
                     {
                         _ = await reader.ReadArticlePayloadAsync(
@@ -542,7 +554,14 @@ namespace VectorNNTPD.BackFillerService.Nntp
                                     accepted = true;
                                     try
                                     {
-                                        return consumePayload(memory);
+                                        var parseStarted = ArticleWorkStageProfiler.IsEnabled
+                                            ? Stopwatch.GetTimestamp()
+                                            : 0;
+                                        var created = consumePayload(memory);
+                                        ArticleWorkStageProfiler.Installed?.Record(
+                                            ArticleWorkStageId.ParseCanonical,
+                                            parseStarted);
+                                        return created;
                                     }
                                     catch (Exception ex) when (ex is not PayloadConsumerException)
                                     {
@@ -552,21 +571,28 @@ namespace VectorNNTPD.BackFillerService.Nntp
                                 },
                                 cancellationToken)
                             .ConfigureAwait(false);
+                        ArticleWorkStageProfiler.Installed?.Record(
+                            ArticleWorkStageId.ArticlePayloadReceive,
+                            payloadStartedWithConsumer);
                     }
                     catch (EndOfStreamException)
                     {
+                        ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                         return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "NNTP article ended before terminator.");
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
+                        ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                         return MarkUnhealthy(ArticleRetrievalKind.Cancelled, code, "ARTICLE receive was cancelled.");
                     }
                     catch (OperationCanceledException)
                     {
+                        ArticleWorkStageProfiler.Installed?.RecordTimeout(ArticleWorkStageId.ArticlePayloadReceive);
                         return MarkUnhealthy(ArticleRetrievalKind.ProviderFailure, code, "ARTICLE receive timed out.");
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("MaxArticleBytes", StringComparison.Ordinal))
                     {
+                        ArticleWorkStageProfiler.Installed?.RecordFailure(ArticleWorkStageId.ArticlePayloadReceive);
                         return MarkUnhealthy(ArticleRetrievalKind.InvalidArticle, code, "NNTP article exceeded MaxArticleBytes.");
                     }
 

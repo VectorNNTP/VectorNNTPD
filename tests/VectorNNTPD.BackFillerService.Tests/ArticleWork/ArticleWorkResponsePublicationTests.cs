@@ -557,6 +557,81 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         }
 
         /// <summary>
+        /// Multiple <see cref="ArticleWorkResponsePublisher.PublishAsync"/> calls may await confirmation concurrently
+        /// (bounded by <see cref="ArticleWorkResponsePublisher.MaxConcurrentConfirmedPublications"/>).
+        /// </summary>
+        [Fact]
+        public async Task Concurrent_publishes_overlap_confirm_waits_and_preserve_correlation()
+        {
+            await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Wait);
+            context.PublishChannel.ConfirmGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reachedTwo = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            context.PublishChannel.AfterEnqueue = () =>
+            {
+                if (context.PublishChannel.MaxConfirmInFlight >= 2)
+                {
+                    reachedTwo.TrySetResult();
+                }
+            };
+
+            var first = context.Publisher.PublishAsync(
+                CreateSuccessIntent("corr-a", "reply-a"),
+                CancellationToken.None);
+            var second = context.Publisher.PublishAsync(
+                CreateSuccessIntent("corr-b", "reply-b"),
+                CancellationToken.None);
+
+            await reachedTwo.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(context.PublishChannel.MaxConfirmInFlight >= 2);
+
+            context.PublishChannel.ConfirmGate.TrySetResult();
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(2, context.PublishChannel.Publications.Count);
+            Assert.Contains(
+                context.PublishChannel.Publications,
+                static p => p.CorrelationId == "corr-a" && p.RoutingKey == "reply-a");
+            Assert.Contains(
+                context.PublishChannel.Publications,
+                static p => p.CorrelationId == "corr-b" && p.RoutingKey == "reply-b");
+            Assert.All(context.PublishChannel.Publications, static p => Assert.False(p.Persistent));
+            Assert.All(context.PublishChannel.Publications, static p => Assert.True(p.Mandatory));
+        }
+
+        /// <summary>
+        /// When overlapping confirms are released into a nack outcome, callers fail individually and none succeed.
+        /// </summary>
+        [Fact]
+        public async Task Concurrent_publish_nack_fails_each_caller_without_false_success()
+        {
+            await using var context = await PublicationContext.StartAsync(FakePublishConfirmBehavior.Wait);
+            var bothOverlapping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            context.PublishChannel.AfterEnqueue = () =>
+            {
+                if (context.PublishChannel.MaxConfirmInFlight >= 2)
+                {
+                    bothOverlapping.TrySetResult();
+                }
+            };
+            context.PublishChannel.ConfirmGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var first = context.Publisher.PublishAsync(
+                CreateSuccessIntent("corr-1", "reply-1"),
+                CancellationToken.None);
+            var second = context.Publisher.PublishAsync(
+                CreateSuccessIntent("corr-2", "reply-2"),
+                CancellationToken.None);
+
+            await bothOverlapping.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            context.PublishChannel.ConfirmBehavior = FakePublishConfirmBehavior.Nack;
+            context.PublishChannel.ConfirmGate.TrySetResult();
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await first);
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await second);
+            Assert.Equal(2, context.PublishChannel.Publications.Count);
+        }
+
+        /// <summary>
         /// Single pipeline pass after publish nack: one handler invocation, one publication attempt, one NACK.
         /// </summary>
         [Fact]
@@ -785,6 +860,20 @@ namespace VectorNNTPD.BackFillerService.Tests.ArticleWork
         /// Handler returning canonical success endpoint fields for publication tests.
         /// </summary>
         /// <returns>Controllable handler configured for success JSON.</returns>
+        /// <summary>Builds a Success intent with distinct correlation/reply routing for concurrent publish tests.</summary>
+        private static ArticleWorkResponseIntent CreateSuccessIntent(string correlationId, string replyTo) =>
+            new(
+                ArticleWorkOutcome.Success,
+                Guid.Parse(ArticleWorkTestDeliveries.CanonicalRequestId),
+                ArticleWorkTestDeliveries.CanonicalMessageId,
+                "Giganews",
+                correlationId,
+                replyTo,
+                Error: null,
+                ArticleWorkTestDeliveries.CanonicalFqdn,
+                ArticleWorkTestDeliveries.CanonicalListenerPort,
+                ArticleWorkTestDeliveries.CanonicalArticleIdHex);
+
         private static ControllableArticleWorkHandler SuccessHandler() =>
             new()
             {

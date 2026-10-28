@@ -242,6 +242,8 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// <see cref="ArticleResourceLimits.MaxArticleBytes"/>. 8 MiB is the next power of two above that limit.
         /// Eight arrays per bucket reuse a warm buffer after reconnects. A returned array larger than the pool
         /// maximum is left for the collector; <see cref="ArrayPool{T}.Return(T[], bool)"/> does not store it.
+        /// Lab prototype binaries may use a larger <c>maxArraysPerBucket</c>; see
+        /// <c>.artifacts/.../policy-b-scratch-reuse-design/prototype-b64/</c>.
         /// </summary>
         private static readonly ArrayPool<byte> PayloadScratchPool = ArrayPool<byte>.Create(
             maxArrayLength: 8 * 1024 * 1024,
@@ -256,14 +258,13 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// when <c>maxBytes</c> allows it. A common article then needs no growth copy. Larger articles double
         /// until they fit, and growth stops at the caller's max instead of renting that max up front.
         /// The rented array may be longer than the size requested. <see cref="_payloadRentMinimum"/> is that
-        /// request, and the array length is the usable capacity. After a payload read, a request above 1 MiB
-        /// is returned and a 1 MiB buffer is rented again, so one large article does not stay on the reader.
-        /// The exact-array read copies the written prefix out. The callback read exposes that prefix only
-        /// until the callback returns, then the next article may overwrite it.
+        /// request, and the array length is the usable capacity. After a payload read finishes, the scratch is
+        /// returned to <see cref="_payloadPool"/> so idle readers do not retain a ~1 MiB lease; the next article
+        /// rents again. The exact-array read copies the written prefix out. The callback read exposes that prefix
+        /// only until the callback returns; callers must not store it.
         /// Returned arrays are not cleared. The scratch holds article bytes, not credentials.
         /// </summary>
         private byte[] _payloadScratch = [];
-
         /// <summary>Size last requested from <see cref="_payloadPool"/>. Zero when no buffer is rented.</summary>
         private int _payloadRentMinimum;
 
@@ -499,9 +500,10 @@ namespace VectorNNTPD.BackFillerService.Nntp
         /// Destuffing matches <see cref="ReadArticlePayloadAsync(int, TimeSpan, CancellationToken)"/>.
         /// This overload does not copy the prefix. The scratch length is cleared after <paramref name="consume"/> returns,
         /// including when <paramref name="consume"/> throws. A later read on this reader may overwrite the same bytes.
-        /// When the scratch was rented above 1 MiB, that array is returned after the callback and a 1 MiB buffer is rented
-        /// for the next article. <paramref name="consume"/> is not called when the read fails before a terminator.
-        /// Caller cancellation and the timeout both surface as <see cref="OperationCanceledException"/>.
+        /// After <paramref name="consume"/> returns (or throws), any rented scratch is returned to the pool unless
+        /// disposal already owns cleanup. The next article rents again. <paramref name="consume"/> is not called when
+        /// the read fails before a terminator. Caller cancellation and the timeout both surface as
+        /// <see cref="OperationCanceledException"/>.
         /// </remarks>
         internal async Task<T> ReadArticlePayloadAsync<T>(
             int maxBytes,
@@ -587,7 +589,7 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 {
                     if (Volatile.Read(ref _payloadRelease) == 0)
                     {
-                        TrimPayloadScratch();
+                        ReleasePayloadScratchAfterArticle();
                     }
                 }
                 finally
@@ -596,7 +598,6 @@ namespace VectorNNTPD.BackFillerService.Nntp
                 }
             }
         }
-
         /// <summary>
         /// Reads one more socket chunk after a trailing CR was left as the only unread byte.
         /// </summary>
@@ -764,30 +765,23 @@ namespace VectorNNTPD.BackFillerService.Nntp
         }
 
         /// <summary>
-        /// Returns an oversized scratch and rents the 1 MiB working buffer.
-        /// Does nothing when the last request was already at or below that size, or when no buffer is rented.
+        /// Returns any rented payload scratch after an ARTICLE payload read finishes and <c>consume</c> has returned.
         /// </summary>
         /// <remarks>
-        /// Called only after <see cref="_payloadCount"/> is cleared, so there is no prefix to preserve.
-        /// The replacement is published before the previous array is returned. A rent failure leaves the oversized array in place.
+        /// Called from <see cref="ReadArticlePayloadAsync{T}"/> <c>finally</c> only when disposal has not taken ownership
+        /// (<see cref="_payloadRelease"/> is still zero). Prefix length is already cleared. The exchange publishes an
+        /// empty non-pooled array before <see cref="ArrayPool{T}.Return"/> so a later Dispose cannot return the same
+        /// buffer twice. Called while <see cref="_payloadUsers"/> is still elevated; <see cref="ExitPayload"/> runs after.
         /// </remarks>
-        private void TrimPayloadScratch()
+        private void ReleasePayloadScratchAfterArticle()
         {
-            if (_payloadRentMinimum <= PayloadScratchInitialBytes)
+            var scratch = Interlocked.Exchange(ref _payloadScratch, []);
+            _payloadRentMinimum = 0;
+            if (scratch.Length != 0)
             {
-                return;
-            }
-
-            var replacement = _payloadPool.Rent(PayloadScratchInitialBytes);
-            var previous = _payloadScratch;
-            _payloadScratch = replacement;
-            _payloadRentMinimum = PayloadScratchInitialBytes;
-            if (previous.Length != 0)
-            {
-                _payloadPool.Return(previous);
+                _payloadPool.Return(scratch);
             }
         }
-
         /// <summary>Marks one payload read so <see cref="Dispose"/> cannot return the scratch underneath it.</summary>
         private void EnterPayload() => Interlocked.Increment(ref _payloadUsers);
 

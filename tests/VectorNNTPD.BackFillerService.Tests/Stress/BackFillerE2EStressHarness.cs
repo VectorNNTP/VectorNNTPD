@@ -28,6 +28,29 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             _options = options ?? throw new ArgumentNullException(nameof(options));
         }
 
+        /// <summary>
+        /// Ensures the configured corpus directory is usable for the current mode.
+        /// Local-upstream lab mode accepts an Articles tree (no <c>*.log</c> required);
+        /// ordinary stress still requires news-log <c>*.log</c> files.
+        /// </summary>
+        private void RequireCorpusReadyForConfiguredMode()
+        {
+            if (StressHarnessOptions.RequiresLocalUpstream())
+            {
+                if (!Directory.Exists(_options.NewsLogDirectory))
+                {
+                    throw new InvalidOperationException(
+                        "Local-peer corpus directory is missing or unreadable: "
+                        + _options.NewsLogDirectory
+                        + ". Set VECTORNNTPD_BACKFILLER_E2E_STRESS_NEWSLOGS to .artifacts/Articles.");
+                }
+
+                return;
+            }
+
+            NewsLogMessageIdDiscovery.RequireUsableCorpusDirectory(_options.NewsLogDirectory);
+        }
+
         /// <summary>Discovers Message-IDs from the configured corpus, writes workload files and manifest.</summary>
         public async Task<NewsLogDiscoveryStats> DiscoverAndWriteWorkloadAsync(
             CancellationToken cancellationToken)
@@ -121,7 +144,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
             ArgumentOutOfRangeException.ThrowIfLessThan(maxInFlight, 1);
 
             // Static publish gate: corpus + provenance + SHA before any AMQP connect/publish.
-            NewsLogMessageIdDiscovery.RequireUsableCorpusDirectory(_options.NewsLogDirectory);
+            // Local-peer smoke uses .artifacts/Articles (no *.log); news-log stress still requires *.log.
+            RequireCorpusReadyForConfiguredMode();
             await StressWorkloadGuard.RequireProvenancedWorkloadAsync(_options, cancellationToken)
                 .ConfigureAwait(false);
 

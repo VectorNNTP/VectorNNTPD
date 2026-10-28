@@ -102,10 +102,27 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
         /// <summary>Minimum completed replies before abort thresholds are evaluated.</summary>
         public int AbortAfterRequests { get; init; } = 200;
 
+        /// <summary>
+        /// When <c>1</c>, live stress must target a loopback local ARTICLE peer
+        /// (<c>VECTORNNTPD_BACKFILLER_E2E_STRESS_LOCAL_PEER_HOST</c>/<c>_PORT</c>).
+        /// </summary>
+        public const string RequireLocalUpstreamEnvironmentVariable =
+            "VECTORNNTPD_BACKFILLER_E2E_STRESS_REQUIRE_LOCAL_UPSTREAM";
+
         /// <summary>Returns <see langword="true"/> when the opt-in environment flag is set to <c>1</c>.</summary>
         public static bool IsEnabled() =>
             string.Equals(
                 Environment.GetEnvironmentVariable(EnableEnvironmentVariable),
+                "1",
+                StringComparison.Ordinal);
+
+        /// <summary>
+        /// Returns <see langword="true"/> when local-upstream isolation is requested
+        /// (<see cref="RequireLocalUpstreamEnvironmentVariable"/>=<c>1</c>).
+        /// </summary>
+        public static bool RequiresLocalUpstream() =>
+            string.Equals(
+                Environment.GetEnvironmentVariable(RequireLocalUpstreamEnvironmentVariable),
                 "1",
                 StringComparison.Ordinal);
 

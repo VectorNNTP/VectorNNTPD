@@ -132,6 +132,8 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
             }
 
             // Drive Inactive for session keys that left the live session set (sibling keys untouched).
+            // After resolve (or when already Clear), drop the machine so catalog/MaxSessions churn cannot
+            // retain ObservationStateMachine entries for the process lifetime.
             foreach (var key in _machines.Keys.ToArray())
             {
                 if (key.Scope != ObservationScope.Instance
@@ -146,7 +148,13 @@ namespace VectorNNTPD.BackFillerService.ArticleWork.SilentConsumerMonitor
                     continue;
                 }
 
-                results.Add(Apply(key, ConditionSignal.Inactive, "session removed", now));
+                var removed = Apply(key, ConditionSignal.Inactive, "session removed", now);
+                results.Add(removed);
+                if (removed.Transition == ObservationTransition.Resolved
+                    || removed.Phase == ObservationPhase.Clear)
+                {
+                    RemoveMachine(key);
+                }
             }
 
             results.Add(

@@ -7,12 +7,10 @@
     "DegradedThreshold": 0.75,
     "EnableSsl": false,
     "Hosts": [
-      "rabbitmq1a.usenet.ninja",
-      "rabbitmq1b.usenet.ninja",
-      "rabbitmq1c.usenet.ninja"
+      "198.18.0.3"
     ],
     "Management": {
-      "BaseUrl": "http://rabbitmq1a.usenet.ninja:15672",
+      "BaseUrl": "http://198.18.0.3:15672",
       "RequestTimeoutSeconds": 5
     },
     "MaxConnections": 16,
