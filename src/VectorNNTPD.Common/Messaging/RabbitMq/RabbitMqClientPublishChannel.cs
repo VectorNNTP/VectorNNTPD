@@ -43,7 +43,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// <param name="outstandingConfirmationsRateLimiter">
         /// Owned outstanding-confirm limiter (not the borrowed facade passed to <see cref="CreateChannelOptions"/>).
         /// </param>
-        internal RabbitMqClientPublishChannel(
+        private RabbitMqClientPublishChannel(
             IChannel channel,
             long generation,
             RateLimiter outstandingConfirmationsRateLimiter)
@@ -54,6 +54,54 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             _outstandingConfirmationsRateLimiter = outstandingConfirmationsRateLimiter;
             Generation = generation;
             _channel.ChannelShutdownAsync += OnChannelShutdownAsync;
+        }
+
+        /// <summary>
+        /// Opens a confirm-tracked channel with an explicit outstanding-confirm limiter owned by the returned wrapper.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// RabbitMQ.Client 7.2.2 disposes the limiter instance stored on <see cref="CreateChannelOptions"/>, so the
+        /// client receives a <see cref="RabbitMqBorrowedRateLimiter"/> facade. The real
+        /// <see cref="ThrottlingRateLimiter"/> is owned here and released with sync <see cref="IDisposable.Dispose"/>
+        /// from <see cref="DisposeAsync"/> (RateLimiter's <c>DisposeAsync</c> ends in <c>Dispose(false)</c> and would
+        /// not release the inner <c>ConcurrencyLimiter</c>).
+        /// </para>
+        /// <para>
+        /// Construction uses <see cref="DisposableOwnership{T}"/> / <see cref="AsyncDisposableOwnership{T}"/> so
+        /// failure paths dispose via <c>using</c> / <c>await using</c>, and success transfers ownership into this
+        /// wrapper—matching <see cref="RabbitMqClientConnectionFactory.ConnectAsync"/>.
+        /// </para>
+        /// </remarks>
+        /// <param name="connection">Open RabbitMQ connection used to create the channel.</param>
+        /// <param name="generation">Connection generation stamped on the wrapper.</param>
+        /// <param name="cancellationToken">Cancels channel open.</param>
+        /// <returns>Wrapper that owns both the channel and the outstanding-confirm limiter.</returns>
+        internal static async Task<RabbitMqClientPublishChannel> CreateConfirmTrackedAsync(
+            IConnection connection,
+            long generation,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(connection);
+
+            using var limiterOwnership = new DisposableOwnership<ThrottlingRateLimiter>(
+                new ThrottlingRateLimiter(RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations));
+            var options = new CreateChannelOptions(
+                publisherConfirmationsEnabled: true,
+                publisherConfirmationTrackingEnabled: true,
+                outstandingPublisherConfirmationsRateLimiter: new RabbitMqBorrowedRateLimiter(
+                    limiterOwnership.Resource));
+            var channel = await connection
+                .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            await using var channelOwnership = new AsyncDisposableOwnership<IChannel>(channel);
+            var publishChannel = new RabbitMqClientPublishChannel(
+                channelOwnership.Resource,
+                generation,
+                limiterOwnership.Resource);
+            channelOwnership.Transfer();
+            limiterOwnership.Transfer();
+            return publishChannel;
         }
 
         /// <inheritdoc />

@@ -146,32 +146,12 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 throw new InvalidOperationException("RabbitMQ connection is not open for publication.");
             }
 
-            // Explicit limiter: the two-arg CreateChannelOptions leaves OutstandingPublisherConfirmationsRateLimiter
-            // null (unlimited). Align with RabbitMqPublisherConfirmLimits / Article Work response publisher gate.
-            // RabbitMQ.Client 7.2.2 Channel stores and disposes the options limiter, so pass a borrowed facade
-            // and transfer sole ownership of the real ThrottlingRateLimiter to RabbitMqClientPublishChannel.
-            // Null the local after transfer so finally disposes only the failure path.
-            ThrottlingRateLimiter? limiter = new ThrottlingRateLimiter(
-                RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations);
-            try
-            {
-                var options = new CreateChannelOptions(
-                    publisherConfirmationsEnabled: true,
-                    publisherConfirmationTrackingEnabled: true,
-                    outstandingPublisherConfirmationsRateLimiter: new RabbitMqBorrowedRateLimiter(limiter));
-                var channel = await _connection
-                    .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                var ownedLimiter = limiter;
-                limiter = null;
-                return new RabbitMqClientPublishChannel(channel, generation, ownedLimiter);
-            }
-            finally
-            {
-                // ThrottlingRateLimiter (RateLimiter 8.0.0) only releases its ConcurrencyLimiter from Dispose(true).
-                // DisposeAsync ends in Dispose(false) and would leak the inner limiter.
-                limiter?.Dispose();
-            }
+            // Confirm-tracked publish channels own an explicit outstanding-confirm limiter (see
+            // RabbitMqClientPublishChannel.CreateConfirmTrackedAsync). The two-arg CreateChannelOptions
+            // overload leaves OutstandingPublisherConfirmationsRateLimiter null (unlimited).
+            return await RabbitMqClientPublishChannel
+                .CreateConfirmTrackedAsync(_connection, generation, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         /// <inheritdoc />
