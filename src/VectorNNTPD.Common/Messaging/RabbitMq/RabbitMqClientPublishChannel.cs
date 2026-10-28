@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
@@ -21,17 +22,36 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
         /// </summary>
         private readonly IChannel _channel;
 
+        /// <summary>
+        /// Sole owner of the outstanding-confirm <see cref="ThrottlingRateLimiter"/>.
+        /// The RabbitMQ.Client channel receives only a <see cref="RabbitMqBorrowedRateLimiter"/> facade.
+        /// </summary>
+        private readonly RateLimiter _outstandingConfirmationsRateLimiter;
+
         /// <summary><c>1</c> after the first <see cref="DisposeAsync"/>.</summary>
         private int _disposed;
 
         /// <summary><c>1</c> after an unexpected fault has been raised once for this channel.</summary>
         private int _faultRaised;
 
-        /// <summary>Initializes a new wrapper around an opened confirm-enabled channel.</summary>
-        internal RabbitMqClientPublishChannel(IChannel channel, long generation)
+        /// <summary>
+        /// Initializes a new wrapper around an opened confirm-enabled channel and the outstanding-confirm limiter
+        /// supplied at channel creation.
+        /// </summary>
+        /// <param name="channel">Opened confirm-tracked RabbitMQ channel.</param>
+        /// <param name="generation">Connection generation for this channel.</param>
+        /// <param name="outstandingConfirmationsRateLimiter">
+        /// Owned outstanding-confirm limiter (not the borrowed facade passed to <see cref="CreateChannelOptions"/>).
+        /// </param>
+        internal RabbitMqClientPublishChannel(
+            IChannel channel,
+            long generation,
+            RateLimiter outstandingConfirmationsRateLimiter)
         {
             ArgumentNullException.ThrowIfNull(channel);
+            ArgumentNullException.ThrowIfNull(outstandingConfirmationsRateLimiter);
             _channel = channel;
+            _outstandingConfirmationsRateLimiter = outstandingConfirmationsRateLimiter;
             Generation = generation;
             _channel.ChannelShutdownAsync += OnChannelShutdownAsync;
         }
@@ -146,7 +166,11 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             {
             }
 
+            // Dispose the channel first so in-flight confirm tracking finishes; the channel only holds a
+            // borrowed facade and does not dispose this limiter.
             await _channel.DisposeAsync().ConfigureAwait(false);
+            // ThrottlingRateLimiter only releases managed state from Dispose(true); DisposeAsync uses Dispose(false).
+            _outstandingConfirmationsRateLimiter.Dispose();
         }
 
         /// <summary>Raises <see cref="ChannelFaulted"/> once for an unexpected channel shutdown.</summary>

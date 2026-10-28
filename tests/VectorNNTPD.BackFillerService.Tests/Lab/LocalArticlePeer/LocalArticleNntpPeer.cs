@@ -310,8 +310,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     await stream.WriteAsync(preloaded.WireResponse, cancellationToken).ConfigureAwait(false);
                     await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                     // After a successful write/flush: success means the ARTICLE response left the peer.
+                    // No metricsRecorded=true: this path returns immediately; a later catch cannot run.
                     Metrics.RecordArticleSuccess(preloaded.LogicalByteCount, preloaded.WireResponse.Length);
-                    metricsRecorded = true;
                     return;
                 }
 
@@ -356,8 +356,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 await stream.WriteAsync(framed, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 // After a successful write/flush: success means the ARTICLE response left the peer.
+                // No metricsRecorded=true: try ends here; a later catch cannot run after this statement.
                 Metrics.RecordArticleSuccess(logical.Length, status.Length + framed.Length);
-                metricsRecorded = true;
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {

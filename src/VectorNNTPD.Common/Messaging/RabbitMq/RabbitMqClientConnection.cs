@@ -148,7 +148,8 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
             // Explicit limiter: the two-arg CreateChannelOptions leaves OutstandingPublisherConfirmationsRateLimiter
             // null (unlimited). Align with RabbitMqPublisherConfirmLimits / Article Work response publisher gate.
-            // On success the channel owns the limiter (RabbitMQ.Client 7.2.2 Channel.Dispose/DisposeAsync).
+            // RabbitMQ.Client 7.2.2 Channel stores and disposes the options limiter, so pass a borrowed facade
+            // and transfer sole ownership of the real ThrottlingRateLimiter to RabbitMqClientPublishChannel.
             // Null the local after transfer so finally disposes only the failure path.
             ThrottlingRateLimiter? limiter = new ThrottlingRateLimiter(
                 RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations);
@@ -157,19 +158,19 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 var options = new CreateChannelOptions(
                     publisherConfirmationsEnabled: true,
                     publisherConfirmationTrackingEnabled: true,
-                    outstandingPublisherConfirmationsRateLimiter: limiter);
+                    outstandingPublisherConfirmationsRateLimiter: new RabbitMqBorrowedRateLimiter(limiter));
                 var channel = await _connection
                     .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
+                var ownedLimiter = limiter;
                 limiter = null;
-                return new RabbitMqClientPublishChannel(channel, generation);
+                return new RabbitMqClientPublishChannel(channel, generation, ownedLimiter);
             }
             finally
             {
-                if (limiter is not null)
-                {
-                    await limiter.DisposeAsync().ConfigureAwait(false);
-                }
+                // ThrottlingRateLimiter (RateLimiter 8.0.0) only releases its ConcurrencyLimiter from Dispose(true).
+                // DisposeAsync ends in Dispose(false) and would leak the inner limiter.
+                limiter?.Dispose();
             }
         }
 
