@@ -73,10 +73,9 @@ namespace VectorNNTPD.BackFillerService.Diagnostics
                 {
                     _logger.LogTrace("Stage profiling export loop wait cancelled during stop.");
                 }
-                // codeql[cs/catch-of-all-exceptions] Stop must observe export-loop failure without failing host shutdown.
-                catch (Exception ex)
+                catch (Exception ex) when (IsExportIoFailure(ex))
                 {
-                    _logger.LogDebug(ex, "Stage profiling export loop ended with error.");
+                    _logger.LogDebug(ex, "Stage profiling export loop ended with I/O error.");
                 }
             }
 
@@ -86,8 +85,7 @@ namespace VectorNNTPD.BackFillerService.Diagnostics
                 {
                     await WriteSnapshotAsync(CancellationToken.None).ConfigureAwait(false);
                 }
-                // codeql[cs/catch-of-all-exceptions] Final snapshot is best-effort; shutdown must continue.
-                catch (Exception ex)
+                catch (Exception ex) when (IsExportIoFailure(ex))
                 {
                     _logger.LogWarning(ex, "Failed to write final stage profiling snapshot.");
                 }
@@ -129,5 +127,14 @@ namespace VectorNNTPD.BackFillerService.Diagnostics
             var path = Path.Join(_options.ExportDirectory!, "article-work-stage-profile.json");
             return File.WriteAllTextAsync(path, _profiler.ToJson(), cancellationToken);
         }
+
+        /// <summary>
+        /// True for expected snapshot export I/O failures. Programming errors and unexpected faults are not matched.
+        /// <see cref="DirectoryNotFoundException"/> / <see cref="PathTooLongException"/> are covered by <see cref="IOException"/>.
+        /// </summary>
+        private static bool IsExportIoFailure(Exception ex) =>
+            ex is IOException
+                or UnauthorizedAccessException
+                or System.Security.SecurityException;
     }
 }

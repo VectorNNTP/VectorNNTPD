@@ -42,6 +42,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             var memWire = await CaptureArticleResponseAsync(memPeer.Port, messageId);
             Assert.True(expectedWire.AsSpan().SequenceEqual(fileWire));
             Assert.True(expectedWire.AsSpan().SequenceEqual(memWire));
+            // Client read can finish before the peer records success after flush; wait on settlement.
+            await filePeer.Metrics.WaitForArticleSuccessAsync(expected: 1);
+            await memPeer.Metrics.WaitForArticleSuccessAsync(expected: 1);
             Assert.Equal(1, filePeer.Metrics.ArticleSuccess);
             Assert.Equal(1, memPeer.Metrics.ArticleSuccess);
             Assert.Equal(filePeer.Metrics.LogicalBytesTransferred, memPeer.Metrics.LogicalBytesTransferred);
@@ -70,6 +73,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 Assert.True(expected.AsSpan().SequenceEqual(wire));
             });
             await Task.WhenAll(tasks);
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 16);
             Assert.Equal(16, peer.Metrics.ArticleSuccess);
             Assert.Equal(0, peer.Metrics.OutstandingArticles);
             Assert.True(peer.PreloadedStore.TryGet(messageId, out var again));
@@ -128,6 +132,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 port = peer.Port;
                 var wire = await CaptureArticleResponseAsync(peer.Port, messageId);
                 Assert.True(EndsWithArticleTerminator(wire));
+                await peer.Metrics.WaitForArticleSuccessAsync(expected: 1);
                 Assert.Equal(1, peer.Metrics.ArticleRequests);
                 Assert.Equal(1, peer.Metrics.ArticleSuccess);
                 Assert.True(peer.Metrics.LogicalBytesTransferred > 0);
@@ -177,6 +182,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             using var result = await session.DownloadArticleAsync(messageId, CancellationToken.None);
             Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
             Assert.Contains("hello"u8, result.Article!.Memory.Span);
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 1);
             Assert.Equal(1, peer.Metrics.ArticleSuccess);
         }
 

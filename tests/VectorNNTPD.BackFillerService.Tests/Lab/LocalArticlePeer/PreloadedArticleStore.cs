@@ -78,8 +78,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     logicalBytes += logical.Length;
                     wireBytes += wire.Length;
                 }
-                // codeql[cs/catch-of-all-exceptions] Fail-closed preload must capture every article load failure and continue counting remaining files.
-                catch (Exception ex)
+                catch (Exception ex) when (IsExpectedArticleLoadFailure(ex))
                 {
                     failures++;
                     firstFailure ??= ex;
@@ -110,6 +109,16 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
 
             return new PreloadedArticleStore(map, metrics);
         }
+
+        /// <summary>
+        /// File/content failures from <see cref="NntpWireFramer.ReadAndFrameAsync"/> that should be
+        /// aggregated into fail-closed preload. Unexpected programming faults are not matched.
+        /// </summary>
+        private static bool IsExpectedArticleLoadFailure(Exception ex) =>
+            ex is IOException
+                or UnauthorizedAccessException
+                or InvalidOperationException
+                or ArgumentException;
     }
 
     /// <summary>Immutable precomputed ARTICLE wire response for one Message-ID.</summary>

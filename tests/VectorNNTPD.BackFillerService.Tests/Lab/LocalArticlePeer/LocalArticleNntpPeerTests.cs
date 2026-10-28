@@ -53,6 +53,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             await WriteAsync(stream, "QUIT\r\n"u8.ToArray());
             Assert.StartsWith("205 ", await ReadLineAsync(stream));
 
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 1);
             Assert.Equal(1, peer.Metrics.ArticleSuccess);
             Assert.Equal(0, peer.Metrics.ArticleMissing);
             Assert.Equal(0, peer.Metrics.OutstandingArticles);
@@ -129,6 +130,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
             Assert.NotNull(result.Article);
             Assert.Contains("hello"u8, result.Article!.Memory.Span);
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 1);
             Assert.Equal(1, peer.Metrics.ArticleSuccess);
         }
 
@@ -163,6 +165,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             Assert.StartsWith("220 ", await ReadLineAsync(stream));
             await DrainMultilineUntilTerminatorAsync(stream);
 
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 1);
             Assert.Equal(1, peer.Metrics.ArticleSuccess);
             Assert.Equal(0, peer.Metrics.ProtocolErrors);
         }
@@ -185,6 +188,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 Assert.Equal(ArticleRetrievalKind.ArticleRetrieved, result.Kind);
             });
             await Task.WhenAll(tasks);
+            await peer.Metrics.WaitForArticleSuccessAsync(expected: 8);
             Assert.Equal(8, peer.Metrics.ArticleSuccess);
             Assert.Equal(0, peer.Metrics.OutstandingArticles);
         }

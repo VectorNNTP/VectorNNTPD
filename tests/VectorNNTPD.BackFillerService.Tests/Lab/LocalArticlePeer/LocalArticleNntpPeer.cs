@@ -97,7 +97,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // Best-effort shutdown: listener may already be stopped.
-                _ = ex.GetType();
+                Metrics.RecordProtocolError();
+                _ = ex;
             }
 
             try
@@ -107,7 +108,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
                 // Accept loop may already be faulted or cancelled during dispose.
-                _ = ex.GetType();
+                Metrics.RecordProtocolError();
+                _ = ex;
             }
 
             _cts.Dispose();
@@ -118,7 +120,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                // codeql[cs/missed-using-statement] Ownership transfers to the session task, which disposes in its finally.
                 TcpClient client;
                 try
                 {
@@ -146,20 +147,28 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 }
 
                 Metrics.ConnectionAccepted();
+                // Session task owns disposal via using; gate releases on every completion path.
                 _ = Task.Run(
-                    async () =>
-                    {
-                        try
-                        {
-                            await HandleClientAsync(client, cancellationToken).ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            client.Dispose();
-                            _sessionGate.Release();
-                        }
-                    },
+                    () => RunAcceptedSessionAsync(client, cancellationToken),
                     CancellationToken.None);
+            }
+        }
+
+        /// <summary>
+        /// Owns <paramref name="client"/> for the session lifetime and always releases <see cref="_sessionGate"/>.
+        /// </summary>
+        private async Task RunAcceptedSessionAsync(TcpClient client, CancellationToken cancellationToken)
+        {
+            using (client)
+            {
+                try
+                {
+                    await HandleClientAsync(client, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _sessionGate.Release();
+                }
             }
         }
 
@@ -300,7 +309,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     // Shared immutable buffer: concurrent sessions may write the same array; none mutate it.
                     await stream.WriteAsync(preloaded.WireResponse, cancellationToken).ConfigureAwait(false);
                     await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    // After a successful write/flush: success means the ARTICLE response left the peer.
                     Metrics.RecordArticleSuccess(preloaded.LogicalByteCount, preloaded.WireResponse.Length);
+                    metricsRecorded = true;
                     return;
                 }
 
@@ -344,7 +355,9 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 await stream.WriteAsync(status, cancellationToken).ConfigureAwait(false);
                 await stream.WriteAsync(framed, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                // After a successful write/flush: success means the ARTICLE response left the peer.
                 Metrics.RecordArticleSuccess(logical.Length, status.Length + framed.Length);
+                metricsRecorded = true;
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {

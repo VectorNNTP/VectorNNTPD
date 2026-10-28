@@ -148,8 +148,9 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
 
             // Explicit limiter: the two-arg CreateChannelOptions leaves OutstandingPublisherConfirmationsRateLimiter
             // null (unlimited). Align with RabbitMqPublisherConfirmLimits / Article Work response publisher gate.
-            // On success the channel owns and disposes the limiter (RabbitMQ.Client 7.2.2 Channel.Dispose/DisposeAsync).
-            var limiter = new ThrottlingRateLimiter(
+            // On success the channel owns the limiter (RabbitMQ.Client 7.2.2 Channel.Dispose/DisposeAsync).
+            // Null the local after transfer so finally disposes only the failure path.
+            ThrottlingRateLimiter? limiter = new ThrottlingRateLimiter(
                 RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations);
             try
             {
@@ -160,12 +161,15 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 var channel = await _connection
                     .CreateChannelAsync(options: options, cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
+                limiter = null;
                 return new RabbitMqClientPublishChannel(channel, generation);
             }
-            catch
+            finally
             {
-                await limiter.DisposeAsync().ConfigureAwait(false);
-                throw;
+                if (limiter is not null)
+                {
+                    await limiter.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
 
