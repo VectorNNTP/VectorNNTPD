@@ -97,9 +97,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             Assert.StartsWith("281 ", await ReadLineAsync(stream));
             await WriteAsync(stream, EncodingAscii($"ARTICLE {messageId}\r\n"));
             Assert.StartsWith("220 ", await ReadLineAsync(stream));
-            while (await ReadLineAsync(stream) != ".")
-            {
-            }
+            await DrainMultilineUntilTerminatorAsync(stream);
         }
 
         [Fact]
@@ -159,15 +157,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             Assert.StartsWith("200 ", await ReadLineAsync(stream));
             await WriteAsync(stream, "CAPABILITIES\r\n"u8.ToArray());
             Assert.StartsWith("101 ", await ReadLineAsync(stream));
-            while (await ReadLineAsync(stream) != ".")
-            {
-            }
+            await DrainMultilineUntilTerminatorAsync(stream);
 
             await WriteAsync(stream, EncodingAscii($"ARTICLE {messageId}\r\n"));
             Assert.StartsWith("220 ", await ReadLineAsync(stream));
-            while (await ReadLineAsync(stream) != ".")
-            {
-            }
+            await DrainMultilineUntilTerminatorAsync(stream);
 
             Assert.Equal(1, peer.Metrics.ArticleSuccess);
             Assert.Equal(0, peer.Metrics.ProtocolErrors);
@@ -253,10 +247,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         private static string CreateFixtureCorpus(out string messageId)
         {
             messageId = $"<fixture-{Guid.NewGuid():N}@lab.test>";
-            var dir = Path.Combine(Path.GetTempPath(), "vnntp-local-peer-" + Guid.NewGuid().ToString("N"));
+            var dir = Path.Join(Path.GetTempPath(), "vnntp-local-peer-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             var body = $"Message-ID: {messageId}\r\nFrom: lab@test\r\n\r\nhello\r\n";
-            File.WriteAllText(Path.Combine(dir, "article1"), body);
+            File.WriteAllText(Path.Join(dir, "article1"), body);
             return dir;
         }
 
@@ -264,6 +258,15 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
 
         private static async Task WriteAsync(Stream stream, byte[] bytes) =>
             await stream.WriteAsync(bytes);
+
+        /// <summary>Consumes NNTP multiline response lines until the terminator <c>.</c>.</summary>
+        private static async Task DrainMultilineUntilTerminatorAsync(Stream stream)
+        {
+            while (await ReadLineAsync(stream) != ".")
+            {
+                // Intentionally discard article / capability lines.
+            }
+        }
 
         private static async Task<string> ReadLineAsync(Stream stream)
         {

@@ -7,7 +7,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
     public sealed class LocalArticlePeerCorpusTests
     {
         private static readonly string CorpusRoot = Path.GetFullPath(
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", ".artifacts", "Articles"));
+            Path.Join(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", ".artifacts", "Articles"));
 
         [Fact]
         public async Task Real_corpus_indexes_and_serves_one_article_when_present()
@@ -45,7 +45,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             Assert.True(result.Article!.Memory.Length > 0);
 
             var outDir = Path.GetFullPath(
-                Path.Combine(
+                Path.Join(
                     AppContext.BaseDirectory,
                     "..",
                     "..",
@@ -59,10 +59,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     "local-article-peer-benchmark-20261027"));
             Directory.CreateDirectory(outDir);
             await peer.Index.WriteManifestAsync(
-                Path.Combine(outDir, "corpus-fingerprint.json"),
+                Path.Join(outDir, "corpus-fingerprint.json"),
                 CancellationToken.None);
             await LabBinaryIdentity.WriteAsync(
-                Path.Combine(outDir, "assembly-identity-correctness.json"),
+                Path.Join(outDir, "assembly-identity-correctness.json"),
                 CancellationToken.None);
         }
     }

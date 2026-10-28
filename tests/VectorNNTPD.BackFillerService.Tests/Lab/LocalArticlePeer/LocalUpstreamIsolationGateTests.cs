@@ -139,11 +139,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         [Fact]
         public async Task Allowlist_transport_blocks_external_and_allows_local_peer()
         {
-            var dir = Path.Combine(Path.GetTempPath(), "vnntp-allowlist-" + Guid.NewGuid().ToString("N"));
+            var dir = Path.Join(Path.GetTempPath(), "vnntp-allowlist-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             var messageId = $"<allow-{Guid.NewGuid():N}@lab.test>";
             await File.WriteAllTextAsync(
-                Path.Combine(dir, "a1"),
+                Path.Join(dir, "a1"),
                 $"Message-ID: {messageId}\r\nFrom: a@b\r\n\r\nbody\r\n");
 
             await using var peer = await LocalArticleNntpPeer.StartAsync(

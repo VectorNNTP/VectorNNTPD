@@ -78,6 +78,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     logicalBytes += logical.Length;
                     wireBytes += wire.Length;
                 }
+                // codeql[cs/catch-of-all-exceptions] Fail-closed preload must capture every article load failure and continue counting remaining files.
                 catch (Exception ex)
                 {
                     failures++;

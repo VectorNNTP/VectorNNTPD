@@ -165,14 +165,16 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                 publisherConfirmationTrackingEnabled: true);
             Assert.Null(unboundedDefaults.OutstandingPublisherConfirmationsRateLimiter);
 
+            using var limiter = new ThrottlingRateLimiter(
+                RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations);
             var productionOptions = new CreateChannelOptions(
                 publisherConfirmationsEnabled: true,
                 publisherConfirmationTrackingEnabled: true,
-                outstandingPublisherConfirmationsRateLimiter: new ThrottlingRateLimiter(
-                    RabbitMqPublisherConfirmLimits.MaxOutstandingConfirmations));
+                outstandingPublisherConfirmationsRateLimiter: limiter);
             Assert.True(productionOptions.PublisherConfirmationsEnabled);
             Assert.True(productionOptions.PublisherConfirmationTrackingEnabled);
             Assert.NotNull(productionOptions.OutstandingPublisherConfirmationsRateLimiter);
+            Assert.Same(limiter, productionOptions.OutstandingPublisherConfirmationsRateLimiter);
         }
 
         /// <summary>

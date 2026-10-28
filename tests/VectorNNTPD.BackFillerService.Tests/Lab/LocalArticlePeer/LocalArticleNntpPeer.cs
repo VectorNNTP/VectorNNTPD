@@ -96,6 +96,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
+                // Best-effort shutdown: listener may already be stopped.
+                _ = ex.GetType();
             }
 
             try
@@ -104,6 +106,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
+                // Accept loop may already be faulted or cancelled during dispose.
+                _ = ex.GetType();
             }
 
             _cts.Dispose();
@@ -114,6 +118,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         {
             while (!cancellationToken.IsCancellationRequested)
             {
+                // codeql[cs/missed-using-statement] Ownership transfers to the session task, which disposes in its finally.
                 TcpClient client;
                 try
                 {
@@ -271,7 +276,8 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         private async Task ServeArticleAsync(NetworkStream stream, string messageId, CancellationToken cancellationToken)
         {
             Metrics.ArticleBegin();
-            var settled = false;
+            // True after a path has already updated article metrics so a later write failure does not double-count.
+            var metricsRecorded = false;
             try
             {
                 if (_options.ArticleDelay > TimeSpan.Zero)
@@ -285,7 +291,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     {
                         // Record before write so clients observing the status line cannot race the counter.
                         Metrics.RecordArticleMissing();
-                        settled = true;
+                        metricsRecorded = true;
                         await WriteAsciiAsync(stream, "430 No Such Article Found\r\n", cancellationToken)
                             .ConfigureAwait(false);
                         return;
@@ -295,7 +301,6 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                     await stream.WriteAsync(preloaded.WireResponse, cancellationToken).ConfigureAwait(false);
                     await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                     Metrics.RecordArticleSuccess(preloaded.LogicalByteCount, preloaded.WireResponse.Length);
-                    settled = true;
                     return;
                 }
 
@@ -303,7 +308,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 {
                     // Record before write so clients observing the status line cannot race the counter.
                     Metrics.RecordArticleMissing();
-                    settled = true;
+                    metricsRecorded = true;
                     await WriteAsciiAsync(stream, "430 No Such Article Found\r\n", cancellationToken)
                         .ConfigureAwait(false);
                     return;
@@ -311,6 +316,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
 
                 byte[] logical;
                 byte[] framed;
+                var readFailed = false;
                 try
                 {
                     (logical, framed) = await NntpWireFramer
@@ -320,7 +326,14 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
                 {
                     Metrics.RecordArticleError();
-                    settled = true;
+                    metricsRecorded = true;
+                    readFailed = true;
+                    logical = [];
+                    framed = [];
+                }
+
+                if (readFailed)
+                {
                     await WriteAsciiAsync(stream, "403 Article unavailable\r\n", cancellationToken)
                         .ConfigureAwait(false);
                     return;
@@ -332,11 +345,10 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 await stream.WriteAsync(framed, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 Metrics.RecordArticleSuccess(logical.Length, status.Length + framed.Length);
-                settled = true;
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
-                if (!settled)
+                if (!metricsRecorded)
                 {
                     Metrics.RecordArticleError();
                 }

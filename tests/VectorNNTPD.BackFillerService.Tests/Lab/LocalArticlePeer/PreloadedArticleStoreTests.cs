@@ -183,12 +183,12 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
         private static string CreateFixtureCorpus(out string messageId, bool includeDotLine)
         {
             messageId = $"<fixture-{Guid.NewGuid():N}@lab.test>";
-            var dir = Path.Combine(Path.GetTempPath(), "vnntp-preload-" + Guid.NewGuid().ToString("N"));
+            var dir = Path.Join(Path.GetTempPath(), "vnntp-preload-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             var body = includeDotLine
                 ? $"Message-ID: {messageId}\r\nFrom: lab@test\r\n\r\nhello\r\n.dotline\r\n"
                 : $"Message-ID: {messageId}\r\nFrom: lab@test\r\n\r\nhello\r\n";
-            File.WriteAllText(Path.Combine(dir, "article1"), body);
+            File.WriteAllText(Path.Join(dir, "article1"), body);
             return dir;
         }
 

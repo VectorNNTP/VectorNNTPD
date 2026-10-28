@@ -916,6 +916,7 @@ namespace VectorNNTPD.BackFillerService.Tests.TestDoubles
                 while ((observed = Volatile.Read(ref _maxConfirmInFlight)) < inFlight
                     && Interlocked.CompareExchange(ref _maxConfirmInFlight, inFlight, observed) != observed)
                 {
+                    // CAS retry: work occurs in the loop condition.
                 }
 
                 Enqueued?.TrySetResult();

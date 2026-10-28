@@ -39,8 +39,64 @@ namespace VectorNNTPD.BackFillerService.Tests.Lab.LocalArticlePeer
                 return false;
             }
 
-            absolutePath = Path.Combine(CorpusRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!TryResolveUnderCorpusRoot(relative, out absolutePath))
+            {
+                return false;
+            }
+
             return File.Exists(absolutePath);
+        }
+
+        /// <summary>
+        /// Resolves <paramref name="relative"/> under <see cref="CorpusRoot"/>, rejecting rooted paths,
+        /// empty segments, and any result that escapes the corpus root.
+        /// </summary>
+        /// <param name="relative">Corpus-relative path using <c>/</c> or platform separators.</param>
+        /// <param name="absolutePath">Full path when resolution succeeds; otherwise empty.</param>
+        /// <returns><see langword="true"/> when the path stays under the corpus root.</returns>
+        internal bool TryResolveUnderCorpusRoot(string relative, out string absolutePath)
+        {
+            absolutePath = "";
+            if (string.IsNullOrWhiteSpace(relative))
+            {
+                return false;
+            }
+
+            var normalized = relative.Replace('\\', '/');
+            if (Path.IsPathRooted(normalized)
+                || Path.IsPathRooted(relative)
+                || normalized.StartsWith('/')
+                || normalized.Contains("://", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var segment in segments)
+            {
+                if (segment is "." or "..")
+                {
+                    return false;
+                }
+            }
+
+            var candidate = Path.GetFullPath(Path.Join(CorpusRoot, Path.Join(segments)));
+            var rootWithSep = CorpusRoot.EndsWith(Path.DirectorySeparatorChar)
+                ? CorpusRoot
+                : CorpusRoot + Path.DirectorySeparatorChar;
+            if (!candidate.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(candidate, CorpusRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            absolutePath = candidate;
+            return true;
         }
 
         /// <summary>

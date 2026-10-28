@@ -119,7 +119,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         {
             await using var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 16 * 1024 * 1024);
             using var metrics = new ArticleRetentionMetrics(authority);
-            var barrier = new Barrier(4);
+            using var barrier = new Barrier(4);
             var tasks = new Task[3];
             for (var i = 0; i < tasks.Length; i++)
             {
@@ -164,10 +164,11 @@ namespace VectorNNTPD.BackFillerService.Tests.Retention
         public async Task Dispose_is_idempotent_and_replacement_observes_again()
         {
             await using var authority = ArticleRetentionAuthorityTests.Create(new ManualTimeProvider(Start), maxBytes: 1024 * 1024);
-            var metrics = new ArticleRetentionMetrics(authority);
             var prepared = RetentionTestArticles.RetainPrepared(authority, "<a@b>");
-            metrics.Dispose();
-            metrics.Dispose();
+            using (var metrics = new ArticleRetentionMetrics(authority))
+            {
+                metrics.Dispose();
+            }
 
             using var replacement = new ArticleRetentionMetrics(authority);
             var sample = Observe();
