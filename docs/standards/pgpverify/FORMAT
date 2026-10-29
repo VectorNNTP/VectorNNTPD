@@ -1,0 +1,251 @@
+From: tale@isc.org (David C Lawrence)
+
+This file describes the format of the input to PGP for both signing a
+control message and subsequently verifying it.  It is meant for people
+who are implementing their own signing/verifying code because they
+cannot (or for some reason do not want to) use signcontrol/pgpverify.
+
+Please forgive the rough format of this documentation.  It is a
+combination of two messages I wrote in reply to email queries and I
+have not found the time to refine it properly.
+
+                       ++++++++++++++++++++++++
+                       SIGNING CONTROL MESSAGES
+                       ++++++++++++++++++++++++
+
+The input for PGP to sign when generating a control message looks
+something like this:
+
+================ cut here
+X-Signed-Headers: From,Subject,Control,Message-ID,Date,From,Sender
+Subject: cmsg newgroup GROUP
+Control: newgroup GROUP
+Message-ID: <MSGID>
+Date: DATE
+From: ADDRESS
+Sender: ADDRESS
+
+BODY TEXT
+================ cut here
+
+Capital letters above are all variable text.  There is a very special
+reason each element is signed:
+
+ * Subject: some very old servers use this header to implement control
+            messages (based on a "cmsg" keyword, ie, "cmsg newgroup GROUP").
+ * Control: the vast majority of servers figure out what to do based on this.
+ * Message-ID: used by servers to avoid accepting articles it already took.
+ * Date: also used by servers to avoid accepting articles it already took.
+ * From: used to identify who sent the message, which is used by some
+         servers to decide whether to process the control message.
+ * Sender: used like From: when present
+ * BODY TEXT: newsgroups file information is taken from the body.
+
+If group is moderated, the above Subject and Control headers would be
+appended with the string " moderated".
+
+The X-Signed-Headers pseudoheader will not be in the final output, but
+rather have its value put into X-PGP-Sig.  Obviously, it specifies all
+of the headers that are signed.  More importantly, it also specifies
+the order in which they appear in the signed data (even if they are
+rearranged as they propagate around Usenet), and the character case
+used in each signed header (because some gateways will unfortunately
+change header case, while preserving all of the other information just
+fine).
+
+Note that Message-ID and Date have some strict rules about how they
+can be formatted, or else news servers will not even accept the article.
+These rules can be found in RFC 822.
+
+For Message-ID, I simply use:
+
+  Message-ID: <TIME.PROCESSID@HOST>     ... eg ...
+  Message-ID: <907576376.25529@isc.org>
+
+where TIME is the an integer number of seconds since a fixed point in
+history (on Unix machines, Jan 1, 1970), PROCESSID is the process
+number on my Unix machine, and HOST is my domain.  The important part
+is that each message-id be UNIQUE ... whatever method you can use to
+ensure a unique lefthand part is fine.
+
+For Date, I simply use:
+
+  Date: Day, DD Mon YYYY HH:MM:SS ZONE  ... eg ...
+  Date: Mon, 05 Oct 1998 08:32:56 -0000
+
+My control messages do not have sender headers, so the Sender: header
+goes into the file to be signed but without any value for the address;
+that is, "Sender: " followed by the end of line, and the single space
+after the colon is necessary.  _Every_ header must have a space
+after the colon.
+
+The signcontrol script also does some other things to its input.
+First, it ensures that the group name meets Usenet standards:
+
+  #  "component MUST contain at least one letter"
+  #  "[component] MUST not contain uppercase letters"
+  #  "[component] MUST begin with a letter or digit"
+  #  "[component] MUST not be longer than 14 characters"
+  #  "sequences 'all' and 'ctl' MUST not be used as components"
+  #  "first component MUST begin with a letter"
+  # and enforcing "subsequent components SHOULD begin with a letter" as MUST
+  # and enforcing at least a 2nd level group
+
+The 14 character limit is expected to be lifted in the next revision
+of the standard for Usenet articles, but it still exists.
+
+In the body text, signcontrol insists that newgroups have a first line
+that reads "GROUP is a(n) (un)moderated newsgroup", where GROUP must
+match what is in the Control header and "an unmoderated"  or "a moderated"
+is also checked against the presence of the " moderated" keyword in
+the Subject/Control headers.
+
+Signcontrol also ensures that a "For your newsgroups file:" line is in
+the body, followed immediately by a properly formatted newsgroups file
+line.
+
+Here's what I try to keep for group descriptions:
+
+group.name<tabs>description.[ (Moderated)]
+
+There should be one or more hard tabs (assume 8 column tabstops) to
+get to a description; if the group.name is more than 24 characters,
+use just one tab.  The description should start with a capital and end
+in a period and not be more than 56 characters (80 - 24) long.  If the
+group is moderated, it should have " (Moderated)" following the
+period, not counted as part of the length of the description.  The
+goal is to keep the total line under 80 columns, so if the group name
+is 25 characters long you'd have eight less description characters to
+work with.
+
+Some over-long descriptions could be made to easily fit the length by
+dropping "puff" phrases like "Discussion of" which don't meaningfully
+contribute to the description.  Others are usually pretty easy to get
+to no more than column eighty, except when the group names start
+getting really long.  Hopefully then the group name itself contains
+quite a bit of description.
+
+The signcontrol script also used to ensure the format of lines which
+specified submission and contact addresses for moderated newsgroups.
+I no longer recommend including them in control messages, because some
+sites were erroneously trying to use them to maintain their own
+complete set of submission aliases, and getting rapidly, hopelessly
+out of sync with the real master forwarding list.
+
+Now, that covers the format of the article to be signed.  signcontrol
+simply invokes pgp with the options "-fast -u SIGNER +verbose=0" and
+then parses the output.  It generates an X-PGP-Sig header that starts
+with the pgp version number from the signed output, then has the
+signed headers separated by commas (no spaces), and finally has the
+signature.  Thus:
+
+X-PGP-Sig: 2.6.2 Subject,Control,Message-ID,Date,From,Sender
+        iQCVAwUBNhiHnsJdOtO4janBAQGFFwP/SCsq1Isgw8DXHDaRkr0cdkZidVH41N6d
+        IO+AuE4aRUUQN8Eym5bBzpdRnODVKQjp/npubNowSqv93IDlf+veoemc8yB9QTX9
+        PUFbRXn3r5DCJAOsH6M4oHbU6PCMKZRPZZENglcLhsYl2fM55l3Bhnxpu/GVOuDX
+        qKVwKgi+srA=
+
+There is another way to do this, rather than parsing the output of
+pgp, which you might find easier to implement.  pgp generates
+"detached" signatures if you use the -b flag, which cuts down on some
+parsing.
+
+Now, to generate the final article, suitable for distribution around
+the network without any further modification, you just need to add
+these headers to the original set you signed:
+  * X-PGP-Sig as above
+  * "Path: bounce-back" (the "bounce-back" phrase is to combat very
+    old mail agents which try to reply to the Path header; it is not
+    important for the purposes of verifying the control message)
+  * "Approved: YOUR-ADDRESS"
+  * "Newsgroups: GROUP" 
+
+For that last, note that the control message should be posted only to
+the group you are trying to create or remove.  This is the right thing
+to do with regard to article propagation issues.
+
+signcontrol also adds an X-Info header to direct people to more
+information about pgp signed messages.  You can also use it to direct
+people to more information about the hierarchy or group.
+
+The best way to transfer the final article is to avoid "inews" or
+NNTP'S "POST" command or anyting designed for the usual case of a user
+posting a new article.  You have a fully formed article which can be
+injected directly into the news system by using "rnews", NNTP's
+"ihave", or what have you.  When doing so you needn't worry about any
+of your signed headers being altered or any other validity checks that
+the news system might attempt to perform but which would be incorrect
+for your message.
+
+                      ++++++++++++++++++++++++++
+                      VERIFYING CONTROL MESSAGES
+                      ++++++++++++++++++++++++++
+
+To verify a signed control message, you need to recreate the original
+output that resulted when PGP signed the input file created above.
+That output looks something like this:
+
+================================ cut here
+-----BEGIN PGP SIGNED MESSAGE-----
+
+X-Signed-Headers: From,Subject,Control,Foo,Bar,Blech
+From: from-content
+Subject: subject-content
+Control: control-content
+Foo: foo-content
+Bar: bar-content
+Blech: blech-content
+
+Message Body
+
+-----BEGIN PGP SIGNATURE-----
+Version: version
+
+signature
+-----BEGIN PGP SIGNATURE-----
+================================ cut here
+
+Empty lines (a line end followed immediately by another line end) in
+the above are significant.
+
+Using this header, from a message I signed a long time ago:
+
+X-PGP-Sig: 2.6.2 Subject,Control,Message-ID,Date,From,Sender
+        iQCVAwUBM8QJNsJdOtO4janBAQGkUAP6AlzO065jDQFrG20/b3/SaOm4WGQBly5D
+        pXlVJdYBqPAG3HvxVqAdKM7y6ixM7Mml4OdfK0JeVCH03nqeGuBc51sTDIZ6kyAx
+        +YHlNSnp/JJnpDuJCfXZjwNl4kWImucGgwI5BxrQco8re949Cg5m5TFXiwYMiR/+
+        AjKZCTtmV1Y=
+
+You substitute:
+  * "2.6.2" into the Version field
+  * "Subject,Control,Message-ID,Date,From,Sender"
+    where I have "From,Subject,Control,Foo,Bar,Blech" above
+  * the remaining gibberish, without the leading whitespace
+    on each line, for "signature".
+
+It is important that the headers you write into the temporary file are
+in the very same order and with the same case as listed in the
+X-PGP-Sig header, and that any header which is not included in the
+actual article still be in the file to verify.  For example, none of
+my control messages have a Sender header, but the file that gets
+verified still has a "Sender: ", followed by the end of line, in the
+order determined by X-PGP-Sig.  Note that the presence of a space
+after the colon is necessary even for an empty header.
+
+In the body, you have to "ASCII armor" (PGP's term) text lines that
+begin with a dash character.  Any line starting with "-" must be
+changed to "- -".
+
+There is a way to do this with detached signatures that I heard about
+after implementing pgpverify that I understand does not require doing
+the ASCII armoring.  Using this method, the signed message (the part
+between the "BEGIN PGP SIGNED MESSAGE" and "BEGIN PGP SIGNATURE"
+above) are placed in one file, and the signature ("BEGIN PGP
+SIGNATURE" through "END PGP SIGNATURE") in a separate file which has
+the same name as the first but with a ".asc" appended.  Since I was
+already satisfied with pgpverify program working the way it was
+written, I never bothered to explore using detached signatures.  You
+might find it easier to do it that way, though.
+
+You can use ftp://ftp.isc.org/pub/pgpcontrol/sample.control to test
+your verifying program.
