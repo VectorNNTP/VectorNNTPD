@@ -173,9 +173,8 @@ namespace VectorNNTPD.Common.Tests.Articles.YEnc
         {
             var output = new List<byte>(decoded.Length + (decoded.Length / 32));
             var lineCount = 0;
-            foreach (var value in decoded)
+            foreach (var encoded in decoded.Select(static value => unchecked((byte)(value + 42))))
             {
-                var encoded = unchecked((byte)(value + 42));
                 if (encoded is 0 or 9 or 10 or 13 or 32 or 46 or 61)
                 {
                     output.Add((byte)'=');

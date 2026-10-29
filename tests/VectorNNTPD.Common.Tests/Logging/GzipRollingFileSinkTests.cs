@@ -376,8 +376,9 @@ namespace VectorNNTPD.Common.Tests.Logging
                 {
                     Directory.Delete(Path, recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    _ = ex; // observed; best-effort temp directory cleanup
                 }
             }
         }

@@ -329,7 +329,7 @@ namespace VectorNNTPD.Common.Tests.Articles.Processing
                     "From: user@example.test",
                     "Subject: separator-variant",
                 ],
-                $"body-{separator.Length}x{((int)separator[0]).ToString()}\r",
+                $"body-{separator.Length}x{(int)separator[0]}\r",
                 separator);
 
             var parse = parser.Parse(originalArticle);

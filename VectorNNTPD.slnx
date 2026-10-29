@@ -9,7 +9,13 @@
     <Project Path="src/VectorNNTPD.Common/VectorNNTPD.Common.csproj">
       <Platform Project="x64" />
     </Project>
+    <Project Path="src/VectorNNTPD.ReaderService/VectorNNTPD.ReaderService.csproj">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/VectorNNTPD.TransitService/VectorNNTPD.TransitService.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>
@@ -20,7 +26,13 @@
     <Project Path="tests/VectorNNTPD.Common.Tests/VectorNNTPD.Common.Tests.csproj">
       <Platform Project="x64" />
     </Project>
+    <Project Path="tests/VectorNNTPD.ReaderService.Tests/VectorNNTPD.ReaderService.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="tests/VectorNNTPD.StorageService.Tests/VectorNNTPD.StorageService.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="tests/VectorNNTPD.TransitService.Tests/VectorNNTPD.TransitService.Tests.csproj">
       <Platform Project="x64" />
     </Project>
   </Folder>

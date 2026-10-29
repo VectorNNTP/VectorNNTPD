@@ -331,14 +331,7 @@ namespace VectorNNTPD.Common.Cloudflare
                     .ListRecordIdsAsync(zoneId, fqdn, cleanupCts.Token)
                     .ConfigureAwait(false);
                 var before = new HashSet<string>(idsBeforeAttempt, StringComparer.Ordinal);
-                var created = new List<string>();
-                foreach (var id in after)
-                {
-                    if (!before.Contains(id))
-                    {
-                        created.Add(id);
-                    }
-                }
+                var created = after.Where(id => !before.Contains(id)).ToList();
 
                 await _reconciler
                     .DeleteRecordIdsAsync(

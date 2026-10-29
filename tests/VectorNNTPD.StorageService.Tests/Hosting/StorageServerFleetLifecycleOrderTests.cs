@@ -209,8 +209,10 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                     {
                         await Starting.WaitAsync(TimeSpan.FromSeconds(30));
                     }
-                    catch (Exception)
+                    // codeql[cs/catch-of-all-exceptions] Best-effort test cleanup must tolerate any filesystem or disposal failure.
+                    catch (Exception ex)
                     {
+                        _ = ex.GetType(); // observed: expected during test teardown/cleanup
                         // A startup failure is reported by the caller. Shutdown still runs below.
                     }
                 }
@@ -241,7 +243,7 @@ namespace VectorNNTPD.StorageService.Tests.Hosting
                 var session = new FleetSession(host, listener, publisher, factory, holdListener);
                 var services = ordered.Select(service => service switch
                 {
-                    StorageNntpListenerService when holdListener => (IApplicationService)new HoldListener(
+                    StorageNntpListenerService when holdListener => new HoldListener(
                         listener,
                         session.ListenerEntered,
                         session._releaseListener),

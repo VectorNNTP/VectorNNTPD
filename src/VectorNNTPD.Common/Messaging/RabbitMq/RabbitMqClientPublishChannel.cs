@@ -2,6 +2,7 @@ using System.Threading.RateLimiting;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
+using Serilog.Debugging;
 using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
@@ -212,6 +213,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
+                SelfLog.WriteLine("RabbitMQ publish channel close failed and disposal will continue. " + ex);
             }
 
             // Dispose the channel first so in-flight confirm tracking finishes; the channel only holds a

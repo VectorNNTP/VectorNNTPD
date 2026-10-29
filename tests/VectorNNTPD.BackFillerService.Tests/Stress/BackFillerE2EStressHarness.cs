@@ -9,7 +9,7 @@ using RabbitMQ.Client.Exceptions;
 namespace VectorNNTPD.BackFillerService.Tests.Stress
 {
     /// <summary>
-    /// End-to-end stress orchestrator: Article Work publish → RabbitMQ reply → TLS ARTICLE delivery.
+    /// End-to-end stress orchestrator: Article Work publish â†’ RabbitMQ reply â†’ TLS ARTICLE delivery.
     /// </summary>
     /// <remarks>
     /// The RabbitMQ reply is routing metadata only. Article payload bytes are measured exclusively
@@ -202,6 +202,7 @@ namespace VectorNNTPD.BackFillerService.Tests.Stress
 
             var disposeReplyClientOnFailure = true;
             try
+            // codeql[cs/complex-block] Stress harness orchestration keeps preflight/publish steps inline for report clarity.
             {
             // Live retrieval preflight runs after the reply consumer is ready and before any throughput publish.
             if (_options.ArticlePreflightCount > 0)

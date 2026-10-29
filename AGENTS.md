@@ -2,7 +2,7 @@
 
 Concise routing for Cursor agents (including JetBrains Rider ACP). This file is an entry point; it does not prove that Rider ACP automatically loads it.
 
-This repository is standalone **VectorNNTPD.BackFillerService**. It was extracted from VectorNNTP.NNTPD. NNTPD names that remain in code comments or shared configuration are provenance or shared-domain context. The solution, projects, and verification commands are VectorNNTPD's.
+This repository is **VectorNNTPD**: BackFillerService, StorageService, NNTP ReaderService, NNTP TransitService, and `VectorNNTPD.Common` (Reader/Transit embed duplicated NNTP server code; there is no `VectorNNTPD.NntpServer` library). It was extracted from VectorNNTP.NNTPD. NNTPD names that remain in code comments or shared configuration are provenance or shared-domain context. Reader/Transit hosting is documented in [`docs/nntpd-reader-transit.md`](docs/nntpd-reader-transit.md).
 
 ## Before substantive work
 

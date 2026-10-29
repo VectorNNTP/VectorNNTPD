@@ -530,11 +530,8 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
 
         private void FailPending(PendingTakeThis pending, ArticlePlacementResult result)
         {
+            // Complete without dequeuing: orphaned slots stay until reader or dispose clears under _pendingGate.
             pending.Completion.TrySetResult(result);
-            lock (_pendingGate)
-            {
-                // Leave orphaned slots; reader or dispose clears the queue.
-            }
         }
 
         private void CompleteAllPending(ArticlePlacementResult result)

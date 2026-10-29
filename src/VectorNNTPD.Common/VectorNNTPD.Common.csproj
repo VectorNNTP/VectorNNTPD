@@ -12,8 +12,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTPD.Common.Tests" />
-    <InternalsVisibleTo Include="VectorNNTP.NNTPD" />
-    <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
+    <InternalsVisibleTo Include="VectorNNTPD.ReaderService" />
+    <InternalsVisibleTo Include="VectorNNTPD.ReaderService.Tests" />
+    <InternalsVisibleTo Include="VectorNNTPD.TransitService" />
+    <InternalsVisibleTo Include="VectorNNTPD.TransitService.Tests" />
     <InternalsVisibleTo Include="VectorNNTPD.BackFillerService" />
     <InternalsVisibleTo Include="VectorNNTPD.BackFillerService.Tests" />
     <InternalsVisibleTo Include="VectorNNTPD.StorageService" />

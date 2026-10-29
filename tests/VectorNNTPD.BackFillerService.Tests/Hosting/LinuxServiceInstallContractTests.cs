@@ -140,15 +140,25 @@ namespace VectorNNTPD.BackFillerService.Tests.Hosting
                 });
         }
 
-        /// <summary>Windows release checks reject the Linux environment-file example.</summary>
+        /// <summary>
+        /// Publish-Release and CI require each Linux package to include its unit and environment-file
+        /// example, and reject those Linux-only files from non-Linux (including win-x64) packages.
+        /// </summary>
         [Fact]
         public void Windows_release_validation_rejects_the_linux_environment_example()
         {
             var script = File.ReadAllText(RepositoryFiles.Under("tools", "Publish-Release.ps1"));
             var workflow = File.ReadAllText(RepositoryFiles.Under(".github", "workflows", "build.yml"));
 
-            Assert.Contains("Missing environment-file example in the linux-x64 release", script, StringComparison.Ordinal);
-            Assert.Contains("Environment-file example must not be packaged for ${Rid}", script, StringComparison.Ordinal);
+            // linux-x64: package must ship the role's unit + env example (and README).
+            Assert.Contains("Missing Linux package file in", script, StringComparison.Ordinal);
+            Assert.Contains("LinuxEnvExample", script, StringComparison.Ordinal);
+            Assert.Contains("backfiller.env.example", script, StringComparison.Ordinal);
+
+            // Non-linux RIDs: Linux unit/env must not appear in the package.
+            Assert.Contains("Linux-only file must not be packaged for ${Rid}", script, StringComparison.Ordinal);
+
+            // Windows CI package validation forbids shipping the Linux install files.
             Assert.Contains(
                 "'vectornntp-backfiller.service', 'backfiller.env.example'",
                 workflow,

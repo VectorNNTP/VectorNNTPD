@@ -40,11 +40,13 @@ namespace VectorNNTPD.Common.Tests.TestDoubles
                     Directory.Delete(Path, recursive: true);
                 }
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                _ = ex; // observed; best-effort temp directory cleanup
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
+                _ = ex; // observed; best-effort temp directory cleanup
             }
         }
     }

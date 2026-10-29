@@ -385,6 +385,7 @@ namespace VectorNNTPD.Common.Logging
 
             for (var index = _retainedFileCountLimit.Value; index < ranked.Count; index++)
             {
+                // codeql[cs/linq/missed-where] Retention runs under _sync; Where would allocate while holding the sink lock.
                 foreach (var path in ranked[index].Paths)
                 {
                     if (!IsCurrent(path))
@@ -459,10 +460,8 @@ namespace VectorNNTPD.Common.Logging
         internal DateTime? NextCheckpoint(DateTime instant) => _interval switch
         {
             RollingInterval.Infinite => null,
-            RollingInterval.Year => new DateTime(instant.Year + 1, 1, 1, 0, 0, 0, instant.Kind),
-            RollingInterval.Month => instant.Month == 12
-                ? new DateTime(instant.Year + 1, 1, 1, 0, 0, 0, instant.Kind)
-                : new DateTime(instant.Year, instant.Month + 1, 1, 0, 0, 0, instant.Kind),
+            RollingInterval.Year => new DateTime(instant.Year, 1, 1, 0, 0, 0, instant.Kind).AddYears(1),
+            RollingInterval.Month => new DateTime(instant.Year, instant.Month, 1, 0, 0, 0, instant.Kind).AddMonths(1),
             RollingInterval.Day => instant.Date.AddDays(1),
             RollingInterval.Hour => new DateTime(instant.Year, instant.Month, instant.Day, instant.Hour, 0, 0, instant.Kind).AddHours(1),
             RollingInterval.Minute => new DateTime(

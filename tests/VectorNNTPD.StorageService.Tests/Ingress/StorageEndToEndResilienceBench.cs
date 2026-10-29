@@ -3414,8 +3414,9 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
                 {
                     await _worker.StopAsync(CancellationToken.None).ConfigureAwait(false);
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
+                    _ = ex.GetType(); // observed: expected during test teardown/cleanup
                     // Drain failure already recorded by the scenario.
                 }
 

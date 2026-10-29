@@ -1,0 +1,2987 @@
+{
+  "Moderation": {
+    "Source": {
+      "InnUrl": "https://raw.githubusercontent.com/InterNetNews/inn/main/samples/moderators",
+      "RetrievedFrom": "InnUrl",
+      "Url": "https://github.com/InterNetNews/inn/blob/main/samples/moderators"
+    }
+  },
+  "Email": {
+    "Enabled": false,
+    "DefaultFrom": "noreply@usenet.ninja",
+    "EnvelopeSender": "noreply@usenet.ninja",
+    "Smtp": {
+      "Host": "",
+      "Port": 587,
+      "Security": "StartTls",
+      "Username": "",
+      "Password": "",
+      "RequireTlsForAuthentication": true,
+      "ConnectTimeout": "00:00:15",
+      "CommandTimeout": "00:00:30",
+      "MaxAttempts": 3,
+      "InitialRetryDelay": "00:00:02",
+      "MaximumRetryDelay": "00:01:00"
+    },
+    "Spool": {
+      "Directory": "spool/smtp",
+      "ShutdownTimeout": "00:00:15",
+      "ScanInterval": "00:00:01"
+    }
+  },
+  "Control": {
+    "PgpAuthorities": {
+      "Authorities": [
+        {
+          "AdminGroup": "aioe.system",
+          "Authorizations": [
+            {
+              "From": "usenet@aioe.org",
+              "Message": "checkgroups",
+              "Newsgroups": "aioe.*",
+              "VerificationIdentity": "usenet@aioe.org"
+            },
+            {
+              "From": "usenet@aioe.org",
+              "Message": "newgroup",
+              "Newsgroups": "aioe.*",
+              "VerificationIdentity": "usenet@aioe.org"
+            },
+            {
+              "From": "usenet@aioe.org",
+              "Message": "rmgroup",
+              "Newsgroups": "aioe.*",
+              "VerificationIdentity": "usenet@aioe.org"
+            }
+          ],
+          "Contact": "usenet@aioe.org",
+          "KeyFingerprint": "22031AAC51E7C7FD664F1D8090DF6C712322A7F8",
+          "KeyUrl": "http://news.aioe.org/hierarchy/aioe.txt",
+          "Name": "AIOE",
+          "SyncableServer": "nntp.aioe.org",
+          "Url": "http://news.aioe.org/hierarchy/"
+        },
+        {
+          "AdminGroup": "alabama.config",
+          "Authorizations": [
+            {
+              "From": "jpc@suespammers.org",
+              "Message": "checkgroups",
+              "Newsgroups": "alabama.*|hsv.*",
+              "VerificationIdentity": "alabama-group-admin"
+            },
+            {
+              "From": "jpc@suespammers.org",
+              "Message": "newgroup",
+              "Newsgroups": "alabama.*|hsv.*",
+              "VerificationIdentity": "alabama-group-admin"
+            },
+            {
+              "From": "jpc@suespammers.org",
+              "Message": "rmgroup",
+              "Newsgroups": "alabama.*|hsv.*",
+              "VerificationIdentity": "alabama-group-admin"
+            }
+          ],
+          "Contact": "jpc@suespammers.org",
+          "Name": "ALABAMA & HSV"
+        },
+        {
+          "AdminGroup": "at.usenet.gruppen",
+          "Authorizations": [
+            {
+              "From": "control@usenet.backbone.at",
+              "Message": "checkgroups",
+              "Newsgroups": "at.*",
+              "VerificationIdentity": "control@usenet.backbone.at"
+            },
+            {
+              "From": "control@usenet.backbone.at",
+              "Message": "newgroup",
+              "Newsgroups": "at.*",
+              "VerificationIdentity": "control@usenet.backbone.at"
+            },
+            {
+              "From": "control@usenet.backbone.at",
+              "Message": "rmgroup",
+              "Newsgroups": "at.*",
+              "VerificationIdentity": "control@usenet.backbone.at"
+            }
+          ],
+          "KeyUrl": "http://www.usenet.at/pgpkey.asc",
+          "Name": "AT",
+          "Url": "http://www.usenet.at/"
+        },
+        {
+          "AdminGroup": "aus.net.news",
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "aus.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "aus.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "aus.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "AUS",
+          "Url": "http://aus.news-admin.org/"
+        },
+        {
+          "AdminGroup": "be.announce",
+          "Authorizations": [
+            {
+              "From": "group-admin@usenet.be",
+              "Message": "checkgroups",
+              "Newsgroups": "be.*",
+              "VerificationIdentity": "be.announce.newgroups"
+            },
+            {
+              "From": "group-admin@usenet.be",
+              "Message": "newgroup",
+              "Newsgroups": "be.*",
+              "VerificationIdentity": "be.announce.newgroups"
+            },
+            {
+              "From": "group-admin@usenet.be",
+              "Message": "rmgroup",
+              "Newsgroups": "be.*",
+              "VerificationIdentity": "be.announce.newgroups"
+            }
+          ],
+          "Contact": "be-hierarchy-admin@usenet.be",
+          "KeyFingerprint": "302A459470DE1FD5818C5864D2F70871",
+          "KeyUrl": "http://usenet.be/be.announce.newgroups.asc",
+          "Name": "BE",
+          "Url": "http://usenet.be/"
+        },
+        {
+          "AdminGroup": "belwue.infos",
+          "Authorizations": [
+            {
+              "From": "news@news.belwue.de",
+              "Message": "checkgroups",
+              "Newsgroups": "belwue.*",
+              "VerificationIdentity": "belwue-hir-control"
+            },
+            {
+              "From": "news@news.belwue.de",
+              "Message": "newgroup",
+              "Newsgroups": "belwue.*",
+              "VerificationIdentity": "belwue-hir-control"
+            },
+            {
+              "From": "news@news.belwue.de",
+              "Message": "rmgroup",
+              "Newsgroups": "belwue.*",
+              "VerificationIdentity": "belwue-hir-control"
+            }
+          ],
+          "Contact": "news@belwue.de",
+          "KeyFingerprint": "2EFF2B8A891FE5AA6F89672450B542D9",
+          "KeyUrl": "http://www.belwue.de/fileadmin/belwue/Dokumente/Newsserver/belwue-hir-control.asc",
+          "Name": "BELWUE",
+          "Url": "http://www.belwue.de/produkte/dienste/dienste-usenet1.html"
+        },
+        {
+          "AdminGroup": "bionet.general",
+          "Authorizations": [
+            {
+              "From": "Biosci-control-key@net.bio.net",
+              "Message": "checkgroups",
+              "Newsgroups": "bionet.*",
+              "VerificationIdentity": "Biosci-control-key@net.bio.net"
+            },
+            {
+              "From": "Biosci-control-key@net.bio.net",
+              "Message": "newgroup",
+              "Newsgroups": "bionet.*",
+              "VerificationIdentity": "Biosci-control-key@net.bio.net"
+            },
+            {
+              "From": "Biosci-control-key@net.bio.net",
+              "Message": "rmgroup",
+              "Newsgroups": "bionet.*",
+              "VerificationIdentity": "Biosci-control-key@net.bio.net"
+            }
+          ],
+          "KeyFingerprint": "EBC0F1BA260BC6D6FB8DEDC4AE5D1054",
+          "Name": "BIONET",
+          "Url": "http://www.bio.net/"
+        },
+        {
+          "AdminGroup": "bit.admin",
+          "Authorizations": [
+            {
+              "From": "bit@newsadmin.com",
+              "Message": "checkgroups",
+              "Newsgroups": "bit.*",
+              "VerificationIdentity": "bit@newsadmin.com"
+            },
+            {
+              "From": "bit@newsadmin.com",
+              "Message": "newgroup",
+              "Newsgroups": "bit.*",
+              "VerificationIdentity": "bit@newsadmin.com"
+            },
+            {
+              "From": "bit@newsadmin.com",
+              "Message": "rmgroup",
+              "Newsgroups": "bit.*",
+              "VerificationIdentity": "bit@newsadmin.com"
+            }
+          ],
+          "Name": "BIT",
+          "Url": "http://www.newsadmin.com/bit/bit.htm"
+        },
+        {
+          "AdminGroup": "bln.misc",
+          "Authorizations": [
+            {
+              "From": "news@fu-berlin.de",
+              "Message": "checkgroups",
+              "Newsgroups": "bln.*",
+              "VerificationIdentity": "news@fu-berlin.de"
+            },
+            {
+              "From": "news@fu-berlin.de",
+              "Message": "newgroup",
+              "Newsgroups": "bln.*",
+              "VerificationIdentity": "news@fu-berlin.de"
+            },
+            {
+              "From": "news@fu-berlin.de",
+              "Message": "rmgroup",
+              "Newsgroups": "bln.*",
+              "VerificationIdentity": "news@fu-berlin.de"
+            }
+          ],
+          "Contact": "news@fu-berlin.de",
+          "KeyFingerprint": "2B24B5C78A4861407BCD5A88281D90763F368EA0",
+          "KeyUrl": "https://ftp.fu-berlin.de/doc/news/bln/bln-key.txt",
+          "Name": "BLN",
+          "Url": "https://ftp.fu-berlin.de/doc/news/bln/bln-info.txt"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "bne.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "bne.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "bne.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "BNE",
+          "Url": "http://bne.news-admin.org/"
+        },
+        {
+          "Contact": "bofh-control@lists.killfile.org",
+          "KeyFingerprint": "40B58A561E006152083E38B3CEF569807DC1A266",
+          "Name": "BOFH"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "canb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "canb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "canb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "CANB",
+          "Url": "http://canb.news-admin.org/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "felix.rauch@nice.ch",
+              "Message": "checkgroups",
+              "Newsgroups": "ch.*",
+              "VerificationIdentity": "ch-news-admin@use-net.ch"
+            },
+            {
+              "From": "felix.rauch@nice.ch",
+              "Message": "newgroup",
+              "Newsgroups": "ch.*",
+              "VerificationIdentity": "ch-news-admin@use-net.ch"
+            },
+            {
+              "From": "felix.rauch@nice.ch",
+              "Message": "rmgroup",
+              "Newsgroups": "ch.*",
+              "VerificationIdentity": "ch-news-admin@use-net.ch"
+            }
+          ],
+          "Contact": "ch-news-admin@use-net.ch",
+          "KeyFingerprint": "7180D68CA7DE2C70624A486ED99602DF",
+          "KeyUrl": "http://www.use-net.ch/Usenet/adminkey.html",
+          "Name": "CH",
+          "Url": "http://www.use-net.ch/Usenet/"
+        },
+        {
+          "Contact": "koordination@cl-netz.de",
+          "KeyUrl": "http://www.cl-netz.de/control.txt",
+          "Name": "CL",
+          "Url": "http://www.cl-netz.de/"
+        },
+        {
+          "AdminGroup": "clari.net.admin",
+          "Authorizations": [
+            {
+              "From": "cl*@clarinet.com",
+              "Message": "rmgroup",
+              "Newsgroups": "clari.*",
+              "VerificationIdentity": "ClariNet.Group"
+            }
+          ],
+          "Contact": "support@clari.net",
+          "KeyUrl": "http://www.clari.net/tech/clarikey.txt",
+          "Name": "CLARI"
+        },
+        {
+          "AdminGroup": "cn.announce",
+          "Authorizations": [
+            {
+              "From": "control@bentium.com",
+              "Message": "checkgroups",
+              "Newsgroups": "cn.*",
+              "VerificationIdentity": "cn.admin.news.announce"
+            },
+            {
+              "From": "control@bentium.com",
+              "Message": "newgroup",
+              "Newsgroups": "cn.*",
+              "VerificationIdentity": "cn.admin.news.announce"
+            },
+            {
+              "From": "control@bentium.com",
+              "Message": "rmgroup",
+              "Newsgroups": "cn.*",
+              "VerificationIdentity": "cn.admin.news.announce"
+            }
+          ],
+          "KeyFingerprint": "6297EE33F71625C1A49E47BAC53E5E9E",
+          "Name": "CN",
+          "Url": "http://news.yaako.com/"
+        },
+        {
+          "AdminGroup": "cn.bbs.admin.announce",
+          "Authorizations": [
+            {
+              "From": "control@cn-bbs.org",
+              "Message": "checkgroups",
+              "Newsgroups": "cn.bbs.*",
+              "VerificationIdentity": "cn.bbs.admin.announce"
+            },
+            {
+              "From": "control@cn-bbs.org",
+              "Message": "newgroup",
+              "Newsgroups": "cn.bbs.*",
+              "VerificationIdentity": "cn.bbs.admin.announce"
+            },
+            {
+              "From": "control@cn-bbs.org",
+              "Message": "rmgroup",
+              "Newsgroups": "cn.bbs.*",
+              "VerificationIdentity": "cn.bbs.admin.announce"
+            }
+          ],
+          "Name": "CN.BBS",
+          "Url": "http://bbs.cn.news-admin.org/"
+        },
+        {
+          "AdminGroup": "news.announce.newgroups",
+          "Authorizations": [
+            {
+              "From": "group-admin@isc.org",
+              "Message": "checkgroups",
+              "Newsgroups": "comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*",
+              "VerificationIdentity": "news.announce.newgroups"
+            },
+            {
+              "From": "group-admin@isc.org",
+              "Message": "newgroup",
+              "Newsgroups": "comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*",
+              "VerificationIdentity": "news.announce.newgroups"
+            },
+            {
+              "From": "group-admin@isc.org",
+              "Message": "rmgroup",
+              "Newsgroups": "comp.*|humanities.*|misc.*|news.*|rec.*|sci.*|soc.*|talk.*",
+              "VerificationIdentity": "news.announce.newgroups"
+            }
+          ],
+          "Contact": "board@big-8.org",
+          "KeyFingerprint": "8E181BEF0BE638962C1A5C98FAFE7B550C18C8B7",
+          "Name": "COMP, HUMANITIES, MISC, NEWS, REC, SCI, SOC, TALK",
+          "Url": "https://www.big-8.org/"
+        },
+        {
+          "AdminGroup": "de.admin.news.announce",
+          "Authorizations": [
+            {
+              "From": "moderator@dana.de",
+              "Message": "checkgroups",
+              "Newsgroups": "de.*",
+              "VerificationIdentity": "de.admin.news.announce"
+            },
+            {
+              "From": "moderator@dana.de",
+              "Message": "newgroup",
+              "Newsgroups": "de.*",
+              "VerificationIdentity": "de.admin.news.announce"
+            },
+            {
+              "From": "moderator@dana.de",
+              "Message": "rmgroup",
+              "Newsgroups": "de.*",
+              "VerificationIdentity": "de.admin.news.announce"
+            }
+          ],
+          "Contact": "moderator@dana.de",
+          "KeyFingerprint": "5BB05288BF55194F667DC2AE16262825",
+          "KeyUrl": "http://www.dana.de/pgp/dana.txt",
+          "Name": "DE",
+          "Url": "http://www.dana.de/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "moderator@dana.de",
+              "Message": "rmgroup",
+              "Newsgroups": "de.alt.*",
+              "VerificationIdentity": "de.admin.news.announce"
+            }
+          ],
+          "Name": "DE.ALT"
+        },
+        {
+          "AdminGroup": "demon.news",
+          "Authorizations": [
+            {
+              "From": "newsmaster@demon.net",
+              "Message": "checkgroups",
+              "Newsgroups": "demon.*",
+              "VerificationIdentity": "demon.news"
+            },
+            {
+              "From": "newsmaster@demon.net",
+              "Message": "newgroup",
+              "Newsgroups": "demon.*",
+              "VerificationIdentity": "demon.news"
+            },
+            {
+              "From": "newsmaster@demon.net",
+              "Message": "rmgroup",
+              "Newsgroups": "demon.*",
+              "VerificationIdentity": "demon.news"
+            }
+          ],
+          "Contact": "newsmaster@demon.net",
+          "KeyUrl": "ftp://ftp.demon.co.uk/pub/news/doc/demon.news.txt",
+          "Name": "DEMON"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@news.dknet.dk",
+              "Message": "checkgroups",
+              "Newsgroups": "dk.*",
+              "VerificationIdentity": "news@news.dknet.dk"
+            },
+            {
+              "From": "news@news.dknet.dk",
+              "Message": "newgroup",
+              "Newsgroups": "dk.*",
+              "VerificationIdentity": "news@news.dknet.dk"
+            },
+            {
+              "From": "news@news.dknet.dk",
+              "Message": "rmgroup",
+              "Newsgroups": "dk.*",
+              "VerificationIdentity": "news@news.dknet.dk"
+            }
+          ],
+          "KeyFingerprint": "7CB2C750F37D5D738CEE2E3F558072FF",
+          "KeyUrl": "http://www.usenet.dk/dk-admin/pubkey.html",
+          "Name": "DK",
+          "Url": "http://www.usenet.dk/dk-admin/"
+        },
+        {
+          "AdminGroup": "easynet.support",
+          "Authorizations": [
+            {
+              "From": "newsmaster@easynet.net",
+              "Message": "checkgroups",
+              "Newsgroups": "easynet.*",
+              "VerificationIdentity": "easynet.news"
+            },
+            {
+              "From": "newsmaster@easynet.net",
+              "Message": "newgroup",
+              "Newsgroups": "easynet.*",
+              "VerificationIdentity": "easynet.news"
+            },
+            {
+              "From": "newsmaster@easynet.net",
+              "Message": "rmgroup",
+              "Newsgroups": "easynet.*",
+              "VerificationIdentity": "easynet.news"
+            }
+          ],
+          "Contact": "Christiaan Keet <newsmaster@easynet.net>",
+          "Name": "EASYNET"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@news.ut.ee",
+              "Message": "checkgroups",
+              "Newsgroups": "ee.*",
+              "VerificationIdentity": "ee.news"
+            },
+            {
+              "From": "news@news.ut.ee",
+              "Message": "newgroup",
+              "Newsgroups": "ee.*",
+              "VerificationIdentity": "ee.news"
+            },
+            {
+              "From": "news@news.ut.ee",
+              "Message": "rmgroup",
+              "Newsgroups": "ee.*",
+              "VerificationIdentity": "ee.news"
+            }
+          ],
+          "Contact": "usenet@news.ut.ee",
+          "KeyUrl": "http://news.ut.ee/pubkey.asc",
+          "Name": "EE",
+          "Url": "http://news.ut.ee/"
+        },
+        {
+          "AdminGroup": "eug.config",
+          "Authorizations": [
+            {
+              "From": "newsadmin@efn.org",
+              "Message": "checkgroups",
+              "Newsgroups": "efn.*|eug.*",
+              "VerificationIdentity": "eug.config"
+            },
+            {
+              "From": "newsadmin@efn.org",
+              "Message": "newgroup",
+              "Newsgroups": "efn.*|eug.*",
+              "VerificationIdentity": "eug.config"
+            },
+            {
+              "From": "newsadmin@efn.org",
+              "Message": "rmgroup",
+              "Newsgroups": "efn.*|eug.*",
+              "VerificationIdentity": "eug.config"
+            }
+          ],
+          "Name": "EFN & EUG"
+        },
+        {
+          "AdminGroup": "england.news.policy",
+          "Authorizations": [
+            {
+              "From": "admin@england.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "england.*",
+              "VerificationIdentity": "england-usenet"
+            },
+            {
+              "From": "admin@england.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "england.*",
+              "VerificationIdentity": "england-usenet"
+            },
+            {
+              "From": "admin@england.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "england.*",
+              "VerificationIdentity": "england-usenet"
+            }
+          ],
+          "Contact": "admin@england.news-admin.org",
+          "KeyFingerprint": "DA3EC20146E561CBA24309CA136D311F",
+          "Name": "ENGLAND"
+        },
+        {
+          "AdminGroup": "es.news.anuncios",
+          "Authorizations": [
+            {
+              "From": "moderador@corus-es.org",
+              "Message": "checkgroups",
+              "Newsgroups": "es.*",
+              "VerificationIdentity": "es.news"
+            },
+            {
+              "From": "moderador@corus-es.org",
+              "Message": "newgroup",
+              "Newsgroups": "es.*",
+              "VerificationIdentity": "es.news"
+            },
+            {
+              "From": "moderador@corus-es.org",
+              "Message": "rmgroup",
+              "Newsgroups": "es.*",
+              "VerificationIdentity": "es.news"
+            }
+          ],
+          "Contact": "moderador@corus-es.org",
+          "KeyUrl": "http://www.corus-es.org/docs/esnews.asc",
+          "Name": "ES",
+          "Url": "http://www.corus-es.org/docs/es_newsadmins_faq.txt"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "mod-ena@ennui.org",
+              "Message": "checkgroups",
+              "Newsgroups": "esp.*",
+              "VerificationIdentity": "esp.news.administracion"
+            },
+            {
+              "From": "mod-ena@ennui.org",
+              "Message": "newgroup",
+              "Newsgroups": "esp.*",
+              "VerificationIdentity": "esp.news.administracion"
+            },
+            {
+              "From": "mod-ena@ennui.org",
+              "Message": "rmgroup",
+              "Newsgroups": "esp.*",
+              "VerificationIdentity": "esp.news.administracion"
+            }
+          ],
+          "Contact": "<mod-ena@ennui.org>",
+          "KeyUrl": "http://ennui.org/esp/mod-ena.asc",
+          "Name": "ESP",
+          "Url": "http://ennui.org/esp/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@eternal-september.org",
+              "Message": "checkgroups",
+              "Newsgroups": "eternal-september.*",
+              "VerificationIdentity": "news@eternal-september.org"
+            },
+            {
+              "From": "news@eternal-september.org",
+              "Message": "newgroup",
+              "Newsgroups": "eternal-september.*",
+              "VerificationIdentity": "news@eternal-september.org"
+            },
+            {
+              "From": "news@eternal-september.org",
+              "Message": "rmgroup",
+              "Newsgroups": "eternal-september.*",
+              "VerificationIdentity": "news@eternal-september.org"
+            }
+          ],
+          "Contact": "news@eternal-september.org",
+          "KeyFingerprint": "B79A2BC67D5AFF7918E2AC914BC125F1",
+          "KeyUrl": "http://www.eternal-september.org/control/pgpkey.txt",
+          "Name": "ETERNAL-SEPTEMBER",
+          "Url": "http://www.eternal-september.org/"
+        },
+        {
+          "AdminGroup": "europa.usenet.admin",
+          "Authorizations": [
+            {
+              "From": "group-admin@usenet.eu.org",
+              "Message": "checkgroups",
+              "Newsgroups": "europa.*",
+              "VerificationIdentity": "group-admin@usenet.eu.org"
+            },
+            {
+              "From": "group-admin@usenet.eu.org",
+              "Message": "newgroup",
+              "Newsgroups": "europa.*",
+              "VerificationIdentity": "group-admin@usenet.eu.org"
+            },
+            {
+              "From": "group-admin@usenet.eu.org",
+              "Message": "rmgroup",
+              "Newsgroups": "europa.*",
+              "VerificationIdentity": "group-admin@usenet.eu.org"
+            }
+          ],
+          "KeyFingerprint": "3A05A849FB16292575E3DEBB69E01DB4",
+          "KeyUrl": "http://www.europa.usenet.eu.org/pgp/index.html",
+          "Name": "EUROPA",
+          "Url": "http://www.europa.usenet.eu.org/"
+        },
+        {
+          "AdminGroup": "ffm.admin",
+          "Authorizations": [
+            {
+              "From": "ffm.admin@arcor.de",
+              "Message": "checkgroups",
+              "Newsgroups": "ffm.*",
+              "VerificationIdentity": "ffm.admin"
+            },
+            {
+              "From": "ffm.admin@arcor.de",
+              "Message": "newgroup",
+              "Newsgroups": "ffm.*",
+              "VerificationIdentity": "ffm.admin"
+            },
+            {
+              "From": "ffm.admin@arcor.de",
+              "Message": "rmgroup",
+              "Newsgroups": "ffm.*",
+              "VerificationIdentity": "ffm.admin"
+            }
+          ],
+          "KeyFingerprint": "53A082626FC781C9CF53AB00A3F8C211",
+          "KeyUrl": "ftp://ftp.arcor-online.net/pub/news/PGPKEY.FFM",
+          "Name": "FFM",
+          "Url": "http://ffm.arcornews.de/"
+        },
+        {
+          "AdminGroup": "fido.belg.news",
+          "Authorizations": [
+            {
+              "From": "fidobelg@mail.z2.fidonet.org",
+              "Message": "checkgroups",
+              "Newsgroups": "fido.belg.*",
+              "VerificationIdentity": "fido.belg.news"
+            },
+            {
+              "From": "fidobelg@mail.z2.fidonet.org",
+              "Message": "newgroup",
+              "Newsgroups": "fido.belg.*",
+              "VerificationIdentity": "fido.belg.news"
+            },
+            {
+              "From": "fidobelg@mail.z2.fidonet.org",
+              "Message": "rmgroup",
+              "Newsgroups": "fido.belg.*",
+              "VerificationIdentity": "fido.belg.news"
+            }
+          ],
+          "Name": "FIDO.BELG"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "fido.ger@news.fu-berlin.de",
+              "Message": "checkgroups",
+              "Newsgroups": "fido.ger.*",
+              "VerificationIdentity": "fido.ger@news.fu-berlin.de"
+            },
+            {
+              "From": "fido.ger@news.fu-berlin.de",
+              "Message": "newgroup",
+              "Newsgroups": "fido.ger.*",
+              "VerificationIdentity": "fido.ger@news.fu-berlin.de"
+            },
+            {
+              "From": "fido.ger@news.fu-berlin.de",
+              "Message": "rmgroup",
+              "Newsgroups": "fido.ger.*",
+              "VerificationIdentity": "fido.ger@news.fu-berlin.de"
+            }
+          ],
+          "KeyUrl": "ftp://ftp.fu-berlin.de/doc/news/fido.ger/PGP-Key",
+          "Name": "FIDO.GER",
+          "Url": "ftp://ftp.fu-berlin.de/doc/news/fido.ger/fido.ger-info.english"
+        },
+        {
+          "AdminGroup": "fido7.postmasters",
+          "Authorizations": [
+            {
+              "From": "newgroups-request@fido7.org",
+              "Message": "checkgroups",
+              "Newsgroups": "fido7.*",
+              "VerificationIdentity": "fido7.announce.newgroups"
+            },
+            {
+              "From": "newgroups-request@fido7.org",
+              "Message": "newgroup",
+              "Newsgroups": "fido7.*",
+              "VerificationIdentity": "fido7.announce.newgroups"
+            },
+            {
+              "From": "newgroups-request@fido7.org",
+              "Message": "rmgroup",
+              "Newsgroups": "fido7.*",
+              "VerificationIdentity": "fido7.announce.newgroups"
+            }
+          ],
+          "KeyUrl": "http://www.fido7.org/pgpcontrol.html",
+          "Name": "FIDO7",
+          "Url": "http://www.fido7.org/"
+        },
+        {
+          "AdminGroup": "fj.news.announce",
+          "Authorizations": [
+            {
+              "From": "committee@fj-news.org",
+              "Message": "checkgroups",
+              "Newsgroups": "fj.*",
+              "VerificationIdentity": "fj.news.announce"
+            },
+            {
+              "From": "committee@fj-news.org",
+              "Message": "newgroup",
+              "Newsgroups": "fj.*",
+              "VerificationIdentity": "fj.news.announce"
+            },
+            {
+              "From": "committee@fj-news.org",
+              "Message": "rmgroup",
+              "Newsgroups": "fj.*",
+              "VerificationIdentity": "fj.news.announce"
+            }
+          ],
+          "Contact": "committee@fj-news.org",
+          "KeyUrl": "http://www.is.tsukuba.ac.jp/~yas/fj/fj.asc",
+          "Name": "FJ",
+          "Url": "http://www.fj-news.org/index.html.en"
+        },
+        {
+          "AdminGroup": "flora.general",
+          "Authorizations": [
+            {
+              "From": "news@flora.ottawa.on.ca",
+              "Message": "checkgroups",
+              "Newsgroups": "flora.*",
+              "VerificationIdentity": "flora-news"
+            },
+            {
+              "From": "news@flora.ottawa.on.ca",
+              "Message": "newgroup",
+              "Newsgroups": "flora.*",
+              "VerificationIdentity": "flora-news"
+            },
+            {
+              "From": "news@flora.ottawa.on.ca",
+              "Message": "rmgroup",
+              "Newsgroups": "flora.*",
+              "VerificationIdentity": "flora-news"
+            }
+          ],
+          "Contact": "russell@flora.org",
+          "Name": "FLORA"
+        },
+        {
+          "AdminGroup": "fr.usenet.forums.annonces",
+          "Authorizations": [
+            {
+              "From": "control@usenet-fr.news.eu.org",
+              "Message": "checkgroups",
+              "Newsgroups": "fr.*",
+              "VerificationIdentity": "control@usenet-fr.news.eu.org"
+            },
+            {
+              "From": "control@usenet-fr.news.eu.org",
+              "Message": "newgroup",
+              "Newsgroups": "fr.*",
+              "VerificationIdentity": "control@usenet-fr.news.eu.org"
+            },
+            {
+              "From": "control@usenet-fr.news.eu.org",
+              "Message": "rmgroup",
+              "Newsgroups": "fr.*",
+              "VerificationIdentity": "control@usenet-fr.news.eu.org"
+            }
+          ],
+          "KeyFingerprint": "D5F369B297573622015354E7FA423E89970EB10B",
+          "KeyUrl": "https://www.usenet-fr.net/pgp-fr-2020.txt",
+          "Name": "FR",
+          "Url": "https://www.usenet-fr.net/"
+        },
+        {
+          "AdminGroup": "france.admin.evolutions",
+          "Authorizations": [
+            {
+              "From": "control@usenet-france.news.eu.org",
+              "Message": "checkgroups",
+              "Newsgroups": "france.*",
+              "VerificationIdentity": "control@usenet-france.news.eu.org"
+            },
+            {
+              "From": "control@usenet-france.news.eu.org",
+              "Message": "newgroup",
+              "Newsgroups": "france.*",
+              "VerificationIdentity": "control@usenet-france.news.eu.org"
+            },
+            {
+              "From": "control@usenet-france.news.eu.org",
+              "Message": "rmgroup",
+              "Newsgroups": "france.*",
+              "VerificationIdentity": "control@usenet-france.news.eu.org"
+            }
+          ],
+          "Contact": "control@usenet-france.news.eu.org",
+          "Name": "FRANCE"
+        },
+        {
+          "AdminGroup": "gnu.gnusenet.config",
+          "Authorizations": [
+            {
+              "From": "usenet@gnu.org",
+              "Message": "checkgroups",
+              "Newsgroups": "gnu.*",
+              "VerificationIdentity": "usenet@gnu.org"
+            },
+            {
+              "From": "usenet@gnu.org",
+              "Message": "newgroup",
+              "Newsgroups": "gnu.*",
+              "VerificationIdentity": "usenet@gnu.org"
+            },
+            {
+              "From": "usenet@gnu.org",
+              "Message": "rmgroup",
+              "Newsgroups": "gnu.*",
+              "VerificationIdentity": "usenet@gnu.org"
+            }
+          ],
+          "KeyUrl": "http://www.gnu.org/usenet/usenet-pgp-key.txt",
+          "Name": "GNU",
+          "Url": "http://www.gnu.org/usenet/usenet.html"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@gnuu.de",
+              "Message": "rmgroup",
+              "Newsgroups": "gnuu.*",
+              "VerificationIdentity": "news@gnuu.de"
+            }
+          ],
+          "KeyUrl": "http://www.gnuu.de/config/PGPKEY.GNUU",
+          "Name": "GNUU",
+          "Url": "http://www.gnuu.de/"
+        },
+        {
+          "AdminGroup": "grisbi.admin",
+          "Authorizations": [
+            {
+              "From": "grisbi-control@grisbi.org",
+              "Message": "checkgroups",
+              "Newsgroups": "grisbi.*",
+              "VerificationIdentity": "grisbi-control@grisbi.org"
+            },
+            {
+              "From": "grisbi-control@grisbi.org",
+              "Message": "newgroup",
+              "Newsgroups": "grisbi.*",
+              "VerificationIdentity": "grisbi-control@grisbi.org"
+            },
+            {
+              "From": "grisbi-control@grisbi.org",
+              "Message": "rmgroup",
+              "Newsgroups": "grisbi.*",
+              "VerificationIdentity": "grisbi-control@grisbi.org"
+            }
+          ],
+          "Contact": "newsmaster@grisbi.org",
+          "KeyFingerprint": "EB350C030080BD2A7E0CA4C9F2C62A3DC86CC6E1",
+          "KeyUrl": "http://news.grisbi.org/public-key.asc",
+          "Name": "GRISBI",
+          "Url": "http://news.grisbi.org/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@zhaum.xs4all.nl",
+              "Message": "checkgroups",
+              "Newsgroups": "hacktic.*",
+              "VerificationIdentity": "news@zhaum.xs4all.nl"
+            },
+            {
+              "From": "news@zhaum.xs4all.nl",
+              "Message": "newgroup",
+              "Newsgroups": "hacktic.*",
+              "VerificationIdentity": "news@zhaum.xs4all.nl"
+            },
+            {
+              "From": "news@zhaum.xs4all.nl",
+              "Message": "rmgroup",
+              "Newsgroups": "hacktic.*",
+              "VerificationIdentity": "news@zhaum.xs4all.nl"
+            }
+          ],
+          "Name": "HACKTIC"
+        },
+        {
+          "AdminGroup": "hamburg.koordination",
+          "Authorizations": [
+            {
+              "From": "hamburg@steering-group.net",
+              "Message": "checkgroups",
+              "Newsgroups": "hamburg.*",
+              "VerificationIdentity": "hamburg.koordination"
+            },
+            {
+              "From": "hamburg@steering-group.net",
+              "Message": "newgroup",
+              "Newsgroups": "hamburg.*",
+              "VerificationIdentity": "hamburg.koordination"
+            },
+            {
+              "From": "hamburg@steering-group.net",
+              "Message": "rmgroup",
+              "Newsgroups": "hamburg.*",
+              "VerificationIdentity": "hamburg.koordination"
+            }
+          ],
+          "Contact": "hamburg@steering-group.net",
+          "KeyFingerprint": "3EE70CBB6E0194EE456FC557F4B9548E",
+          "KeyUrl": "http://www.steering-group.net/hamburg/hamburg.koordination.txt",
+          "Name": "HAMBURG",
+          "Url": "http://www.steering-group.net/hamburg/"
+        },
+        {
+          "AdminGroup": "hamster.de.config",
+          "Authorizations": [
+            {
+              "From": "hamster-control@snafu.de",
+              "Message": "checkgroups",
+              "Newsgroups": "hamster.*",
+              "VerificationIdentity": "hamster-control@snafu.de"
+            },
+            {
+              "From": "hamster-control@snafu.de",
+              "Message": "newgroup",
+              "Newsgroups": "hamster.*",
+              "VerificationIdentity": "hamster-control@snafu.de"
+            },
+            {
+              "From": "hamster-control@snafu.de",
+              "Message": "rmgroup",
+              "Newsgroups": "hamster.*",
+              "VerificationIdentity": "hamster-control@snafu.de"
+            }
+          ],
+          "Contact": "hamster-contact@snafu.de",
+          "KeyFingerprint": "1275A9428AD61F776ACFB40C79155F93",
+          "Name": "HAMSTER"
+        },
+        {
+          "AdminGroup": "han.news.admin",
+          "Authorizations": [
+            {
+              "From": "newgroups-request@usenet.or.kr",
+              "Message": "checkgroups",
+              "Newsgroups": "han.*",
+              "VerificationIdentity": "han.news.admin"
+            },
+            {
+              "From": "newgroups-request@usenet.or.kr",
+              "Message": "newgroup",
+              "Newsgroups": "han.*",
+              "VerificationIdentity": "han.news.admin"
+            },
+            {
+              "From": "newgroups-request@usenet.or.kr",
+              "Message": "rmgroup",
+              "Newsgroups": "han.*",
+              "VerificationIdentity": "han.news.admin"
+            }
+          ],
+          "Contact": "newgroups-request@usenet.or.kr",
+          "KeyUrl": "ftp://ftp.usenet.or.kr/pub/korea/usenet/pgp/PGPKEY.han",
+          "Name": "HAN"
+        },
+        {
+          "AdminGroup": "hiv.config",
+          "Authorizations": [
+            {
+              "From": "news@hivnet.org",
+              "Message": "checkgroups",
+              "Newsgroups": "hiv.*",
+              "VerificationIdentity": "news@hivnet.org"
+            },
+            {
+              "From": "news@hivnet.org",
+              "Message": "newgroup",
+              "Newsgroups": "hiv.*",
+              "VerificationIdentity": "news@hivnet.org"
+            },
+            {
+              "From": "news@hivnet.org",
+              "Message": "rmgroup",
+              "Newsgroups": "hiv.*",
+              "VerificationIdentity": "news@hivnet.org"
+            }
+          ],
+          "Contact": "news@hivnet.org",
+          "KeyFingerprint": "5DD60EDC1E2DEA0BB0564DD65253D7A4",
+          "Name": "HIV"
+        },
+        {
+          "AdminGroup": "houston.usenet.config",
+          "Authorizations": [
+            {
+              "From": "news@academ.com",
+              "Message": "checkgroups",
+              "Newsgroups": "houston.*",
+              "VerificationIdentity": "houston.usenet.config"
+            },
+            {
+              "From": "news@academ.com",
+              "Message": "newgroup",
+              "Newsgroups": "houston.*",
+              "VerificationIdentity": "houston.usenet.config"
+            },
+            {
+              "From": "news@academ.com",
+              "Message": "rmgroup",
+              "Newsgroups": "houston.*",
+              "VerificationIdentity": "houston.usenet.config"
+            }
+          ],
+          "Name": "HOUSTON"
+        },
+        {
+          "AdminGroup": "hr.news.admin",
+          "Authorizations": [
+            {
+              "From": "newsmaster@carnet.hr",
+              "Message": "checkgroups",
+              "Newsgroups": "hr.*",
+              "VerificationIdentity": "newsmaster@carnet.hr"
+            },
+            {
+              "From": "newsmaster@carnet.hr",
+              "Message": "newgroup",
+              "Newsgroups": "hr.*",
+              "VerificationIdentity": "newsmaster@carnet.hr"
+            },
+            {
+              "From": "newsmaster@carnet.hr",
+              "Message": "rmgroup",
+              "Newsgroups": "hr.*",
+              "VerificationIdentity": "newsmaster@carnet.hr"
+            }
+          ],
+          "Contact": "newsmaster@carnet.hr",
+          "KeyFingerprint": "0EE574FB1C407ADB0AACA52F71921BA3ED63AD9A",
+          "KeyUrl": "http://newsfeed.carnet.hr/control/key.txt",
+          "Name": "HR",
+          "SyncableServer": "news.carnet.hr",
+          "Url": "http://newsfeed.carnet.hr/control/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news-admin@humanityquest.com",
+              "Message": "checkgroups",
+              "Newsgroups": "humanityquest.*",
+              "VerificationIdentity": "humanityquest.admin.config"
+            },
+            {
+              "From": "news-admin@humanityquest.com",
+              "Message": "newgroup",
+              "Newsgroups": "humanityquest.*",
+              "VerificationIdentity": "humanityquest.admin.config"
+            },
+            {
+              "From": "news-admin@humanityquest.com",
+              "Message": "rmgroup",
+              "Newsgroups": "humanityquest.*",
+              "VerificationIdentity": "humanityquest.admin.config"
+            }
+          ],
+          "Contact": "news-admin@humanityquest.com",
+          "KeyFingerprint": "BA3DB306B6F552AABA8F32F08C4F504016F9C046",
+          "KeyUrl": "http://www.humanityquest.com/projects/newsgroups/PGP.htm",
+          "Name": "HUMANITYQUEST",
+          "Url": "http://www.humanityquest.com/projects/newsgroups/"
+        },
+        {
+          "AdminGroup": "hun.admin.news",
+          "Authorizations": [
+            {
+              "From": "hun-mnt@news.sztaki.hu",
+              "Message": "checkgroups",
+              "Newsgroups": "hun.*",
+              "VerificationIdentity": "hun.admin.news"
+            },
+            {
+              "From": "hun-mnt@news.sztaki.hu",
+              "Message": "newgroup",
+              "Newsgroups": "hun.*",
+              "VerificationIdentity": "hun.admin.news"
+            },
+            {
+              "From": "hun-mnt@news.sztaki.hu",
+              "Message": "rmgroup",
+              "Newsgroups": "hun.*",
+              "VerificationIdentity": "hun.admin.news"
+            }
+          ],
+          "KeyUrl": "http://gatling.ikk.sztaki.hu/~kissg/news/hun.admin.news.asc",
+          "Name": "HUN",
+          "Url": "http://gatling.ikk.sztaki.hu/~kissg/news/"
+        },
+        {
+          "AdminGroup": "ie.news.group",
+          "Authorizations": [
+            {
+              "From": "control@usenet.ie",
+              "Message": "checkgroups",
+              "Newsgroups": "ie.*",
+              "VerificationIdentity": "control@usenet.ie"
+            },
+            {
+              "From": "control@usenet.ie",
+              "Message": "newgroup",
+              "Newsgroups": "ie.*",
+              "VerificationIdentity": "control@usenet.ie"
+            },
+            {
+              "From": "control@usenet.ie",
+              "Message": "rmgroup",
+              "Newsgroups": "ie.*",
+              "VerificationIdentity": "control@usenet.ie"
+            }
+          ],
+          "Contact": "control@usenet.ie",
+          "Name": "IE"
+        },
+        {
+          "AdminGroup": "is.isnet",
+          "Authorizations": [
+            {
+              "From": "group-admin@usenet.is",
+              "Message": "checkgroups",
+              "Newsgroups": "is.*",
+              "VerificationIdentity": "group-admin@usenet.is"
+            },
+            {
+              "From": "group-admin@usenet.is",
+              "Message": "newgroup",
+              "Newsgroups": "is.*",
+              "VerificationIdentity": "group-admin@usenet.is"
+            },
+            {
+              "From": "group-admin@usenet.is",
+              "Message": "rmgroup",
+              "Newsgroups": "is.*",
+              "VerificationIdentity": "group-admin@usenet.is"
+            }
+          ],
+          "Contact": "IS Group Admins <group-admin@usenet.is>",
+          "KeyFingerprint": "33328D461E5E1C7F48608E72E53ECAEA",
+          "KeyUrl": "http://www.usenet.is/group-admin.asc",
+          "Name": "IS",
+          "Url": "http://www.usenet.is/"
+        },
+        {
+          "AdminGroup": "isu.newgroups",
+          "Authorizations": [
+            {
+              "From": "news@news.isu.edu.tw",
+              "Message": "checkgroups",
+              "Newsgroups": "isu.*",
+              "VerificationIdentity": "news@news.isu.edu.tw"
+            },
+            {
+              "From": "news@news.isu.edu.tw",
+              "Message": "newgroup",
+              "Newsgroups": "isu.*",
+              "VerificationIdentity": "news@news.isu.edu.tw"
+            },
+            {
+              "From": "news@news.isu.edu.tw",
+              "Message": "rmgroup",
+              "Newsgroups": "isu.*",
+              "VerificationIdentity": "news@news.isu.edu.tw"
+            }
+          ],
+          "Contact": "news@news.isu.edu.tw",
+          "KeyUrl": "http://news.isu.edu.tw/isu.asc",
+          "Name": "ISU",
+          "Url": "http://news.isu.edu.tw/"
+        },
+        {
+          "AdminGroup": "it.news.annunci",
+          "Authorizations": [
+            {
+              "From": "gcn@news.nic.it",
+              "Message": "checkgroups",
+              "Newsgroups": "it.*",
+              "VerificationIdentity": "gcn@news.nic.it"
+            },
+            {
+              "From": "gcn@news.nic.it",
+              "Message": "newgroup",
+              "Newsgroups": "it.*",
+              "VerificationIdentity": "gcn@news.nic.it"
+            },
+            {
+              "From": "gcn@news.nic.it",
+              "Message": "rmgroup",
+              "Newsgroups": "it.*",
+              "VerificationIdentity": "gcn@news.nic.it"
+            }
+          ],
+          "Contact": "gcn@news.nic.it",
+          "KeyFingerprint": "94A4F7B54696D6C7A673F298C48CD0E0",
+          "KeyUrl": "http://www.news.nic.it/pgp.txt",
+          "Name": "IT",
+          "Url": "http://www.news.nic.it/"
+        },
+        {
+          "AdminGroup": "italia.announce.newgroups",
+          "Authorizations": [
+            {
+              "From": "news@news.cineca.it",
+              "Message": "checkgroups",
+              "Newsgroups": "italia.*",
+              "VerificationIdentity": "italia.announce.newgroups"
+            },
+            {
+              "From": "news@news.cineca.it",
+              "Message": "newgroup",
+              "Newsgroups": "italia.*",
+              "VerificationIdentity": "italia.announce.newgroups"
+            },
+            {
+              "From": "news@news.cineca.it",
+              "Message": "rmgroup",
+              "Newsgroups": "italia.*",
+              "VerificationIdentity": "italia.announce.newgroups"
+            }
+          ],
+          "Contact": "news@news.cineca.it",
+          "KeyFingerprint": "0FBB7162DA5D5DB8D586FC2802671A6B",
+          "KeyUrl": "http://news.cineca.it/italia/italia-pgp.txt",
+          "Name": "ITALIA",
+          "Url": "http://news.cineca.it/italia/"
+        },
+        {
+          "AdminGroup": "japan.admin.announce",
+          "Authorizations": [
+            {
+              "From": "japan.admin.announce@news.efnet.com",
+              "Message": "checkgroups",
+              "Newsgroups": "japan.*",
+              "VerificationIdentity": "japan.admin.announce@news.efnet.com"
+            },
+            {
+              "From": "japan.admin.announce@news.efnet.com",
+              "Message": "newgroup",
+              "Newsgroups": "japan.*",
+              "VerificationIdentity": "japan.admin.announce@news.efnet.com"
+            },
+            {
+              "From": "japan.admin.announce@news.efnet.com",
+              "Message": "rmgroup",
+              "Newsgroups": "japan.*",
+              "VerificationIdentity": "japan.admin.announce@news.efnet.com"
+            }
+          ],
+          "Contact": "Tsuneo Tanaka <tt+null@efnet.com>",
+          "KeyFingerprint": "6AFA1947691B107438534B1BD8BA3E85",
+          "KeyUrl": "http://grex.cyberspace.org/~tt/japan.admin.announce.asc",
+          "Name": "JAPAN",
+          "Url": "http://www.asahi-net.or.jp/~AE5T-KSN/japan-e.html"
+        },
+        {
+          "AdminGroup": "jlug.config",
+          "Authorizations": [
+            {
+              "From": "news@linux.or.jp",
+              "Message": "checkgroups",
+              "Newsgroups": "jlug.*",
+              "VerificationIdentity": "news@linux.or.jp"
+            },
+            {
+              "From": "news@linux.or.jp",
+              "Message": "newgroup",
+              "Newsgroups": "jlug.*",
+              "VerificationIdentity": "news@linux.or.jp"
+            },
+            {
+              "From": "news@linux.or.jp",
+              "Message": "rmgroup",
+              "Newsgroups": "jlug.*",
+              "VerificationIdentity": "news@linux.or.jp"
+            }
+          ],
+          "Contact": "news@linux.or.jp",
+          "KeyUrl": "http://www.linux.or.jp/pgpkey/news",
+          "Name": "JLUG",
+          "Url": "http://www.linux.or.jp/community/news/index.html"
+        },
+        {
+          "AdminGroup": "ka.admin",
+          "Contact": "usenet@karlsruhe.org",
+          "KeyFingerprint": "DE19BB2576198117F067D223E8C87C90",
+          "KeyUrl": "http://www.karlsruhe.org/pubkey-news.karlsruhe.org.asc",
+          "Name": "KA",
+          "Url": "http://www.karlsruhe.org/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ty@kamoi.imasy.or.jp",
+              "Message": "checkgroups",
+              "Newsgroups": "kanto.*",
+              "VerificationIdentity": "kanto.news.network"
+            },
+            {
+              "From": "ty@kamoi.imasy.or.jp",
+              "Message": "rmgroup",
+              "Newsgroups": "kanto.*",
+              "VerificationIdentity": "kanto.news.network"
+            }
+          ],
+          "Name": "KANTO"
+        },
+        {
+          "AdminGroup": "kassel.admin",
+          "Authorizations": [
+            {
+              "From": "dirk.meyer@dinoex.sub.org",
+              "Message": "checkgroups",
+              "Newsgroups": "kassel.*",
+              "VerificationIdentity": "kassel-admin"
+            },
+            {
+              "From": "dirk.meyer@dinoex.sub.org",
+              "Message": "newgroup",
+              "Newsgroups": "kassel.*",
+              "VerificationIdentity": "kassel-admin"
+            },
+            {
+              "From": "dirk.meyer@dinoex.sub.org",
+              "Message": "rmgroup",
+              "Newsgroups": "kassel.*",
+              "VerificationIdentity": "kassel-admin"
+            }
+          ],
+          "Name": "KASSEL"
+        },
+        {
+          "AdminGroup": "linux.admin.news",
+          "Authorizations": [
+            {
+              "From": "linux-admin@bofh.it",
+              "Message": "checkgroups",
+              "Newsgroups": "linux.*",
+              "VerificationIdentity": "linux-admin@bofh.it"
+            },
+            {
+              "From": "linux-admin@bofh.it",
+              "Message": "newgroup",
+              "Newsgroups": "linux.*",
+              "VerificationIdentity": "linux-admin@bofh.it"
+            },
+            {
+              "From": "linux-admin@bofh.it",
+              "Message": "rmgroup",
+              "Newsgroups": "linux.*",
+              "VerificationIdentity": "linux-admin@bofh.it"
+            }
+          ],
+          "Contact": "Marco d'Itri <md@linux.it>",
+          "KeyFingerprint": "81B327994FCE32D11BC9010DBBB32E41",
+          "Name": "LINUX"
+        },
+        {
+          "AdminGroup": "malta.config",
+          "Authorizations": [
+            {
+              "From": "cmeli@cis.um.edu.mt",
+              "Message": "checkgroups",
+              "Newsgroups": "malta.*",
+              "VerificationIdentity": "malta.config"
+            },
+            {
+              "From": "cmeli@cis.um.edu.mt",
+              "Message": "newgroup",
+              "Newsgroups": "malta.*",
+              "VerificationIdentity": "malta.config"
+            },
+            {
+              "From": "cmeli@cis.um.edu.mt",
+              "Message": "rmgroup",
+              "Newsgroups": "malta.*",
+              "VerificationIdentity": "malta.config"
+            }
+          ],
+          "Contact": "cmeli@cis.um.edu.mt",
+          "KeyFingerprint": "2017015CF0D01A42E41330580B1448A6",
+          "KeyUrl": "http://www.cis.um.edu.mt/news-malta/PGP.PUBLICKEY",
+          "Name": "MALTA",
+          "Url": "http://www.malta.news-admin.org/"
+        },
+        {
+          "AdminGroup": "maus.info",
+          "Authorizations": [
+            {
+              "From": "guenter@gst0hb.hb.provi.de",
+              "Message": "checkgroups",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            },
+            {
+              "From": "guenter@gst0hb.north.de",
+              "Message": "checkgroups",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            },
+            {
+              "From": "guenter@gst0hb.hb.provi.de",
+              "Message": "newgroup",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            },
+            {
+              "From": "guenter@gst0hb.north.de",
+              "Message": "newgroup",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            },
+            {
+              "From": "guenter@gst0hb.hb.provi.de",
+              "Message": "rmgroup",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            },
+            {
+              "From": "guenter@gst0hb.north.de",
+              "Message": "rmgroup",
+              "Newsgroups": "maus.*",
+              "VerificationIdentity": "maus-info"
+            }
+          ],
+          "KeyFingerprint": "8252C77026B972A1379855983F26623E",
+          "Name": "MAUS"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "melb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "melb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "melb.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "MELB",
+          "Url": "http://melb.news-admin.org/"
+        },
+        {
+          "AdminGroup": "mensa.config",
+          "Authorizations": [
+            {
+              "From": "usenet@newsgate.mensa.org",
+              "Message": "checkgroups",
+              "Newsgroups": "mensa.*",
+              "VerificationIdentity": "mensa.config"
+            },
+            {
+              "From": "usenet@newsgate.mensa.org",
+              "Message": "newgroup",
+              "Newsgroups": "mensa.*",
+              "VerificationIdentity": "mensa.config"
+            },
+            {
+              "From": "usenet@newsgate.mensa.org",
+              "Message": "rmgroup",
+              "Newsgroups": "mensa.*",
+              "VerificationIdentity": "mensa.config"
+            }
+          ],
+          "Contact": "usenet@newsgate.mensa.org",
+          "KeyFingerprint": "52B9396385D908068E197344973C5005DC7DB7A7",
+          "Name": "MENSA"
+        },
+        {
+          "AdminGroup": "microsoft.public.news.server",
+          "Authorizations": [
+            {
+              "From": "control-microsoft@trigofacile.com",
+              "Message": "checkgroups",
+              "Newsgroups": "microsoft.*",
+              "VerificationIdentity": "control-microsoft@trigofacile.com"
+            },
+            {
+              "From": "control-microsoft@trigofacile.com",
+              "Message": "newgroup",
+              "Newsgroups": "microsoft.*",
+              "VerificationIdentity": "control-microsoft@trigofacile.com"
+            },
+            {
+              "From": "control-microsoft@trigofacile.com",
+              "Message": "rmgroup",
+              "Newsgroups": "microsoft.*",
+              "VerificationIdentity": "control-microsoft@trigofacile.com"
+            }
+          ],
+          "Contact": "control-microsoft@trigofacile.com",
+          "KeyFingerprint": "DF705FC9F615D52E02DBA3CB63A98D13E60E2FAA",
+          "KeyUrl": "http://www.trigofacile.com/divers/usenet/clefs/pgpkey-microsoft.asc",
+          "Name": "MICROSOFT",
+          "SyncableServer": "msnews.microsoft.com",
+          "Url": "http://www.trigofacile.com/divers/usenet/clefs/index.htm"
+        },
+        {
+          "AdminGroup": "milw.config",
+          "Authorizations": [
+            {
+              "From": "milw@usenet.mil.wi.us",
+              "Message": "checkgroups",
+              "Newsgroups": "milw.*",
+              "VerificationIdentity": "milw.config"
+            },
+            {
+              "From": "milw@usenet.mil.wi.us",
+              "Message": "newgroup",
+              "Newsgroups": "milw.*",
+              "VerificationIdentity": "milw.config"
+            },
+            {
+              "From": "milw@usenet.mil.wi.us",
+              "Message": "rmgroup",
+              "Newsgroups": "milw.*",
+              "VerificationIdentity": "milw.config"
+            }
+          ],
+          "Contact": "milw@usenet.mil.wi.us",
+          "KeyFingerprint": "6E9B9F7098AB9CE5C3C00582215BF49E",
+          "KeyUrl": "http://usenet.mil.wi.us/pgpkey",
+          "Name": "MILW",
+          "Url": "http://usenet.mil.wi.us/"
+        },
+        {
+          "AdminGroup": "muc.admin",
+          "Authorizations": [
+            {
+              "From": "muc-cmsg@muenchen.pro-bahn.org",
+              "Message": "checkgroups",
+              "Newsgroups": "muc.*",
+              "VerificationIdentity": "muc.admin"
+            },
+            {
+              "From": "muc-cmsg@muenchen.pro-bahn.org",
+              "Message": "newgroup",
+              "Newsgroups": "muc.*",
+              "VerificationIdentity": "muc.admin"
+            },
+            {
+              "From": "muc-cmsg@muenchen.pro-bahn.org",
+              "Message": "rmgroup",
+              "Newsgroups": "muc.*",
+              "VerificationIdentity": "muc.admin"
+            }
+          ],
+          "KeyFingerprint": "43C70E7C45C706E0BD6F76CE07395E66",
+          "KeyUrl": "http://home.arcor.de/andreas-barth/muc-admin.html",
+          "Name": "MUC"
+        },
+        {
+          "AdminGroup": "netscape.public.admin",
+          "Authorizations": [
+            {
+              "From": "news@netscape.com",
+              "Message": "checkgroups",
+              "Newsgroups": "netscape.*",
+              "VerificationIdentity": "netscape.public.admin"
+            },
+            {
+              "From": "news@netscape.com",
+              "Message": "newgroup",
+              "Newsgroups": "netscape.*",
+              "VerificationIdentity": "netscape.public.admin"
+            },
+            {
+              "From": "news@netscape.com",
+              "Message": "rmgroup",
+              "Newsgroups": "netscape.*",
+              "VerificationIdentity": "netscape.public.admin"
+            }
+          ],
+          "Contact": "news@netscape.com",
+          "KeyFingerprint": "B78055121F9C170B8666AD3BDB6835EC",
+          "Name": "NETSCAPE",
+          "Url": "http://www.mozilla.org/community.html"
+        },
+        {
+          "AdminGroup": "nippon.news.group",
+          "Authorizations": [
+            {
+              "From": "news@gcd.org",
+              "Message": "rmgroup",
+              "Newsgroups": "nippon.*",
+              "VerificationIdentity": "nippon.news.group"
+            }
+          ],
+          "KeyFingerprint": "BCCF15CDB13CDFB3C3DE356F2FF746DB",
+          "KeyUrl": "http://www.gcd.org/news/nippon/",
+          "Name": "NIPPON",
+          "Url": "http://www.gcd.org/news/nippon/"
+        },
+        {
+          "AdminGroup": "nl.newsgroups",
+          "Authorizations": [
+            {
+              "From": "nl-admin@nic.surfnet.nl",
+              "Message": "checkgroups",
+              "Newsgroups": "nl.*",
+              "VerificationIdentity": "nl.newsgroups"
+            },
+            {
+              "From": "nl-admin@nic.surfnet.nl",
+              "Message": "newgroup",
+              "Newsgroups": "nl.*",
+              "VerificationIdentity": "nl.newsgroups"
+            },
+            {
+              "From": "nl-admin@nic.surfnet.nl",
+              "Message": "rmgroup",
+              "Newsgroups": "nl.*",
+              "VerificationIdentity": "nl.newsgroups"
+            }
+          ],
+          "Contact": "nl-admin@nic.surfnet.nl",
+          "KeyFingerprint": "45200BD5A121EA7CEFB2956C25754D27",
+          "Name": "NL",
+          "Url": "http://nl.news-admin.org/info/nladmin.html"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "nl-alt-janitor@surfer.xs4all.nl",
+              "Message": "checkgroups",
+              "Newsgroups": "nl-alt.*",
+              "VerificationIdentity": "nl-alt.config.admin"
+            },
+            {
+              "From": "nl-alt-janitor@surfer.xs4all.nl",
+              "Message": "rmgroup",
+              "Newsgroups": "nl-alt.*",
+              "VerificationIdentity": "nl-alt.config.admin"
+            },
+            {
+              "From": "news@kink.xs4all.nl",
+              "Message": "rmgroup",
+              "Newsgroups": "nl-alt.*",
+              "VerificationIdentity": "nl-alt.config.admin"
+            }
+          ],
+          "KeyFingerprint": "6B62EB534D5D2F9635D9C89CB0650E4C",
+          "Name": "NL-ALT"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@nl.linux.org",
+              "Message": "checkgroups",
+              "Newsgroups": "nlo.*",
+              "VerificationIdentity": "nlo.newsgroups"
+            },
+            {
+              "From": "news@nl.linux.org",
+              "Message": "newgroup",
+              "Newsgroups": "nlo.*",
+              "VerificationIdentity": "nlo.newsgroups"
+            },
+            {
+              "From": "news@nl.linux.org",
+              "Message": "rmgroup",
+              "Newsgroups": "nlo.*",
+              "VerificationIdentity": "nlo.newsgroups"
+            }
+          ],
+          "KeyFingerprint": "63DCB2510AF3DD72C2BDC6FDC1C544CF",
+          "Name": "NLO",
+          "SyncableServer": "news.nl.linux.org",
+          "Url": "http://mail.nl.linux.org/"
+        },
+        {
+          "AdminGroup": "nntpworld.config",
+          "Authorizations": [
+            {
+              "From": "usenet@nntpworld.net",
+              "Message": "checkgroups",
+              "Newsgroups": "nntpworld.*",
+              "VerificationIdentity": "usenet@nntpworld.net"
+            },
+            {
+              "From": "usenet@nntpworld.net",
+              "Message": "newgroup",
+              "Newsgroups": "nntpworld.*",
+              "VerificationIdentity": "usenet@nntpworld.net"
+            },
+            {
+              "From": "usenet@nntpworld.net",
+              "Message": "rmgroup",
+              "Newsgroups": "nntpworld.*",
+              "VerificationIdentity": "usenet@nntpworld.net"
+            }
+          ],
+          "Contact": "usenet@nntpworld.net",
+          "KeyFingerprint": "C7BBE0567A8A5A8609B5E329E1BB8CE1",
+          "KeyUrl": "http://www.nntpworld.net/nntpworld.asc",
+          "Name": "NNTPWORLD",
+          "Url": "http://www.nntpworld.net/"
+        },
+        {
+          "AdminGroup": "no.usenet.admin",
+          "Authorizations": [
+            {
+              "From": "control@usenet.no",
+              "Message": "checkgroups",
+              "Newsgroups": "no.*",
+              "VerificationIdentity": "no-hir-control"
+            },
+            {
+              "From": "control@usenet.no",
+              "Message": "newgroup",
+              "Newsgroups": "no.*",
+              "VerificationIdentity": "no-hir-control"
+            },
+            {
+              "From": "control@usenet.no",
+              "Message": "rmgroup",
+              "Newsgroups": "no.*",
+              "VerificationIdentity": "no-hir-control"
+            }
+          ],
+          "KeyUrl": "http://www.usenet.no/pgp-key.txt",
+          "Name": "NO",
+          "Url": "http://www.usenet.no/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "control@usenet.no",
+              "Message": "rmgroup",
+              "Newsgroups": "no.alt.*",
+              "VerificationIdentity": "no-hir-control"
+            }
+          ],
+          "Name": "NO.ALT"
+        },
+        {
+          "AdminGroup": "nrw.admin.announce",
+          "Authorizations": [
+            {
+              "From": "moderator@nrw.usenetverwaltung.de",
+              "Message": "checkgroups",
+              "Newsgroups": "nrw.*",
+              "VerificationIdentity": "moderator@nrw.usenetverwaltung.de"
+            },
+            {
+              "From": "moderator@nrw.usenetverwaltung.de",
+              "Message": "newgroup",
+              "Newsgroups": "nrw.*",
+              "VerificationIdentity": "moderator@nrw.usenetverwaltung.de"
+            },
+            {
+              "From": "moderator@nrw.usenetverwaltung.de",
+              "Message": "rmgroup",
+              "Newsgroups": "nrw.*",
+              "VerificationIdentity": "moderator@nrw.usenetverwaltung.de"
+            }
+          ],
+          "Contact": "moderator@nrw.usenetverwaltung.de",
+          "KeyFingerprint": "134A80FED634B464AF32083F620EB1E2",
+          "KeyUrl": "http://nrw.usenetverwaltung.de/pgp/nrw.asc",
+          "Name": "NRW",
+          "Url": "http://nrw.usenetverwaltung.de/"
+        },
+        {
+          "AdminGroup": "nz.net.announce",
+          "Authorizations": [
+            {
+              "From": "root@usenet.net.nz",
+              "Message": "checkgroups",
+              "Newsgroups": "nz.*",
+              "VerificationIdentity": "nz-hir-control"
+            },
+            {
+              "From": "root@usenet.net.nz",
+              "Message": "newgroup",
+              "Newsgroups": "nz.*",
+              "VerificationIdentity": "nz-hir-control"
+            },
+            {
+              "From": "root@usenet.net.nz",
+              "Message": "rmgroup",
+              "Newsgroups": "nz.*",
+              "VerificationIdentity": "nz-hir-control"
+            }
+          ],
+          "Contact": "root@usenet.net.nz",
+          "KeyFingerprint": "07DF48AAD0EDAA881670C591653D1A28",
+          "Name": "NZ",
+          "Url": "http://www.faqs.org/faqs/usenet/nz-news-hierarchy"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@news2.open-news-network.org",
+              "Message": "checkgroups",
+              "Newsgroups": "opennews.*",
+              "VerificationIdentity": "news@news2.open-news-network.org"
+            },
+            {
+              "From": "news@news2.open-news-network.org",
+              "Message": "newgroup",
+              "Newsgroups": "opennews.*",
+              "VerificationIdentity": "news@news2.open-news-network.org"
+            },
+            {
+              "From": "news@news2.open-news-network.org",
+              "Message": "rmgroup",
+              "Newsgroups": "opennews.*",
+              "VerificationIdentity": "news@news2.open-news-network.org"
+            }
+          ],
+          "Name": "OPENNEWS",
+          "Url": "http://www.open-news-network.org/"
+        },
+        {
+          "AdminGroup": "openwatcom.contributors",
+          "Authorizations": [
+            {
+              "From": "admin@openwatcom.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "openwatcom.*",
+              "VerificationIdentity": "admin@openwatcom.news-admin.org"
+            },
+            {
+              "From": "admin@openwatcom.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "openwatcom.*",
+              "VerificationIdentity": "admin@openwatcom.news-admin.org"
+            },
+            {
+              "From": "admin@openwatcom.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "openwatcom.*",
+              "VerificationIdentity": "admin@openwatcom.news-admin.org"
+            }
+          ],
+          "Contact": "admin@openwatcom.news-admin.org",
+          "KeyUrl": "http://cmeerw.org/files/openwatcom/pgp-openwatcom.asc",
+          "Name": "OPENWATCOM",
+          "SyncableServer": "news.openwatcom.org",
+          "Url": "http://www.openwatcom.org/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "*@opera.com",
+              "Message": "checkgroups",
+              "Newsgroups": "opera.*",
+              "VerificationIdentity": "opera-group-admin"
+            },
+            {
+              "From": "*@opera.com",
+              "Message": "newgroup",
+              "Newsgroups": "opera.*",
+              "VerificationIdentity": "opera-group-admin"
+            },
+            {
+              "From": "*@opera.com",
+              "Message": "rmgroup",
+              "Newsgroups": "opera.*",
+              "VerificationIdentity": "opera-group-admin"
+            }
+          ],
+          "Contact": "usenet@opera.com",
+          "Name": "OPERA",
+          "SyncableServer": "news.opera.com"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "postmaster@upb.de",
+              "Message": "checkgroups",
+              "Newsgroups": "pbinfo.*",
+              "VerificationIdentity": "news@uni-paderborn.de"
+            },
+            {
+              "From": "postmaster@upb.de",
+              "Message": "newgroup",
+              "Newsgroups": "pbinfo.*",
+              "VerificationIdentity": "news@uni-paderborn.de"
+            },
+            {
+              "From": "postmaster@upb.de",
+              "Message": "rmgroup",
+              "Newsgroups": "pbinfo.*",
+              "VerificationIdentity": "news@uni-paderborn.de"
+            }
+          ],
+          "Contact": "news@uni-paderborn.de",
+          "Name": "PBINFO"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "newsadmin@perl.org",
+              "Message": "checkgroups",
+              "Newsgroups": "perl.*",
+              "VerificationIdentity": "newsadmin@perl.org"
+            },
+            {
+              "From": "newsadmin@perl.org",
+              "Message": "newgroup",
+              "Newsgroups": "perl.*",
+              "VerificationIdentity": "newsadmin@perl.org"
+            },
+            {
+              "From": "newsadmin@perl.org",
+              "Message": "rmgroup",
+              "Newsgroups": "perl.*",
+              "VerificationIdentity": "newsadmin@perl.org"
+            }
+          ],
+          "Contact": "newsadmin@perl.org",
+          "KeyFingerprint": "438FD1BA4DCC3B1ABED82BCC32988A7D8B2ACFBB",
+          "KeyUrl": "http://www.nntp.perl.org/about/newsadmin@perl.org.pgp",
+          "Name": "PERL",
+          "Url": "http://www.nntp.perl.org/about/"
+        },
+        {
+          "AdminGroup": "pgh.config",
+          "Authorizations": [
+            {
+              "From": "pgh-config@psc.edu",
+              "Message": "checkgroups",
+              "Newsgroups": "pgh.*",
+              "VerificationIdentity": "pgh.config"
+            },
+            {
+              "From": "pgh-config@psc.edu",
+              "Message": "newgroup",
+              "Newsgroups": "pgh.*",
+              "VerificationIdentity": "pgh.config"
+            },
+            {
+              "From": "pgh-config@psc.edu",
+              "Message": "rmgroup",
+              "Newsgroups": "pgh.*",
+              "VerificationIdentity": "pgh.config"
+            }
+          ],
+          "Name": "PGH"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "news@postgresql.org",
+              "Message": "checkgroups",
+              "Newsgroups": "pgsql.*",
+              "VerificationIdentity": "news@postgresql.org"
+            },
+            {
+              "From": "news@postgresql.org",
+              "Message": "newgroup",
+              "Newsgroups": "pgsql.*",
+              "VerificationIdentity": "news@postgresql.org"
+            },
+            {
+              "From": "news@postgresql.org",
+              "Message": "rmgroup",
+              "Newsgroups": "pgsql.*",
+              "VerificationIdentity": "news@postgresql.org"
+            }
+          ],
+          "Contact": "news@postgresql.org",
+          "KeyUrl": "http://news.hub.org/gpg_public_keys.html",
+          "Name": "PGSQL",
+          "Url": "http://news.hub.org/gpg_public_keys.html"
+        },
+        {
+          "AdminGroup": "pl.news.admin",
+          "Authorizations": [
+            {
+              "From": "michalj@*fuw.edu.pl",
+              "Message": "checkgroups",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            },
+            {
+              "From": "newgroup@usenet.pl",
+              "Message": "checkgroups",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            },
+            {
+              "From": "michalj@*fuw.edu.pl",
+              "Message": "newgroup",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            },
+            {
+              "From": "newgroup@usenet.pl",
+              "Message": "newgroup",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            },
+            {
+              "From": "michalj@*fuw.edu.pl",
+              "Message": "rmgroup",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            },
+            {
+              "From": "newgroup@usenet.pl",
+              "Message": "rmgroup",
+              "Newsgroups": "pl.*",
+              "VerificationIdentity": "pl.announce.newgroups"
+            }
+          ],
+          "KeyUrl": "http://www.usenet.pl/doc/news-pl-new-site-faq.html#pgp",
+          "Name": "PL",
+          "Url": "http://www.usenet.pl/doc/news-pl-new-site-faq.html"
+        },
+        {
+          "AdminGroup": "pt.internet.usenet",
+          "Authorizations": [
+            {
+              "From": "pmelo@*.inescc.pt",
+              "Message": "checkgroups",
+              "Newsgroups": "pt.*",
+              "VerificationIdentity": "control@usenet-pt.org"
+            },
+            {
+              "From": "pmelo@*.inescc.pt",
+              "Message": "newgroup",
+              "Newsgroups": "pt.*",
+              "VerificationIdentity": "control@usenet-pt.org"
+            },
+            {
+              "From": "pmelo@*.inescc.pt",
+              "Message": "rmgroup",
+              "Newsgroups": "pt.*",
+              "VerificationIdentity": "control@usenet-pt.org"
+            }
+          ],
+          "KeyUrl": "http://www.usenet-pt.org/control@usenet-pt.org.asc",
+          "Name": "PT",
+          "Url": "http://www.usenet-pt.org/"
+        },
+        {
+          "AdminGroup": "relcom.netnews",
+          "Authorizations": [
+            {
+              "From": "coord@*.relcom.ru",
+              "Message": "checkgroups",
+              "Newsgroups": "relcom.*",
+              "VerificationIdentity": "relcom.newsgroups"
+            },
+            {
+              "From": "coord@*.relcom.ru",
+              "Message": "newgroup",
+              "Newsgroups": "relcom.*",
+              "VerificationIdentity": "relcom.newsgroups"
+            },
+            {
+              "From": "coord@*.relcom.ru",
+              "Message": "rmgroup",
+              "Newsgroups": "relcom.*",
+              "VerificationIdentity": "relcom.newsgroups"
+            }
+          ],
+          "KeyUrl": "ftp://ftp.relcom.ru/pub/relcom/netinfo/coordpubkey.txt",
+          "Name": "RELCOM",
+          "Url": "ftp://ftp.relcom.ru/pub/relcom/netinfo/"
+        },
+        {
+          "AdminGroup": "rocksolid.shared.rocksolid",
+          "Authorizations": [
+            {
+              "From": "usenet@novabbs.com",
+              "Message": "checkgroups",
+              "Newsgroups": "rocksolid.*",
+              "VerificationIdentity": "usenet@novabbs.com"
+            },
+            {
+              "From": "usenet@novabbs.com",
+              "Message": "newgroup",
+              "Newsgroups": "rocksolid.*",
+              "VerificationIdentity": "usenet@novabbs.com"
+            },
+            {
+              "From": "usenet@novabbs.com",
+              "Message": "rmgroup",
+              "Newsgroups": "rocksolid.*",
+              "VerificationIdentity": "usenet@novabbs.com"
+            }
+          ],
+          "Contact": "usenet@novabbs.com",
+          "KeyFingerprint": "FF846D730B72CC0CB69B64802A1C655BF6D10B13",
+          "KeyUrl": "http://news.novabbs.com/hierarchy/rocksolid.txt",
+          "Name": "ROCKSOLID",
+          "Url": "http://news.novabbs.com/hierarchy/"
+        },
+        {
+          "AdminGroup": "saar.admin.news",
+          "Authorizations": [
+            {
+              "From": "control@saar-admin-news.de",
+              "Message": "checkgroups",
+              "Newsgroups": "saar.*",
+              "VerificationIdentity": "saar-control"
+            },
+            {
+              "From": "control@saar-admin-news.de",
+              "Message": "newgroup",
+              "Newsgroups": "saar.*",
+              "VerificationIdentity": "saar-control"
+            },
+            {
+              "From": "control@saar-admin-news.de",
+              "Message": "rmgroup",
+              "Newsgroups": "saar.*",
+              "VerificationIdentity": "saar-control"
+            }
+          ],
+          "KeyUrl": "http://www.saar-admin-news.de/saar-control.asc",
+          "Name": "SAAR",
+          "Url": "http://www.saar-admin-news.de/"
+        },
+        {
+          "AdminGroup": "sat.usenet.config",
+          "Authorizations": [
+            {
+              "From": "satgroup@endicor.com",
+              "Message": "checkgroups",
+              "Newsgroups": "sat.*",
+              "VerificationIdentity": "satgroup@endicor.com"
+            },
+            {
+              "From": "satgroup@endicor.com",
+              "Message": "newgroup",
+              "Newsgroups": "sat.*",
+              "VerificationIdentity": "satgroup@endicor.com"
+            },
+            {
+              "From": "satgroup@endicor.com",
+              "Message": "rmgroup",
+              "Newsgroups": "sat.*",
+              "VerificationIdentity": "satgroup@endicor.com"
+            }
+          ],
+          "Contact": "satgroup@endicor.com",
+          "Name": "SAT"
+        },
+        {
+          "AdminGroup": "schule.admin",
+          "Authorizations": [
+            {
+              "From": "newsctrl@schule.de",
+              "Message": "checkgroups",
+              "Newsgroups": "schule.*",
+              "VerificationIdentity": "schule.konfig"
+            },
+            {
+              "From": "newsctrl@schule.de",
+              "Message": "newgroup",
+              "Newsgroups": "schule.*",
+              "VerificationIdentity": "schule.konfig"
+            },
+            {
+              "From": "newsctrl@schule.de",
+              "Message": "rmgroup",
+              "Newsgroups": "schule.*",
+              "VerificationIdentity": "schule.konfig"
+            }
+          ],
+          "Contact": "schule-admin@roxel.ms.sub.org",
+          "KeyFingerprint": "6406F0AEE146850CBDCA0E538B1E73D2",
+          "KeyUrl": "http://www.afaik.de/usenet/admin/schule/control/schule.asc",
+          "Name": "SCHULE",
+          "Url": "http://home.pages.de/~schule-admin/"
+        },
+        {
+          "AdminGroup": "scot.newsgroups.discuss",
+          "Authorizations": [
+            {
+              "From": "control@scot.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "scot.*",
+              "VerificationIdentity": "control@scot.news-admin.org"
+            },
+            {
+              "From": "control@scot.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "scot.*",
+              "VerificationIdentity": "control@scot.news-admin.org"
+            },
+            {
+              "From": "control@scot.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "scot.*",
+              "VerificationIdentity": "control@scot.news-admin.org"
+            }
+          ],
+          "KeyUrl": "http://scot.news-admin.org/signature.html",
+          "Name": "SCOT",
+          "Url": "http://scot.news-admin.org/"
+        },
+        {
+          "AdminGroup": "scout.admin",
+          "Authorizations": [
+            {
+              "From": "control@news.scoutnet.org",
+              "Message": "checkgroups",
+              "Newsgroups": "scout.*",
+              "VerificationIdentity": "control@news.scoutnet.org"
+            },
+            {
+              "From": "control@news.scoutnet.org",
+              "Message": "newgroup",
+              "Newsgroups": "scout.*",
+              "VerificationIdentity": "control@news.scoutnet.org"
+            },
+            {
+              "From": "control@news.scoutnet.org",
+              "Message": "rmgroup",
+              "Newsgroups": "scout.*",
+              "VerificationIdentity": "control@news.scoutnet.org"
+            }
+          ],
+          "KeyUrl": "http://news.scoutnet.org/scout-pgpkey.asc",
+          "Name": "SCOUT",
+          "Url": "http://news.scoutnet.org/"
+        },
+        {
+          "AdminGroup": "se.internet.news.meddelanden",
+          "Authorizations": [
+            {
+              "From": "usenet@usenet-se.net",
+              "Message": "checkgroups",
+              "Newsgroups": "se.*",
+              "VerificationIdentity": "usenet-se"
+            },
+            {
+              "From": "usenet@usenet-se.net",
+              "Message": "newgroup",
+              "Newsgroups": "se.*",
+              "VerificationIdentity": "usenet-se"
+            },
+            {
+              "From": "usenet@usenet-se.net",
+              "Message": "rmgroup",
+              "Newsgroups": "se.*",
+              "VerificationIdentity": "usenet-se"
+            }
+          ],
+          "Contact": "usenet@usenet-se.net",
+          "KeyFingerprint": "6803F0FD0CC34E696F0D0C603C586396",
+          "Name": "SE"
+        },
+        {
+          "AdminGroup": "sfnet.ryhmat+listat",
+          "Authorizations": [
+            {
+              "From": "sfnet@*cs.tut.fi",
+              "Message": "checkgroups",
+              "Newsgroups": "sfnet.*",
+              "VerificationIdentity": "sfnet@cs.tut.fi"
+            },
+            {
+              "From": "sfnet@*cs.tut.fi",
+              "Message": "newgroup",
+              "Newsgroups": "sfnet.*",
+              "VerificationIdentity": "sfnet@cs.tut.fi"
+            },
+            {
+              "From": "sfnet@*cs.tut.fi",
+              "Message": "rmgroup",
+              "Newsgroups": "sfnet.*",
+              "VerificationIdentity": "sfnet@cs.tut.fi"
+            }
+          ],
+          "Contact": "sfnet@cs.tut.fi",
+          "KeyFingerprint": "DE7933C2D359D12844E56A0CB6E30E536933A636",
+          "Name": "SFNET",
+          "Url": "http://www.cs.tut.fi/sfnet/"
+        },
+        {
+          "AdminGroup": "si.news.announce.newsgroups",
+          "Authorizations": [
+            {
+              "From": "news-admin@arnes.si",
+              "Message": "checkgroups",
+              "Newsgroups": "si.*",
+              "VerificationIdentity": "si.news.announce.newsgroups"
+            },
+            {
+              "From": "news-admin@arnes.si",
+              "Message": "newgroup",
+              "Newsgroups": "si.*",
+              "VerificationIdentity": "si.news.announce.newsgroups"
+            },
+            {
+              "From": "news-admin@arnes.si",
+              "Message": "rmgroup",
+              "Newsgroups": "si.*",
+              "VerificationIdentity": "si.news.announce.newsgroups"
+            }
+          ],
+          "KeyUrl": "http://www.arnes.si/news/config/",
+          "Name": "SI",
+          "Url": "http://www.arnes.si/news/config/"
+        },
+        {
+          "AdminGroup": "staroffice.admin",
+          "Authorizations": [
+            {
+              "From": "news@stardivision.de",
+              "Message": "checkgroups",
+              "Newsgroups": "staroffice.*",
+              "VerificationIdentity": "staroffice.admin"
+            },
+            {
+              "From": "news@stardivision.de",
+              "Message": "newgroup",
+              "Newsgroups": "staroffice.*",
+              "VerificationIdentity": "staroffice.admin"
+            },
+            {
+              "From": "news@stardivision.de",
+              "Message": "rmgroup",
+              "Newsgroups": "staroffice.*",
+              "VerificationIdentity": "staroffice.admin"
+            }
+          ],
+          "Contact": "news@starnews.sun.com",
+          "KeyFingerprint": "C63E816F2A19D3847251F91BE3B9B2C9",
+          "Name": "STAROFFICE",
+          "SyncableServer": "starnews.sun.com"
+        },
+        {
+          "AdminGroup": "stgt.net",
+          "Authorizations": [
+            {
+              "From": "stgt-control@news.uni-stuttgart.de",
+              "Message": "checkgroups",
+              "Newsgroups": "stgt.*",
+              "VerificationIdentity": "stgt-control"
+            },
+            {
+              "From": "stgt-control@news.uni-stuttgart.de",
+              "Message": "newgroup",
+              "Newsgroups": "stgt.*",
+              "VerificationIdentity": "stgt-control"
+            },
+            {
+              "From": "stgt-control@news.uni-stuttgart.de",
+              "Message": "rmgroup",
+              "Newsgroups": "stgt.*",
+              "VerificationIdentity": "stgt-control"
+            }
+          ],
+          "Contact": "news@news.uni-stuttgart.de",
+          "KeyFingerprint": "BAA40A548FF5F51E724851AE0951DE44",
+          "KeyUrl": "http://news.uni-stuttgart.de/hierarchie/stgt/stgt-control.txt",
+          "Name": "STGT",
+          "Url": "http://news.uni-stuttgart.de/hierarchie/stgt/"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "syd.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "syd.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "syd.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "SYD",
+          "Url": "http://syd.news-admin.org/"
+        },
+        {
+          "AdminGroup": "szaf.admin",
+          "Authorizations": [
+            {
+              "From": "hirtenrat@szaf.org",
+              "Message": "rmgroup",
+              "Newsgroups": "szaf.*",
+              "VerificationIdentity": "Hirtenrat"
+            }
+          ],
+          "Contact": "hirtenrat@szaf.org",
+          "KeyUrl": "http://news.szaf.org/szaf/szaf-key.txt",
+          "Name": "SZAF"
+        },
+        {
+          "AdminGroup": "thur.net.news.groups",
+          "Authorizations": [
+            {
+              "From": "usenet@thur.de",
+              "Message": "checkgroups",
+              "Newsgroups": "thur.*",
+              "VerificationIdentity": "thur.net.news.groups"
+            },
+            {
+              "From": "usenet@thur.de",
+              "Message": "newgroup",
+              "Newsgroups": "thur.*",
+              "VerificationIdentity": "thur.net.news.groups"
+            },
+            {
+              "From": "usenet@thur.de",
+              "Message": "rmgroup",
+              "Newsgroups": "thur.*",
+              "VerificationIdentity": "thur.net.news.groups"
+            }
+          ],
+          "Contact": "usenet@thur.de",
+          "KeyFingerprint": "7E3D731393D4CA7839DE3CE737EE22F1",
+          "Name": "THUR",
+          "SyncableServer": "news.thur.de",
+          "Url": "http://www.thur.de/thurnet/old/thurnews.html"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "usenet@agate.berkeley.edu",
+              "Message": "checkgroups",
+              "Newsgroups": "ucb.*",
+              "VerificationIdentity": "ucb.news"
+            },
+            {
+              "From": "usenet@agate.berkeley.edu",
+              "Message": "newgroup",
+              "Newsgroups": "ucb.*",
+              "VerificationIdentity": "ucb.news"
+            },
+            {
+              "From": "usenet@agate.berkeley.edu",
+              "Message": "rmgroup",
+              "Newsgroups": "ucb.*",
+              "VerificationIdentity": "ucb.news"
+            }
+          ],
+          "Contact": "Chris van den Berg <usenet@agate.berkeley.edu>",
+          "KeyFingerprint": "96B88E9A9809377D0EEC8188DB9029BF",
+          "KeyUrl": "http://www.net.berkeley.edu/usenet/usenet.asc",
+          "Name": "UCB",
+          "Url": "http://www.net.berkeley.edu/usenet/"
+        },
+        {
+          "AdminGroup": "ufra.admin",
+          "KeyFingerprint": "F7AD96D87A3F7E84020C839ADB8FEBB8",
+          "Name": "UFRA"
+        },
+        {
+          "AdminGroup": "uk.net.news.announce",
+          "Authorizations": [
+            {
+              "From": "control@usenet.org.uk",
+              "Message": "checkgroups",
+              "Newsgroups": "uk.*",
+              "VerificationIdentity": "uk.net.news.announce"
+            },
+            {
+              "From": "control@usenet.org.uk",
+              "Message": "newgroup",
+              "Newsgroups": "uk.*",
+              "VerificationIdentity": "uk.net.news.announce"
+            },
+            {
+              "From": "control@usenet.org.uk",
+              "Message": "rmgroup",
+              "Newsgroups": "uk.*",
+              "VerificationIdentity": "uk.net.news.announce"
+            }
+          ],
+          "KeyUrl": "http://www.usenet.org.uk/newsadmins.html",
+          "Name": "UK",
+          "Url": "http://www.usenet.org.uk/"
+        },
+        {
+          "AdminGroup": "un.public.usenet.admin",
+          "Authorizations": [
+            {
+              "From": "news@news.itu.int",
+              "Message": "checkgroups",
+              "Newsgroups": "un.*",
+              "VerificationIdentity": "ungroups@news.itu.int"
+            },
+            {
+              "From": "news@news.itu.int",
+              "Message": "newgroup",
+              "Newsgroups": "un.*",
+              "VerificationIdentity": "ungroups@news.itu.int"
+            },
+            {
+              "From": "news@news.itu.int",
+              "Message": "rmgroup",
+              "Newsgroups": "un.*",
+              "VerificationIdentity": "ungroups@news.itu.int"
+            }
+          ],
+          "Name": "UN"
+        },
+        {
+          "AdminGroup": "us.config",
+          "Authorizations": [
+            {
+              "From": "us-control@lists.killfile.org",
+              "Message": "checkgroups",
+              "Newsgroups": "us.*",
+              "VerificationIdentity": "us-control@lists.killfile.org"
+            },
+            {
+              "From": "us-control@lists.killfile.org",
+              "Message": "newgroup",
+              "Newsgroups": "us.*",
+              "VerificationIdentity": "us-control@lists.killfile.org"
+            },
+            {
+              "From": "us-control@lists.killfile.org",
+              "Message": "rmgroup",
+              "Newsgroups": "us.*",
+              "VerificationIdentity": "us-control@lists.killfile.org"
+            }
+          ],
+          "Contact": "us-control@lists.killfile.org",
+          "KeyFingerprint": "BB96EB2CCFD075C8E9DEC2C21DA29D87B73CAF1B",
+          "Name": "US"
+        },
+        {
+          "AdminGroup": "uw.newsgroups",
+          "Authorizations": [
+            {
+              "From": "newsgroups@news.uwaterloo.ca",
+              "Message": "checkgroups",
+              "Newsgroups": "uw.*",
+              "VerificationIdentity": "uw.newsgroups"
+            },
+            {
+              "From": "newsgroups@news.uwaterloo.ca",
+              "Message": "newgroup",
+              "Newsgroups": "uw.*",
+              "VerificationIdentity": "uw.newsgroups"
+            },
+            {
+              "From": "newsgroups@news.uwaterloo.ca",
+              "Message": "rmgroup",
+              "Newsgroups": "uw.*",
+              "VerificationIdentity": "uw.newsgroups"
+            }
+          ],
+          "Name": "UW",
+          "SyncableServer": "news.uwaterloo.ca"
+        },
+        {
+          "Authorizations": [
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "checkgroups",
+              "Newsgroups": "wa.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "newgroup",
+              "Newsgroups": "wa.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            },
+            {
+              "From": "ausadmin@aus.news-admin.org",
+              "Message": "rmgroup",
+              "Newsgroups": "wa.*",
+              "VerificationIdentity": "ausadmin@aus.news-admin.org"
+            }
+          ],
+          "Contact": "ausadmin@aus.news-admin.org",
+          "KeyUrl": "http://aus.news-admin.org/ausadmin.asc",
+          "Name": "WA",
+          "Url": "http://wa.news-admin.org/"
+        },
+        {
+          "AdminGroup": "wales.usenet.config",
+          "Authorizations": [
+            {
+              "From": "control@wales-usenet.org",
+              "Message": "checkgroups",
+              "Newsgroups": "wales.*",
+              "VerificationIdentity": "wales-usenet"
+            },
+            {
+              "From": "control@wales-usenet.org",
+              "Message": "newgroup",
+              "Newsgroups": "wales.*",
+              "VerificationIdentity": "wales-usenet"
+            },
+            {
+              "From": "control@wales-usenet.org",
+              "Message": "rmgroup",
+              "Newsgroups": "wales.*",
+              "VerificationIdentity": "wales-usenet"
+            }
+          ],
+          "Contact": "committee@wales-usenet.org",
+          "KeyFingerprint": "2D9EDEDF12DA345C49E1EE28E3AB0DAD",
+          "KeyUrl": "http://www.wales-usenet.org/english/newsadmin.txt",
+          "Name": "WALES",
+          "Url": "http://www.wales-usenet.org/"
+        },
+        {
+          "AdminGroup": "x-privat.info",
+          "Authorizations": [
+            {
+              "From": "dmitry@x-privat.org",
+              "Message": "checkgroups",
+              "Newsgroups": "x-privat.*",
+              "VerificationIdentity": "dmitry@x-privat.org"
+            },
+            {
+              "From": "dmitry@x-privat.org",
+              "Message": "newgroup",
+              "Newsgroups": "x-privat.*",
+              "VerificationIdentity": "dmitry@x-privat.org"
+            },
+            {
+              "From": "dmitry@x-privat.org",
+              "Message": "rmgroup",
+              "Newsgroups": "x-privat.*",
+              "VerificationIdentity": "dmitry@x-privat.org"
+            }
+          ],
+          "Contact": "dmitry@x-privat.org",
+          "KeyFingerprint": "9B0A7E682780C796476B039051056843",
+          "KeyUrl": "http://www.x-privat.org/dmitry.asc",
+          "Name": "X-PRIVAT",
+          "Url": "http://www.x-privat.org/"
+        },
+        {
+          "AdminGroup": "z-netz.koordination.user+sysops",
+          "Authorizations": [
+            {
+              "From": "teko@dinoex.sub.org",
+              "Message": "checkgroups",
+              "Newsgroups": "z-netz.*",
+              "VerificationIdentity": "z-netz.koordination.user+sysops"
+            },
+            {
+              "From": "teko@dinoex.sub.org",
+              "Message": "newgroup",
+              "Newsgroups": "z-netz.*",
+              "VerificationIdentity": "z-netz.koordination.user+sysops"
+            },
+            {
+              "From": "teko@dinoex.sub.org",
+              "Message": "rmgroup",
+              "Newsgroups": "z-netz.*",
+              "VerificationIdentity": "z-netz.koordination.user+sysops"
+            }
+          ],
+          "Contact": "teko@dinoex.sub.org",
+          "KeyUrl": "ftp://ftp.dinoex.de/pub/keys/z-netz.koordination.user+sysops.asc",
+          "Name": "Z-NETZ"
+        }
+      ],
+      "Source": {
+        "InnUrl": "https://raw.githubusercontent.com/InterNetNews/inn/main/samples/control.ctl",
+        "LastModified": "2023-08-05",
+        "RetrievedFrom": "InnUrl",
+        "Url": "https://downloads.isc.org/pub/usenet/CONFIG/control.ctl"
+      }
+    }
+  },
+  "Nntpd": {
+    "AcmeStateDir": "certs/",
+    "AllowCleartextAuth": true,
+    "BindAddress": [
+      "127.0.0.1"
+    ],
+    "BindPort": 11990,
+    "BindPortTls": 15633,
+    "GracefulShutdownTimeout": "00:01:00",
+    "HistoryTime": "02:00:00",
+    "IdleTime": 300,
+    "LogDir": "logs/",
+    "MailComplaintsTo": "abuse@usenet.ninja",
+    "MaxArticleSize": 5242880,
+    "ProxyHosts": [],
+    "ServerId": 1,
+    "XTraceKey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "StartupTimeout": null,
+    "StopHostOnUnexpectedServiceTermination": true,
+    "Top1000": [
+      "top1000@anthologeek.net",
+      "cknipe@opticnetworks.net"
+    ],
+    "Transit": {
+      "StreamOutstandingArticleDepth": 8
+    },
+    "Systemd": {
+      "EnableWatchdog": true,
+      "NotifyReadyOnApplicationRunning": true,
+      "NotifyStoppingOnApplicationShutdown": true,
+      "ReportLifecycleStatus": true,
+      "WatchdogIntervalFraction": 0.5
+    },
+    "ArticleIngestion": {
+      "MaxArticleBytes": 4194304,
+      "MinWorkers": 2,
+      "MaxWorkers": 32,
+      "MaxPublishConcurrency": 32,
+      "OverviewDbWorkQueueMemoryLimit": 1073741824,
+      "OverviewDbMinPublisherWorkers": 2,
+      "OverviewDbMaxPublisherWorkers": 32,
+      "OverviewDbPublisherBatchSize": 100,
+      "OverviewDbPublisherShutdownSeconds": 2,
+      "ScaleIntervalSeconds": 2,
+      "ScaleUpPressureThreshold": 0.4,
+      "ScaleDownPressureThreshold": 0.1,
+      "ScaleUpConsecutiveIntervals": 2,
+      "ScaleDownConsecutiveIntervals": 3
+    },
+    "TransitQueueMemoryLimit": 4294967296
+  },
+  "NntpDb": {
+    "StartupTimeout": "00:00:15"
+  },
+  "Redis": {
+    "Host": [ "198.18.0.70" ],
+    "Port": 6379
+  },
+  "Serilog": {
+    "Enrich": [ "FromLogContext" ],
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "Microsoft.Hosting.Lifetime": "Information",
+        "System": "Warning",
+        "VectorNNTPD.ReaderService": "Debug"
+      }
+    },
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
+    "WriteTo": [
+      {
+        "Args": {
+          "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+          "restrictedToMinimumLevel": "Information"
+        },
+        "Name": "Console"
+      },
+      {
+        "Args": {
+          "blockWhenFull": true,
+          "bufferSize": 50000,
+          "configure": [
+            {
+              "Args": {
+                "buffered": true,
+                "flushToDiskInterval": "00:00:01",
+                "fileSizeLimitBytes": null,
+                "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
+                "path": "logs/pending-.log",
+                "restrictedToMinimumLevel": "Debug",
+                "retainedFileCountLimit": 14,
+                "rollOnFileSizeLimit": false,
+                "rollingInterval": "Day"
+              },
+              "Name": "File"
+            }
+          ]
+        },
+        "Name": "Async"
+      }
+    ],
+    "News": {
+      "blockWhenFull": true,
+      "bufferSize": 50000,
+      "buffered": true,
+      "flushToDiskInterval": "00:00:01",
+      "fileSizeLimitBytes": null,
+      "path": "logs/news-.log",
+      "retainedFileCountLimit": 14,
+      "rollOnFileSizeLimit": false,
+      "rollingInterval": "Day"
+    },
+    "Inpaths": {
+      "blockWhenFull": true,
+      "bufferSize": 50000,
+      "buffered": true,
+      "flushToDiskInterval": "00:00:01",
+      "fileSizeLimitBytes": null,
+      "path": "logs/inpaths-.log",
+      "retainedFileCountLimit": 1,
+      "rollOnFileSizeLimit": false,
+      "rollingInterval": "Day"
+    }
+  }
+}

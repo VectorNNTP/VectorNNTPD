@@ -121,8 +121,8 @@ namespace VectorNNTPD.Common.Tests.Messaging.RabbitMq
         /// <returns>The string value stored at <paramref name="key"/>.</returns>
         private static string RequireString(IDictionary<string, object?> properties, string key)
         {
-            Assert.True(properties.ContainsKey(key));
-            return Assert.IsType<string>(properties[key]);
+            Assert.True(properties.TryGetValue(key, out var value));
+            return Assert.IsType<string>(value);
         }
     }
 }
