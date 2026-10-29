@@ -83,30 +83,21 @@ namespace VectorNNTPD.Common.Tests.Networking.Transport
             listener.Start();
             var endpoint = listener.LocalEndPoint;
 
-            var sockets = new List<TcpClient>();
-            try
+            // Hold every client open until all connects, admissions, and writes complete.
+            using var sockets = new TcpClientGroup();
+            for (var i = 0; i < clients; i++)
             {
-                for (var i = 0; i < clients; i++)
-                {
-                    var client = new TcpClient();
-                    await client.ConnectAsync(endpoint, CancellationToken.None);
-                    sockets.Add(client);
-                }
-
-                await WaitUntilAsync(() => Volatile.Read(ref admitted) == clients, TimeSpan.FromSeconds(5));
-                gate.TrySetResult();
-
-                foreach (var client in sockets)
-                {
-                    await client.GetStream().WriteAsync(new byte[] { 0x2E });
-                }
+                var client = new TcpClient();
+                await client.ConnectAsync(endpoint, CancellationToken.None);
+                sockets.Add(client);
             }
-            finally
+
+            await WaitUntilAsync(() => Volatile.Read(ref admitted) == clients, TimeSpan.FromSeconds(5));
+            gate.TrySetResult();
+
+            foreach (var client in sockets.Items)
             {
-                foreach (var client in sockets)
-                {
-                    client.Dispose();
-                }
+                await client.GetStream().WriteAsync(new byte[] { 0x2E });
             }
         }
 
@@ -215,6 +206,29 @@ namespace VectorNNTPD.Common.Tests.Networking.Transport
                 }
 
                 await Task.Delay(10);
+            }
+        }
+
+        /// <summary>Owns connected <see cref="TcpClient"/> instances until the enclosing <c>using</c> ends.</summary>
+        private sealed class TcpClientGroup : IDisposable
+        {
+            private readonly List<TcpClient> _clients = [];
+
+            /// <summary>Clients still owned by this group.</summary>
+            public IReadOnlyList<TcpClient> Items => _clients;
+
+            /// <summary>Takes ownership of <paramref name="client"/>.</summary>
+            public void Add(TcpClient client) => _clients.Add(client);
+
+            /// <inheritdoc />
+            public void Dispose()
+            {
+                foreach (var client in _clients)
+                {
+                    client.Dispose();
+                }
+
+                _clients.Clear();
             }
         }
     }

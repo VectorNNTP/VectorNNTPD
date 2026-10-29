@@ -484,8 +484,10 @@ namespace VectorNNTPD.StorageService.Listener
                     {
                         accepted.Dispose();
                     }
-                    catch (ObjectDisposedException)
+                    catch (ObjectDisposedException ex)
                     {
+                        // Handshake failure or concurrent teardown may already have disposed the socket.
+                        ExpectedException.Ignore(ex);
                     }
                 }
 

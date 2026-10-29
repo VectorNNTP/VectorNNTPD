@@ -747,8 +747,10 @@ namespace VectorNNTPD.BackFillerService.Listener
                     {
                         accepted.Dispose();
                     }
-                    catch (ObjectDisposedException)
+                    catch (ObjectDisposedException ex)
                     {
+                        // Accept path may race with a test hook or failed option setup that already disposed.
+                        _ = ex; // observed; intentionally ignored at this boundary
                     }
                 }
 
@@ -840,8 +842,10 @@ namespace VectorNNTPD.BackFillerService.Listener
                 {
                     await listener.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    // Concurrent stop/dispose can already have released the listen socket.
+                    _ = ex; // observed; intentionally ignored at this boundary
                 }
                 catch (SocketException ex)
                 {

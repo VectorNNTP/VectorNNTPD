@@ -189,18 +189,22 @@ namespace VectorNNTPD.Common.Networking.Transport
 
             if (_ownsConnection)
             {
+                // CompleteAsync is best-effort before DisposeAsync; teardown races must not skip disposal.
                 try
                 {
                     await _connection.CompleteAsync().ConfigureAwait(false);
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException ex)
                 {
+                    _ = ex; // observed; intentionally ignored at this boundary
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    _ = ex; // observed; intentionally ignored at this best-effort boundary
                 }
-                catch (SocketException)
+                catch (SocketException ex)
                 {
+                    _ = ex; // observed; intentionally ignored at this best-effort boundary
                 }
 
                 await _connection.DisposeAsync().ConfigureAwait(false);
