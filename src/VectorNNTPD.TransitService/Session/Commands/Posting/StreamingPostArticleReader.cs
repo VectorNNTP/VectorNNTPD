@@ -54,7 +54,9 @@ namespace VectorNNTPD.TransitService.Session.Commands.Posting
             private byte[]? _currentName;
             private int _destuffedBytes;
             private int _headerBlockBytes;
-            private StreamingPostReadStatus _status = StreamingPostReadStatus.Completed;
+            // Incomplete until HandleTerminator assigns Completed/Rejected/TooLarge. Defaulting to
+            // Completed would make Finish()'s success path look reachable with a null _parsed.
+            private StreamingPostReadStatus _status = StreamingPostReadStatus.Incomplete;
             private PostingFailure _failure;
             private ParsedPostArticle? _parsed;
             private DateTimeOffset _injectionUtc;
@@ -455,18 +457,23 @@ namespace VectorNNTPD.TransitService.Session.Commands.Posting
                         _parsed?.ApprovedIdentities);
                 }
 
+                // Completed is assigned only after CompleteHeaderSection materializes _parsed.
+                var parsed = _parsed
+                    ?? throw new InvalidOperationException(
+                        "Streaming POST completed without a parsed article; header completion must precede the terminator.");
+
                 return new StreamingPostReadResult(
                     StreamingPostReadStatus.Completed,
                     default,
                     _output.Take(),
-                    _parsed!.MessageId,
-                    _parsed.Newsgroups,
+                    parsed.MessageId,
+                    parsed.Newsgroups,
                     _destuffedBytes,
                     _injectionUtc,
                     _disposition,
                     _moderatorAddress,
                     _targetModeratedGroup,
-                    _parsed.ApprovedIdentities);
+                    parsed.ApprovedIdentities);
             }
 
             private StreamingPostReadResult Incomplete() =>

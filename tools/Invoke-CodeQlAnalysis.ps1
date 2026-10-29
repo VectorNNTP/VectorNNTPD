@@ -22,7 +22,8 @@
     database analyze to exit 0.
 
     For a traced C# build, the CLI records that paths and paths-ignore do not
-    filter compiled files.
+    filter compiled files. After analyze, this script runs Filter-CodeQlSarif.ps1
+    so local results.sarif matches the filtered upload used by CI.
 
 .PARAMETER CodeQl
     Path to codeql.exe. Defaults to C:\Tools\codeql\codeql.exe.
@@ -154,14 +155,18 @@ try {
         "--command", $buildCommand
     )
 
+    $rawSarif = Join-Path $evidenceRoot "results.raw.sarif"
+    $filteredSarif = Join-Path $evidenceRoot "results.sarif"
     Invoke-CodeQl -LogPath (Join-Path $evidenceRoot "database-analyze.log") -Arguments @(
         "database", "analyze", $database,
         "--format=sarifv2.1.0",
-        "--output", (Join-Path $evidenceRoot "results.sarif"),
+        "--output", $rawSarif,
         "--threads=0",
         "--no-sarif-minify",
         "--sarif-category=csharp"
     )
+
+    & (Join-Path $PSScriptRoot "Filter-CodeQlSarif.ps1") -InputPath $rawSarif -OutputPath $filteredSarif
 }
 finally {
     Pop-Location

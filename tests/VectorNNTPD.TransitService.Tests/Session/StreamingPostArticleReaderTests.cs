@@ -320,6 +320,18 @@ public sealed class StreamingPostArticleReaderTests
     }
 
     [Fact]
+    public async Task Completed_ExposesParsedMessageIdAndNewsgroups()
+    {
+        // Finish()'s Completed path requires a materialized ParsedPostArticle; regressions that
+        // leave _parsed null must not surface as empty identity fields.
+        var result = await ReadStreamingAsync(ClientArticle());
+        Assert.Equal(StreamingPostReadStatus.Completed, result.Status);
+        Assert.False(string.IsNullOrEmpty(result.MessageId));
+        Assert.Contains("misc.test", result.Newsgroups);
+        Assert.False(result.Wire.IsEmpty);
+    }
+
+    [Fact]
     public async Task MalformedArticle_IsRejected()
     {
         var result = await ReadStreamingAsync("not a header\r\n.\r\n");

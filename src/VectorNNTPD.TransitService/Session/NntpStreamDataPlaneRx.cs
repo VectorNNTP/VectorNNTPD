@@ -93,9 +93,16 @@ namespace VectorNNTPD.TransitService.Session
                 && _session.ServerRole == Hosting.NntpServerRole.Transit
                 && _session.Authorization.AuthorizedTransit)
             {
-                ArgumentNullException.ThrowIfNull(_session.TakeThisWindow);
-                await _session.Pipeline!.DrainAsync(cancellationToken).ConfigureAwait(false);
-                await _session.TakeThisWindow
+                // Capture once: nullable session properties must not be re-read between check and use
+                // (concurrent teardown can clear them after a prior null check).
+                var takeThisWindow = _session.TakeThisWindow
+                    ?? throw new InvalidOperationException(
+                        "Transit TAKETHIS admit requires an initialized TakeThis admission window.");
+                var pipeline = _session.Pipeline
+                    ?? throw new InvalidOperationException(
+                        "Transit TAKETHIS admit requires an initialized CHECK pipeline.");
+                await pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
+                await takeThisWindow
                     .AdmitAuthorizedAsync(unit.Command, _parser.CurrentCommandLine, cancellationToken)
                     .ConfigureAwait(false);
                 return true;

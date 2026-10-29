@@ -50,5 +50,29 @@ jobs:
       - name: Build solution
         run: dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore --no-incremental
 
+      # upload: never — traced C# SARIF includes **/obj/** source-generator noise that
+      # paths-ignore cannot drop. Filter first, then upload-sarif.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
+        with:
+          upload: never
+          output: codeql-sarif
+
+      - name: Filter generated bin/obj findings from SARIF
+        shell: pwsh
+        run: |
+          $inputs = Get-ChildItem -Path codeql-sarif -Filter *.sarif -File -ErrorAction Stop
+          if ($inputs.Count -lt 1) {
+            throw "No SARIF files found under codeql-sarif/"
+          }
+          New-Item -ItemType Directory -Force -Path codeql-sarif-filtered | Out-Null
+          foreach ($sarif in $inputs) {
+            $out = Join-Path codeql-sarif-filtered $sarif.Name
+            & ./tools/Filter-CodeQlSarif.ps1 -InputPath $sarif.FullName -OutputPath $out
+          }
+
+      - name: Upload filtered CodeQL SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: codeql-sarif-filtered
+          category: csharp
