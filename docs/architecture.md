@@ -177,7 +177,7 @@ The listener command path is byte-oriented, as is the upstream NNTP client. They
 
 ## Source-generated structured logging
 
-Application logs use `LoggerMessageAttribute` on partial methods, usually in a `*LogMessages.cs` companion. Serilog is the host logging stack. The rolling gzip file sink, compressor, active-file writer, and periodic flush wrapper live in `VectorNNTPD.Common.Logging`. BackFiller selects targets, levels, retention, syslog, and RabbitMQ publishing. Message templates keep structured property names. Do not preformat those properties into the message string.
+Application logs use `LoggerMessageAttribute` on partial methods, usually in a `*LogMessages.cs` companion. Serilog is the host logging stack. The rolling gzip file sink, compressor, active-file writer, and periodic flush wrapper live in `VectorNNTPD.Common.Logging`. BackFiller selects targets, levels, retention, syslog, and RabbitMQ publishing. Message templates keep structured property names. Do not preformat those properties into the message string. Operator-facing sink and systemd details: [logging.md](logging.md), [systemd.md](systemd.md).
 
 Do not log Cloudflare API keys, ACME passwords, RabbitMQ passwords, `AUTHINFO` secrets, or article payloads. NNTP wire debug logs redact `AUTHINFO USER` and `AUTHINFO PASS`. Guard expensive trace or debug arguments with `IsEnabled` when building them has a cost.
 

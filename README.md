@@ -12,6 +12,23 @@ Standalone VectorNNTPD hosts extracted from VectorNNTP.NNTPD. This repository cu
 - `tools/Publish-Release.ps1` - Native AOT release publish for both production hosts
 - `tools/Invoke-CodeQlAnalysis.ps1` - local traced C# CodeQL analysis
 
+## Documentation
+
+Permanent docs live under [`docs/`](docs/). Start with [`docs/README.md`](docs/README.md).
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | BackFiller host lifecycle, Article Work, byte-oriented data plane |
+| [docs/configuration.md](docs/configuration.md) | BackFiller options, RabbitMQ, NntpDB, secrets (BackFiller-focused) |
+| [docs/storage.md](docs/storage.md) | StorageService architecture and configuration |
+| [docs/storage-nntp-feed.md](docs/storage-nntp-feed.md) | Storage NNTP feed (ARTICLE / TAKETHIS / QUIT) |
+| [docs/logging.md](docs/logging.md) | Serilog for BackFiller and StorageService |
+| [docs/systemd.md](docs/systemd.md) | systemd notify/watchdog for both hosts |
+| [docs/common/](docs/common/) | Shared library contracts (ArticleRecord, VATP, Common config) |
+| [docs/standards/](docs/standards/) | Local RFC and protocol standards library |
+| [docs/schema/](docs/schema/) | Upstream Transit/PostFilter SQL references only — not applied by these hosts |
+| [docs/reference/upstream-nntpd/](docs/reference/upstream-nntpd/) | Labeled upstream NNTPD notes (not VectorNNTPD behaviour) |
+
 ## Build
 
 ```powershell
