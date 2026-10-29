@@ -1,5 +1,5 @@
 using System.Net.Sockets;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 
 namespace VectorNNTPD.TransitService.Session.CommandProcessor
 {

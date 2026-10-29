@@ -1,4 +1,4 @@
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session.Framing;
 
 namespace VectorNNTPD.ReaderService.Session.CommandProcessor
@@ -61,6 +61,13 @@ namespace VectorNNTPD.ReaderService.Session.CommandProcessor
         /// (for example negotiated TLS parameters after STARTTLS).
         /// </summary>
         public string? CompletionDetail { get; set; }
+
+        /// <summary>
+        /// When <see langword="true"/>, the handler expects the connection to become completed
+        /// as a normal outcome (for example QUIT). <see cref="NntpCommandExecution"/> must not
+        /// treat that completion as <c>[failed]</c>. Thrown exceptions still log as failed.
+        /// </summary>
+        public bool ExpectConnectionComplete { get; set; }
 
         /// <summary>Gets the underlying transport connection.</summary>
         public INntpConnection Connection => Session.Connection;

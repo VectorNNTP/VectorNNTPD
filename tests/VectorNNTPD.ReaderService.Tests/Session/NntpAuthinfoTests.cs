@@ -6,12 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Authentication;
 using VectorNNTPD.ReaderService.Session.Commands;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 [Collection(nameof(NntpCommandLoggerCollection))]

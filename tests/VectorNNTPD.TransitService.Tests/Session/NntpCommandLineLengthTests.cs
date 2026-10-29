@@ -1,5 +1,5 @@
 using System.IO.Pipelines;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session.Commands;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 

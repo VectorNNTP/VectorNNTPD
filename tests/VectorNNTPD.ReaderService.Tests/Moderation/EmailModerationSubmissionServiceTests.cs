@@ -5,7 +5,7 @@ using VectorNNTPD.ReaderService.Email;
 using VectorNNTPD.ReaderService.Moderation;
 using VectorNNTPD.ReaderService.Networking.Proxy;
 using VectorNNTPD.ReaderService.Tests.Email;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Moderation;
 
 public sealed class EmailModerationSubmissionServiceTests

@@ -13,7 +13,7 @@ using VectorNNTPD.ReaderService.ArticleIngestion;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.History;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.RabbitMq;
 using VectorNNTPD.ReaderService.RabbitMq.ArticleWork;
 using VectorNNTPD.ReaderService.Session;
@@ -24,7 +24,7 @@ using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.RabbitMq;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
 using VectorNNTPD.ReaderService.Transport.Vatp;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 /// <summary>

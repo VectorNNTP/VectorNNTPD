@@ -5,12 +5,12 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Commands;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
 using VectorNNTPD.ReaderService.Tests.Networking.Transport;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 /// <summary>QUIT command — RFC 3977 §5.4 and peer-disappears-during-205 race.</summary>
@@ -196,9 +196,9 @@ public sealed class QuitCommandTests
             recording.Messages,
             m => m.Contains("TX: QUIT", StringComparison.Ordinal)
                  && m.Contains("executed in", StringComparison.Ordinal));
-        // Immediate RST can complete the connection after a successful 205 write; the
-        // existing RunAsync IsCompleted heuristic may then append [failed]. That is
-        // not an application error when 205 was selected for TX.
+        // Immediate RST can win before NntpCommandReply assigns StatusLine, in which case the
+        // IsCompleted heuristic may still append [failed]. When 205 was selected for TX, that is
+        // not an application-level QUIT failure.
         Assert.True(
             tx.Contains("[205 Connection closing]", StringComparison.Ordinal)
             || !tx.Contains("[failed]", StringComparison.Ordinal),

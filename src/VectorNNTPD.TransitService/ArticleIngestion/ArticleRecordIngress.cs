@@ -2,7 +2,7 @@ using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Session.Framing;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.ArticleIngestion
 {
     /// <summary>

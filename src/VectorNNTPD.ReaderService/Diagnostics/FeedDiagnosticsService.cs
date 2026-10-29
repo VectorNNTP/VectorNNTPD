@@ -7,7 +7,7 @@ using VectorNNTPD.ReaderService.Transit;
 namespace VectorNNTPD.ReaderService.Diagnostics
 {
     /// <summary>
-    /// Periodic feed-diagnostics reporter. Does not run when <see cref="IFeedDiagnostics.IsEnabled"/> is false.
+    /// Periodic feed-diagnostics reporter. Does not run when <see cref="VectorNNTPD.Common.Networking.Diagnostics.ITcpByteDiagnostics.IsEnabled"/> is false.
     /// </summary>
     public sealed class FeedDiagnosticsService : IApplicationService, IAsyncDisposable
     {

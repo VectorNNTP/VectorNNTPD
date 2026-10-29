@@ -8,7 +8,7 @@ using VectorNNTPD.Common.Messaging.RabbitMq;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.RabbitMq.ArticleWork;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
@@ -16,7 +16,7 @@ using VectorNNTPD.ReaderService.Storage;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.RabbitMq;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 /// <summary>

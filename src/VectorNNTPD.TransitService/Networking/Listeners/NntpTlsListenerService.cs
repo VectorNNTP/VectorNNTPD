@@ -11,9 +11,9 @@ using VectorNNTPD.TransitService.NntpDb;
 using VectorNNTPD.Common.Networking;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.SessionState.BytesAccounting;
-using VectorNNTPD.TransitService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.TransitService.Authentication;
 using VectorNNTPD.TransitService.SessionState;
 using VectorNNTPD.TransitService.Session;
@@ -31,7 +31,7 @@ using VectorNNTPD.TransitService.Transport.Vatp;
 using VectorNNTPD.Common.Configuration;
 using VectorNNTPD.Common.Networking.Listeners;
 using VectorNNTPD.Common.Cloudflare;
-
+using VectorNNTPD.TransitService.SessionState.RateLimiting;
 namespace VectorNNTPD.TransitService.Networking.Listeners
 {
     /// <summary>

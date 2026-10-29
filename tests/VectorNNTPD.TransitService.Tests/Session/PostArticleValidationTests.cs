@@ -4,7 +4,7 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Session.Commands.Posting;
 using VectorNNTPD.TransitService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 public sealed class PostArticleValidationTests

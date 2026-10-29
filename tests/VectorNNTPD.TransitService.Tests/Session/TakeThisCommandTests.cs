@@ -8,7 +8,7 @@ using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Authentication;
 using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.PostFilter;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Commands;
@@ -20,7 +20,7 @@ using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Tests.Networking.Transport;
 using VectorNNTPD.TransitService.Tests.TestDoubles;
 using VectorNNTPD.TransitService.Tests.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 /// <summary>RFC 4644 TAKETHIS streaming / pipelining / ingestion contracts.</summary>

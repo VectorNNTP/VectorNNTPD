@@ -1,3 +1,5 @@
+using VectorNNTPD.Common.Networking.RateLimiting;
+
 namespace VectorNNTPD.TransitService.SessionState.RateLimiting
 {
     /// <summary>

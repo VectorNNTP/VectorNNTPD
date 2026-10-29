@@ -6,7 +6,7 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Session.Commands.Posting;
 using VectorNNTPD.TransitService.Session.Framing;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 public sealed class StreamingPostArticleReaderTests

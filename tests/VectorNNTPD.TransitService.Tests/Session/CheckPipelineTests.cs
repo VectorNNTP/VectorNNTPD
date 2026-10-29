@@ -7,7 +7,7 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.History;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Redis;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Commands;
@@ -16,7 +16,7 @@ using VectorNNTPD.TransitService.Session.Framing;
 using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Tests.TestDoubles;
 using VectorNNTPD.TransitService.Tests.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 public sealed class CheckPipelineTests

@@ -12,9 +12,9 @@ using System.Net;
 using System.Net.Sockets;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.Common.Networking.Listeners;
-using System.Net.Security;
-using System.Security.Cryptography.X509Certificates;
 using VectorNNTPD.BackFillerService.Networking;
+using VectorNNTPD.Common.Networking.Proxy;
+using VectorNNTPD.Common.Networking.Transport;
 
 namespace VectorNNTPD.BackFillerService.Listener
 {
@@ -26,10 +26,10 @@ namespace VectorNNTPD.BackFillerService.Listener
     /// <para>
     /// Start requires <see cref="IAcmeCertificateReadiness.IsReady"/> and
     /// <see cref="ITlsCertificateContextProvider.IsAvailable"/>. Bind plans come from
-    /// <see cref="ListenEndpointPlanner.Plan"/>. Each admitted socket gets one TLS handshake
-    /// (TLS 1.2 or 1.3, no client certificate, revocation checks off) and one
-    /// <see cref="NntpCacheListenerSession"/>. The certificate lease is acquired per connection and disposed
-    /// with that connection. This service does not reload retired certificate generations.
+    /// <see cref="ListenEndpointPlanner.Plan"/>. Each admitted socket is started through
+    /// <see cref="NntpConnection.StartTlsAsync"/> (shared Common pipeline transport) and one
+    /// <see cref="NntpCacheListenerSession"/>. The certificate lease is acquired by the shared
+    /// connection and disposed with that connection. This service does not reload retired certificate generations.
     /// The session does not own the socket or the certificate.
     /// </para>
     /// <para>
@@ -71,13 +71,13 @@ namespace VectorNNTPD.BackFillerService.Listener
         private readonly IListenerDnsPublication? _publication;
 
         /// <summary>
-        /// Non-recursive lock for <see cref="_state"/> and <see cref="_listenSockets"/>.
+        /// Non-recursive lock for <see cref="_state"/> and <see cref="_listeners"/>.
         /// No caller enters it again on the same call stack.
         /// </summary>
         private readonly Lock _gate = new();
 
-        /// <summary>Bound listen sockets. Mutated only while <see cref="_gate"/> is held.</summary>
-        private readonly List<Socket> _listenSockets = [];
+        /// <summary>Bound accept listeners. Mutated only while <see cref="_gate"/> is held.</summary>
+        private readonly List<SocketAcceptListener> _listeners = [];
 
         /// <summary>
         /// In-flight connection tasks. The value is unused. Entries are removed when the task completes.
@@ -227,7 +227,8 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// </summary>
         /// <remarks>
         /// <see cref="VectorNNTPD.BackFillerService.Core.ApplicationServiceManager"/> treats a faulted or unexpectedly completed task as termination.
-        /// The task is the loop started by <see cref="AcceptAllAsync"/>.
+        /// The task is <see cref="Task.WhenAll(System.Collections.Generic.IEnumerable{System.Threading.Tasks.Task})"/> over each
+        /// <see cref="SocketAcceptListener.AcceptLoopTask"/>.
         /// </remarks>
         public Task? Execution => _acceptTask;
 
@@ -253,8 +254,8 @@ namespace VectorNNTPD.BackFillerService.Listener
 
         /// <summary>Gets bound listen endpoints (tests).</summary>
         /// <remarks>
-        /// Copies <see cref="Socket.LocalEndPoint"/> for each socket currently in <see cref="_listenSockets"/>
-        /// while <see cref="_gate"/> is held. Entries can be null after a socket is closed.
+        /// Copies <see cref="SocketAcceptListener.LocalEndPoint"/> for each listener currently in
+        /// <see cref="_listeners"/> while <see cref="_gate"/> is held.
         /// </remarks>
         internal IReadOnlyList<EndPoint?> LocalEndPoints
         {
@@ -262,7 +263,7 @@ namespace VectorNNTPD.BackFillerService.Listener
             {
                 lock (_gate)
                 {
-                    return [.. _listenSockets.Select(static socket => socket.LocalEndPoint)];
+                    return [.. _listeners.Select(static listener => (EndPoint?)listener.LocalEndPoint)];
                 }
             }
         }
@@ -316,7 +317,7 @@ namespace VectorNNTPD.BackFillerService.Listener
 
                 CacheListenerLogMessages.Starting(_logger, _runtime.BindPortTls, bindings.Count);
                 BindEndpoints(bindings);
-                if (_listenSockets.Count == 0)
+                if (_listeners.Count == 0)
                 {
                     throw new InvalidOperationException("Cache Listener failed to bind any endpoint.");
                 }
@@ -333,12 +334,13 @@ namespace VectorNNTPD.BackFillerService.Listener
 
                 CacheListenerLogMessages.Running(
                     _logger,
-                    _listenSockets.Count,
+                    _listeners.Count,
                     _runtime.BindPortTls,
                     _runtime.Listener.SendBufferBytes,
                     _runtime.Listener.ReceiveBufferBytes);
                 _journal.Record(BackFillerStartupStages.ListenerStarted);
-                _acceptTask = AcceptAllAsync(_runCts.Token);
+                _acceptTask = Task.WhenAll(
+                    _listeners.Select(static listener => listener.AcceptLoopTask ?? Task.CompletedTask));
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
@@ -395,7 +397,7 @@ namespace VectorNNTPD.BackFillerService.Listener
 
             CacheListenerLogMessages.Retiring(_logger);
             await _runCts.CancelAsync().ConfigureAwait(false);
-            CloseListenSockets();
+            await CloseListenSocketsAsync().ConfigureAwait(false);
 
             Exception? unexpectedAcceptFault = null;
             var accept = _acceptTask;
@@ -511,7 +513,7 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// <summary>
         /// Reports whether every flattened inner exception is an expected accept-loop fault type.
         /// </summary>
-        /// <param name="exception">Fault from <see cref="Task.WhenAll(System.Collections.Generic.IEnumerable{Task})"/> via <see cref="AcceptAllAsync"/>.</param>
+        /// <param name="exception">Fault from <see cref="Task.WhenAll(System.Collections.Generic.IEnumerable{Task})"/> over accept loops.</param>
         /// <returns>
         /// <see langword="true"/> when every inner is <see cref="InvalidOperationException"/>,
         /// <see cref="ObjectDisposedException"/>, <see cref="SocketException"/>, or
@@ -552,28 +554,54 @@ namespace VectorNNTPD.BackFillerService.Listener
         {
             foreach (var binding in bindings)
             {
+                SocketAcceptListener? listener = null;
                 try
                 {
-                    var socket = CacheListenerEndpoints.CreateBoundListenSocket(binding);
+                    listener = new SocketAcceptListener(
+                        binding,
+                        OnAcceptedAsync,
+                        _logger,
+                        maxConsecutiveAcceptFailures: MaxConsecutiveAcceptFailures,
+                        acceptFailureRetryDelay: AcceptFailureRetryDelay,
+                        acceptFailureDelayAsync: AcceptFailureDelayAsync,
+                        acceptFailureObserver: new CacheListenerAcceptFailureObserver(_logger),
+                        acceptFailureLogInterval: AcceptFailureLogInterval,
+                        reuseAddress: false)
+                    {
+                        AcceptAsyncOverride = AcceptAsyncOverride,
+                    };
+                    listener.Start();
                     lock (_gate)
                     {
-                        _listenSockets.Add(socket);
+                        _listeners.Add(listener);
                     }
 
-                    if (!_logger.IsEnabled(LogLevel.Information))
+                    listener = null;
+                    if (_logger.IsEnabled(LogLevel.Information))
                     {
-                        continue;
+                        var endpoint = binding.EndPoint.ToString();
+                        var addressFamily = binding.Address.AddressFamily.ToString();
+                        CacheListenerLogMessages.EndpointBound(_logger, endpoint, addressFamily);
                     }
-
-                    var endpoint = binding.EndPoint.ToString();
-                    var addressFamily = binding.Address.AddressFamily.ToString();
-                    CacheListenerLogMessages.EndpointBound(_logger, endpoint, addressFamily);
                 }
                 catch (SocketException ex) when (
                     IsImplicitWildcard(binding.EndPoint)
                     && ex.SocketErrorCode is SocketError.AddressFamilyNotSupported or SocketError.ProtocolNotSupported or SocketError.AddressNotAvailable)
                 {
                     CacheListenerLogMessages.WildcardFamilySkipped(_logger, binding.Address.AddressFamily.ToString(), ex.SocketErrorCode.ToString());
+                    if (listener is not null)
+                    {
+                        _ = listener.DisposeAsync().AsTask();
+                    }
+                }
+                catch
+                {
+                    if (listener is not null)
+                    {
+                        _ = listener.DisposeAsync().AsTask();
+                    }
+
+                    throw;
                 }
             }
         }
@@ -595,164 +623,40 @@ namespace VectorNNTPD.BackFillerService.Listener
                    && (endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any));
         }
 
-        /// <summary>Runs one accept loop per socket that was bound when this method sampled the list.</summary>
-        /// <param name="cancellationToken">Service run token. Cancelled by <see cref="DisposeAsync"/>.</param>
-        /// <returns>A task that completes when every sampled accept loop has exited. A fault in any loop faults the task.</returns>
-        private async Task AcceptAllAsync(CancellationToken cancellationToken)
-        {
-            Socket[] sockets;
-            lock (_gate)
-            {
-                sockets = [.. _listenSockets];
-            }
-
-            await Task.WhenAll(sockets.Select(socket => AcceptLoopAsync(socket, cancellationToken))).ConfigureAwait(false);
-        }
-
-        /// <summary>Accepts sockets until cancellation, disposal, or persistent accept failure.</summary>
-        /// <param name="listenSocket">Bound socket sampled by <see cref="AcceptAllAsync"/>.</param>
-        /// <param name="cancellationToken">Service run token.</param>
-        /// <returns>A task that completes when the loop breaks, or faults after consecutive accept failures.</returns>
-        /// <remarks>
-        /// Cancellation, <see cref="ObjectDisposedException"/>, and <see cref="SocketException"/> end the loop
-        /// when <paramref name="cancellationToken"/> is cancelled. A <see cref="SocketException"/> while the token
-        /// is still active is logged (rate-limited), delayed by <see cref="AcceptFailureRetryDelay"/>, and retried.
-        /// After <see cref="MaxConsecutiveAcceptFailures"/> consecutive failures the loop throws
-        /// <see cref="InvalidOperationException"/> so <see cref="Execution"/> faults and the host health path observes it.
-        /// A successful accept resets the consecutive-failure count. Over-capacity sockets are disposed and not processed.
-        /// An admitted socket is configured with <see cref="TcpSocketOptions.Apply"/> before <see cref="ProcessAsync"/>.
-        /// Option failure disposes that socket, releases the admission slot, and continues the loop.
-        /// Admitted work is tracked in <see cref="_connections"/> until the task completes.
-        /// </remarks>
-        private async Task AcceptLoopAsync(Socket listenSocket, CancellationToken cancellationToken)
-        {
-            var consecutiveFailures = 0;
-            DateTimeOffset? lastFailureLogUtc = null;
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                Socket accepted;
-                try
-                {
-                    accepted = AcceptAsyncOverride is not null
-                        ? await AcceptAsyncOverride(listenSocket, cancellationToken).ConfigureAwait(false)
-                        : await listenSocket.AcceptAsync(cancellationToken).ConfigureAwait(false);
-
-                    if (consecutiveFailures > 0)
-                    {
-                        CacheListenerLogMessages.AcceptRecovered(_logger, consecutiveFailures);
-                        consecutiveFailures = 0;
-                        lastFailureLogUtc = null;
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException ex)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    consecutiveFailures++;
-                    var socketError = ex.SocketErrorCode.ToString();
-                    var now = _time.GetUtcNow();
-                    if (ShouldLogAcceptFailure(consecutiveFailures, lastFailureLogUtc, now))
-                    {
-                        CacheListenerLogMessages.AcceptFailed(
-                            _logger,
-                            socketError,
-                            consecutiveFailures,
-                            MaxConsecutiveAcceptFailures);
-                        lastFailureLogUtc = now;
-                    }
-
-                    if (consecutiveFailures >= MaxConsecutiveAcceptFailures)
-                    {
-                        CacheListenerLogMessages.AcceptLoopStopping(_logger, consecutiveFailures, socketError);
-                        throw new InvalidOperationException(
-                            $"Cache Listener accept failed {consecutiveFailures} consecutive times (last error: {socketError}).",
-                            ex);
-                    }
-
-                    try
-                    {
-                        if (AcceptFailureDelayAsync is not null)
-                        {
-                            await AcceptFailureDelayAsync(AcceptFailureRetryDelay, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-                        else
-                        {
-                            await Task.Delay(AcceptFailureRetryDelay, _time, cancellationToken)
-                                .ConfigureAwait(false);
-                        }
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
-                if (!TryAdmit())
-                {
-                    CacheListenerLogMessages.CapacityRejected(_logger, remote, _runtime.Listener.MaxActiveConnections);
-                    accepted.Dispose();
-                    continue;
-                }
-
-                if (!TryConfigureAcceptedSocket(accepted, remote))
-                {
-                    ReleaseAdmit();
-                    continue;
-                }
-
-                CacheListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
-                var connection = ProcessAsync(accepted, remote, cancellationToken);
-                _connections[connection] = 0;
-                _ = connection.ContinueWith(
-                    static (task, state) => ((CacheListenerService)state!)._connections.TryRemove(task, out _),
-                    this,
-                    TaskScheduler.Default);
-            }
-        }
-
         /// <summary>
-        /// Reports whether an accept failure should emit a Warning log given consecutive count and prior log time.
+        /// Admits one accepted socket, applies TCP options, and starts <see cref="ProcessAsync"/>.
         /// </summary>
-        /// <param name="consecutiveFailures">Failures since the last successful accept on this loop.</param>
-        /// <param name="lastFailureLogUtc">UTC of the last Warning for this loop, or null when none yet.</param>
-        /// <param name="nowUtc">Current UTC from the service <see cref="TimeProvider"/>.</param>
-        /// <returns><see langword="true"/> for the first failure, threshold crossing, or after <see cref="AcceptFailureLogInterval"/>.</returns>
-        private static bool ShouldLogAcceptFailure(
-            int consecutiveFailures,
-            DateTimeOffset? lastFailureLogUtc,
-            DateTimeOffset nowUtc)
+        private ValueTask OnAcceptedAsync(Socket accepted, CancellationToken cancellationToken)
         {
-            if (consecutiveFailures == 1 || consecutiveFailures >= MaxConsecutiveAcceptFailures)
+            var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
+            if (!TryAdmit())
             {
-                return true;
+                CacheListenerLogMessages.CapacityRejected(_logger, remote, _runtime.Listener.MaxActiveConnections);
+                accepted.Dispose();
+                return ValueTask.CompletedTask;
             }
 
-            return lastFailureLogUtc is null
-                   || nowUtc - lastFailureLogUtc.Value >= AcceptFailureLogInterval;
+            if (!TryConfigureAcceptedSocket(accepted, remote))
+            {
+                ReleaseAdmit();
+                return ValueTask.CompletedTask;
+            }
+
+            CacheListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
+            var connection = ProcessAsync(accepted, remote, cancellationToken);
+            _connections[connection] = 0;
+            _ = connection.ContinueWith(
+                static (task, state) => ((CacheListenerService)state!)._connections.TryRemove(task, out _),
+                this,
+                TaskScheduler.Default);
+            return ValueTask.CompletedTask;
         }
 
         /// <summary>Handshakes one accepted socket and runs a single NNTP session.</summary>
-        /// <param name="accepted">Accepted socket. Owned by the <see cref="NetworkStream"/> created here.</param>
+        /// <param name="accepted">
+        /// Accepted socket. Ownership transfers to <see cref="NntpConnection"/> on a successful TLS start;
+        /// otherwise this method disposes it.
+        /// </param>
         /// <param name="remote">Remote endpoint text captured before processing, used only in logs.</param>
         /// <param name="cancellationToken">Service run token passed to the handshake link and the NNTP session.</param>
         /// <returns>A task that completes when the connection has been released from the admission count.</returns>
@@ -760,33 +664,38 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// The handshake uses a linked token cancelled after <see cref="BackFillerListenerRuntimeOptions.TlsHandshakeTimeout"/>.
         /// That timeout becomes <see cref="TimeoutException"/> with message <c>tls-handshake</c>. After the handshake,
         /// <see cref="StreamCacheListenerTransport"/> applies <see cref="BackFillerListenerRuntimeOptions.IoProgressTimeout"/>
-        /// as one no-progress deadline per read or non-empty write, and leaves the <see cref="SslStream"/> open so the network stream still owns the socket.
+        /// as one no-progress deadline per read or non-empty write over the shared <see cref="NntpConnection"/> pipeline.
         /// <see cref="OperationCanceledException"/> from the service token is ignored.
         /// <see cref="AuthenticationException"/> and <see cref="TimeoutException"/> are logged.
-        /// <see cref="IOException"/> is not logged here. Other exceptions are logged as <see cref="CacheListenerLogMessages.ConnectionFailed"/>.
+        /// <see cref="IOException"/> is logged as a closed connection. Other exceptions are logged as
+        /// <see cref="CacheListenerLogMessages.ConnectionFailed"/>.
         /// <see cref="ReleaseAdmit"/> always runs.
         /// </remarks>
         private async Task ProcessAsync(Socket accepted, string remote, CancellationToken cancellationToken)
         {
             var handshakeCompleted = false;
+            var socketOwnedByConnection = false;
             try
             {
-                await using var network = new NetworkStream(accepted, ownsSocket: true);
-                using var lease = _certificates.Acquire();
-                await using var ssl = new SslStream(network, leaveInnerStreamOpen: true);
-                var options = new SslServerAuthenticationOptions
+                if (accepted.RemoteEndPoint is not IPEndPoint tcpPeer)
                 {
-                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                    ClientCertificateRequired = false,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    ServerCertificateContext = lease.Context,
-                };
+                    return;
+                }
 
+                var identity = ConnectionClientIdentity.Direct(tcpPeer);
                 using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 handshakeCts.CancelAfter(_runtime.Listener.TlsHandshakeTimeout);
+                NntpConnection connection;
                 try
                 {
-                    await ssl.AuthenticateAsServerAsync(options, handshakeCts.Token).ConfigureAwait(false);
+                    connection = await NntpConnection.StartTlsAsync(
+                            accepted,
+                            _certificates,
+                            identity,
+                            _logger,
+                            handshakeCts.Token)
+                        .ConfigureAwait(false);
+                    socketOwnedByConnection = true;
                 }
                 catch (OperationCanceledException) when (handshakeCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
@@ -794,13 +703,17 @@ namespace VectorNNTPD.BackFillerService.Listener
                 }
 
                 handshakeCompleted = true;
-                // The NNTP session starts only after TLS succeeds. It does not own the socket or the certificate lease.
-                await using var transport = new StreamCacheListenerTransport(
-                    ssl,
-                    _runtime.Listener.IoProgressTimeout,
-                    leaveInnerStreamOpen: true);
-                var session = new NntpCacheListenerSession(transport, _retention, _time);
-                await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                // The NNTP session starts only after TLS succeeds. Shared pipeline transport owns the socket and certificate lease.
+                await using (connection)
+                {
+                    await using var stream = new NntpConnectionStream(connection, ownsConnection: false);
+                    await using var transport = new StreamCacheListenerTransport(
+                        stream,
+                        _runtime.Listener.IoProgressTimeout,
+                        leaveInnerStreamOpen: true);
+                    var session = new NntpCacheListenerSession(transport, _retention, _time);
+                    await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -828,6 +741,17 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
             finally
             {
+                if (!socketOwnedByConnection)
+                {
+                    try
+                    {
+                        accepted.Dispose();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                }
+
                 ReleaseAdmit();
             }
         }
@@ -900,28 +824,29 @@ namespace VectorNNTPD.BackFillerService.Listener
         /// </summary>
         private void ReleaseAdmit() => Interlocked.Decrement(ref _activeConnections);
 
-        /// <summary>Disposes every listen socket and clears the list. Dispose exceptions are ignored.</summary>
-        private void CloseListenSockets()
+        /// <summary>Disposes every accept listener and clears the list. Dispose exceptions are ignored.</summary>
+        private async Task CloseListenSocketsAsync()
         {
+            SocketAcceptListener[] listeners;
             lock (_gate)
             {
-                foreach (var socket in _listenSockets)
-                {
-                    try
-                    {
-                        socket.Dispose();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // Socket may already be closed by a concurrent listener shutdown path.
-                    }
-                    catch (SocketException ex)
-                    {
-                        CacheListenerLogMessages.ListenSocketDisposeFailed(_logger, ex.SocketErrorCode.ToString());
-                    }
-                }
+                listeners = [.. _listeners];
+                _listeners.Clear();
+            }
 
-                _listenSockets.Clear();
+            foreach (var listener in listeners)
+            {
+                try
+                {
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
+                catch (SocketException ex)
+                {
+                    CacheListenerLogMessages.ListenSocketDisposeFailed(_logger, ex.SocketErrorCode.ToString());
+                }
             }
         }
 
@@ -964,18 +889,12 @@ namespace VectorNNTPD.BackFillerService.Listener
             }
         }
 
-        /// <summary>Closes listen sockets. Certificate leases stay with the connections that acquired them.</summary>
-        /// <returns>A completed task after <see cref="CloseListenSockets"/>.</returns>
+        /// <summary>Closes accept listeners. Certificate leases stay with the connections that acquired them.</summary>
+        /// <returns>A task that completes after listeners are disposed.</returns>
         /// <remarks>
         /// Certificate publication is owned by the Common TLS provider; outstanding leases
         /// keep retired generations alive until each connection completes.
         /// </remarks>
-        private async Task DisposeBoundResourcesAsync()
-        {
-            CloseListenSockets();
-            // Certificate publication is owned by the Common TLS provider; outstanding leases
-            // keep retired generations alive until each connection completes.
-            await Task.CompletedTask.ConfigureAwait(false);
-        }
+        private Task DisposeBoundResourcesAsync() => CloseListenSocketsAsync();
     }
 }

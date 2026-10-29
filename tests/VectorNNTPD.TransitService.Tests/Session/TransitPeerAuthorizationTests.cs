@@ -7,14 +7,14 @@ using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.Common.Networking;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Commands;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Tests.Networking.Transport;
 using VectorNNTPD.TransitService.Tests.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 /// <summary>Connection-time transit/streaming peer ACL (top-level named <c>Transit</c> peers).</summary>

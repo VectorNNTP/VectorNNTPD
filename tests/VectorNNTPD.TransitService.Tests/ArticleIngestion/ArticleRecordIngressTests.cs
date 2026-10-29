@@ -5,7 +5,7 @@ using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.ArticleIngestion;
 
 public sealed class ArticleRecordIngressTests

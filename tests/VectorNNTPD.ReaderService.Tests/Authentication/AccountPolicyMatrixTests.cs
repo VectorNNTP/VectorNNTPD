@@ -4,9 +4,9 @@ using VectorNNTPD.ReaderService.Authentication;
 using VectorNNTPD.ReaderService.NntpDb;
 using VectorNNTPD.ReaderService.SessionState;
 using VectorNNTPD.ReaderService.SessionState.BytesAccounting;
-using VectorNNTPD.ReaderService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.ReaderService.SessionState.RateLimiting;
 namespace VectorNNTPD.ReaderService.Tests.Authentication;
 
 public sealed class AccountPolicyMatrixTests

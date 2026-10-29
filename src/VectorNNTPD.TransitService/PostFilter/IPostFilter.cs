@@ -1,7 +1,7 @@
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.TransitService.Authentication;
 using VectorNNTPD.TransitService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.PostFilter
 {
     /// <summary>NNTPD POST-only accept filter. Does not own CreateQueued / TryAdmit / History.</summary>

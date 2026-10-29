@@ -41,8 +41,13 @@ namespace VectorNNTPD.ReaderService.Session.CommandProcessor
                     // Handler-owned detail (e.g. QUIT peer disconnect, STARTTLS cipher, COMPRESS).
                     detail = context.CompletionDetail;
                 }
-                else if (!completedBefore && context.Connection.IsCompleted)
+                else if (!completedBefore
+                         && context.Connection.IsCompleted
+                         && !context.ExpectConnectionComplete)
                 {
+                    // Connection completed during the handler without a handler-owned detail and
+                    // without an explicit expectation (QUIT sets ExpectConnectionComplete).
+                    // STARTTLS handshake abort after 382 still surfaces as failed.
                     detail = "failed";
                 }
             }

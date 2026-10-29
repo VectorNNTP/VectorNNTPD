@@ -30,6 +30,7 @@ namespace VectorNNTPD.TransitService.Session.Commands
         {
             // Valid QUIT accepted: after this point the session must become terminal and no further
             // NNTP commands/responses should be processed (aside from finishing this 205 write).
+            context.ExpectConnectionComplete = true;
             var responseWritten = false;
             var idleVersionBefore205 = context.Connection.OutboundIdleVersion;
             try
@@ -87,6 +88,13 @@ namespace VectorNNTPD.TransitService.Session.Commands
             if (!responseWritten && context.CompletionDetail is null)
             {
                 context.CompletionDetail = "peer disconnected";
+            }
+
+            // StatusLine is normally noted only when Debug command logging is enabled; ensure TX
+            // completion can still show 205 after a successful write.
+            if (responseWritten)
+            {
+                context.StatusLine ??= NntpResponseStatus.ConnectionClosing;
             }
         }
     }

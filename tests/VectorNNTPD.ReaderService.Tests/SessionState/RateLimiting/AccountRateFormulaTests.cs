@@ -1,7 +1,7 @@
 using VectorNNTPD.ReaderService.Authentication;
-using VectorNNTPD.ReaderService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.ReaderService.SessionState.RateLimiting;
 namespace VectorNNTPD.ReaderService.Tests.SessionState.RateLimiting;
 
 public sealed class AccountRateFormulaTests

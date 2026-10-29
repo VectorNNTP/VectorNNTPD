@@ -1,6 +1,6 @@
 using VectorNNTPD.TransitService.Moderation;
 using VectorNNTPD.TransitService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Session.Commands.Posting
 {
     /// <summary>What the POST command should do with a completed receive.</summary>

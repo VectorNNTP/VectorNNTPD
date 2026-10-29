@@ -1,9 +1,9 @@
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.ReaderService.SessionState;
-using VectorNNTPD.ReaderService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
-
+using VectorNNTPD.ReaderService.SessionState.RateLimiting;
 namespace VectorNNTPD.ReaderService.Tests.SessionState.RateLimiting;
 
 public sealed class SessionStateRateLimitingRedisTests : IClassFixture<SessionStateRedisIntegrationFixture>

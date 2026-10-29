@@ -8,7 +8,7 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.History;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.PostFilter;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Commands;
@@ -17,7 +17,7 @@ using VectorNNTPD.Common.Articles;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 public sealed class IHaveCommandTests

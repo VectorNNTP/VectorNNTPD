@@ -1,6 +1,6 @@
 using System.Buffers;
 using System.IO.Pipelines;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 
 namespace VectorNNTPD.ReaderService.Tests.Networking.Transport;
 

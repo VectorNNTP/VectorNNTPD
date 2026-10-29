@@ -1,6 +1,6 @@
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.ArticleIngestion
 {
     /// <summary>

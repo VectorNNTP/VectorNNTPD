@@ -8,9 +8,9 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.History;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.SessionState.BytesAccounting;
-using VectorNNTPD.ReaderService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.Authentication;
 using VectorNNTPD.ReaderService.SessionState;
 using VectorNNTPD.ReaderService.Session.Authentication;
@@ -25,7 +25,8 @@ using VectorNNTPD.ReaderService.Transit;
 using VectorNNTPD.ReaderService.RabbitMq.ArticleWork;
 using VectorNNTPD.ReaderService.Storage;
 using VectorNNTPD.ReaderService.Transport.Vatp;
-
+using VectorNNTPD.ReaderService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Session
 {
     using VectorNNTPD.Common.Core;

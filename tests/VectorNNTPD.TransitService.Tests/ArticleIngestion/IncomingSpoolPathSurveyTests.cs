@@ -10,7 +10,7 @@ using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Newsgroups;
 using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.ArticleIngestion;
 
 /// <summary>Post-queue Path-survey capture from canonical ArticleRecord.Path.</summary>

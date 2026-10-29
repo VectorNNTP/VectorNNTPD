@@ -9,7 +9,7 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Session.Framing;
 using VectorNNTPD.TransitService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.ArticleIngestion;
 
 public sealed class IhaveArticleInterpreterTests

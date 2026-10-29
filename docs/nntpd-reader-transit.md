@@ -6,13 +6,13 @@ This document describes the migrated NNTP server split in VectorNNTPD. It does n
 
 | Project | Role |
 |---------|------|
-| `VectorNNTPD.Common` | Shared connectivity and domain primitives (ACME, Cloudflare, NntpDB, articles, VATP, RabbitMQ connection lifecycle). Not an NNTP server library. |
+| `VectorNNTPD.Common` | Shared connectivity and domain primitives (ACME, Cloudflare, NntpDB, articles, VATP, RabbitMQ connection lifecycle) **and** the authoritative high-performance listen/accept + `System.IO.Pipelines` duplex transport (`SocketAcceptListener`, `NntpConnection`, related pipe/rate-limit helpers). Not an NNTP session/command server library. |
 | `VectorNNTPD.ReaderService` | Reader executable **and** Reader NNTP implementation (session/commands, listeners, auth, PostFilter, moderation, email, Redis session state, ingestion, RabbitMQ topology) |
 | `VectorNNTPD.TransitService` | Transit executable **and** Transit NNTP implementation (peer DNS/auth, CHECK/TAKETHIS/IHAVE, transit peer state, shared plumbing duplicated for independence) |
 | `tests/VectorNNTPD.ReaderService.Tests` | Reader protocol, hosting, PostFilter, session-state, and related tests |
 | `tests/VectorNNTPD.TransitService.Tests` | Transit protocol, peer, ingestion, and related tests |
 
-There is **no** `VectorNNTPD.NntpServer` assembly. ReaderService → Common and TransitService → Common only. Shared *server* plumbing required by both hosts is **duplicated** into each executable project so neither depends on the other and Common does not become a relocated monolith.
+There is **no** `VectorNNTPD.NntpServer` assembly. ReaderService → Common and TransitService → Common only. Shared *listen/pipeline transport* lives in Common. Shared *session/command* plumbing required by both hosts remains **duplicated** into each executable project so neither depends on the other and Common does not become a relocated session monolith.
 
 Configuration section name remains `Nntpd`. Primary JSON files are `{entry assembly}.json` plus shared `VectorNNTPD.RabbitMQ.json`, loaded from `AppContext.BaseDirectory` (the executable directory).
 
@@ -38,7 +38,28 @@ Ingress destuffs transport wire once, then `ArticleRecordFactory` / `NntpArticle
 
 ## Schema DDL
 
-Operator SQL for PostFilter and `nntpusers` account-art-type lives under `docs/schema/` (`postfilter.sql`, `nntpusers-account-art-type.sql`). Apply these on the site MySQL database before enabling features that depend on those tables/columns. Do not invent production DDL beyond the checked-in scripts.
+Operator SQL for Transit catalogue, PostFilter, and `nntpusers` account-art-type lives under `docs/schema/` (`nntptransit.sql`, `postfilter.sql`, `nntpusers-account-art-type.sql`). Apply these on the site MySQL database before enabling features that depend on those tables/columns. There is no in-process migrator. See [schema/README.md](schema/README.md). Do not invent production DDL beyond the checked-in scripts.
+
+## Shared code vs Common
+
+Common owns ACME, Cloudflare, NntpDB connectivity, CanonicalV1 article materialization, RabbitMQ connection lifecycle, logging sinks, **and the shared listening-socket / pipeline transport** (`SocketAcceptListener`, `NntpConnection`, `NntpPipeOptions`, `ConnectionByteTransport`, outbound rate limiting used by the transport, `ConnectionClientIdentity` / `PrefixedStream` needed at connection start, and `NntpConnectionStream` for stream-shaped adapters).
+
+Reader and Transit each keep a full NNTP **session/command** tree under their own namespaces (protocol loops, CAPABILITIES, auth, PostFilter, etc.). Storage and BackFiller keep their feed/cache session protocols. Moving those trees into Common would make Common an NNTP server library and is intentionally avoided; creating a separate `NntpServer` assembly is also rejected.
+
+**Transport ownership:** there is one authoritative Pipeline duplex implementation in Common. Reader/Transit plain and TLS listeners, Storage’s NNTP TLS listener, and BackFiller’s cache NNTP TLS listener all execute that implementation for accept and connection I/O. TLS handshake for implicit-TLS listeners is performed by `NntpConnection.StartTlsAsync` (certificate context from Common’s TLS provider). STARTTLS / DEFLATE upgrades remain available on the shared connection for Reader/Transit session commands. Service-specific admission, PROXY preamble parsing (Reader/Transit), TCP buffer/keepalive policy (BackFiller), and I/O progress timeouts (Storage/BackFiller stream adapters) stay in the hosts.
+
+### Consolidation assessment (session trees retained; transport extracted)
+
+Evidence (branch `common-nntpd`): corresponding Reader/Transit `.cs` files still differ mostly by root namespace for the **session/server** tree; role-specific files remain (`Program.cs`, hosting registration, plain/TLS listener **services**, `NntpSession`, CAPABILITIES). The former duplicated `Networking/Transport` + `SocketAcceptListener` copies were extracted into Common and deleted from both hosts.
+
+| Option | Verdict |
+|--------|---------|
+| **A. Keep duplicated host session trees; share transport in Common** | **Current.** Role isolation and independent Native AOT packages preserved. Transport duplication removed. |
+| B. Mass-move Session/PostFilter/Redis into Common | Rejected without an explicit product decision—pulls command graphs into Common with little gain for Storage/BackFiller. |
+| C. Dedicated `NntpServer` assembly | Rejected (relocated monolith). |
+| D. Linked/shared sources or `#if` | Rejected. |
+
+When fixing bugs in ns-only **session** files, patch both Reader and Transit trees. Transport bugs are fixed once in Common.
 
 ## Release package layout
 

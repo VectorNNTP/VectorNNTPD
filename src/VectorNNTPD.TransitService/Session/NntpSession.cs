@@ -8,9 +8,9 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.History;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.SessionState.BytesAccounting;
-using VectorNNTPD.TransitService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.TransitService.Authentication;
 using VectorNNTPD.TransitService.SessionState;
 using VectorNNTPD.TransitService.Session.Authentication;
@@ -25,7 +25,8 @@ using VectorNNTPD.TransitService.Transit;
 using VectorNNTPD.TransitService.RabbitMq.ArticleWork;
 using VectorNNTPD.TransitService.Storage;
 using VectorNNTPD.TransitService.Transport.Vatp;
-
+using VectorNNTPD.TransitService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Session
 {
     using VectorNNTPD.Common.Core;
