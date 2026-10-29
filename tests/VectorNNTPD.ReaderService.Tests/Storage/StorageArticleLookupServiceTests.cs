@@ -60,8 +60,8 @@ public sealed class StorageArticleLookupServiceTests
             CreateResponse(request!, 4, "cache04.usenet.ninja")));
 
         var alternate = await result.Alternates!.WaitForAlternateAsync(CancellationToken.None);
-        Assert.NotNull(alternate);
-        var alternateCopy = alternate.Value;
+        Assert.True(alternate.HasValue);
+        var alternateCopy = alternate.GetValueOrDefault();
         Assert.Equal(3, alternateCopy.ServerId);
         Assert.Equal("cache03.usenet.ninja", alternateCopy.Fqdn);
 
@@ -109,8 +109,8 @@ public sealed class StorageArticleLookupServiceTests
         Assert.Equal("cache02.usenet.ninja", result.Fqdn);
         Assert.NotNull(result.Alternates);
         var alternate = await result.Alternates!.WaitForAlternateAsync(CancellationToken.None);
-        Assert.NotNull(alternate);
-        var alternateCopy = alternate.Value;
+        Assert.True(alternate.HasValue);
+        var alternateCopy = alternate.GetValueOrDefault();
         Assert.Equal(3, alternateCopy.ServerId);
         Assert.Equal("cache03.usenet.ninja", alternateCopy.Fqdn);
 

@@ -166,6 +166,8 @@ try {
         "--sarif-category=csharp"
     )
 
+    # Local results.sarif keeps suppressed first-party findings (normalized) so ACTIVE/SUPP
+    # counts remain auditable; CI upload uses -StripAcceptedSuppressions.
     & (Join-Path $PSScriptRoot "Filter-CodeQlSarif.ps1") -InputPath $rawSarif -OutputPath $filteredSarif
 }
 finally {

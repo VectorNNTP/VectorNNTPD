@@ -157,8 +157,9 @@ public sealed class CatalogueNewsgroupPostingPolicyTests
         var evaluation = Policy(Status("misc.test", NewsgroupPostingStatus.Allowed))
             .Evaluate([]);
         Assert.Equal(NewsgroupCatalogStatus.Rejected, evaluation.Status);
-        Assert.NotNull(evaluation.Failure);
-        Assert.Equal(PostingFailureCategory.InvalidNewsgroups, evaluation.Failure.Value.Category);
+        Assert.True(evaluation.Failure.HasValue);
+        var emptyFailure = evaluation.Failure.GetValueOrDefault();
+        Assert.Equal(PostingFailureCategory.InvalidNewsgroups, emptyFailure.Category);
     }
 
     [Fact]
@@ -221,8 +222,8 @@ public sealed class CatalogueNewsgroupPostingPolicyTests
     {
         var evaluation = Evaluate(groups, definitions);
         Assert.Equal(NewsgroupCatalogStatus.Rejected, evaluation.Status);
-        Assert.NotNull(evaluation.Failure);
-        var failure = evaluation.Failure.Value;
+        Assert.True(evaluation.Failure.HasValue);
+        var failure = evaluation.Failure.GetValueOrDefault();
         Assert.Equal(PostingFailureCategory.PolicyRejected, failure.Category);
         Assert.Equal(detail, failure.Detail);
     }

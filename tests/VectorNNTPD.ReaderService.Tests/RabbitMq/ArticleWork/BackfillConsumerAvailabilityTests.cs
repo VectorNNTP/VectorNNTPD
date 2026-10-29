@@ -179,8 +179,9 @@ public sealed class BackfillConsumerAvailabilityTests
 
         var selected = selector.Select(eligible);
 
-        Assert.NotNull(selected);
-        var choice = selected.Value;
+        // Nullable value type: HasValue/GetValueOrDefault (Assert.NotNull does not narrow for CodeQL).
+        Assert.True(selected.HasValue);
+        var choice = selected.GetValueOrDefault();
         // Definitions order places Eweka before Giganews; roll 0 selects the first positive weight.
         Assert.Equal("Eweka", choice.Backbone);
         Assert.Equal(50, choice.ConsumerCount);

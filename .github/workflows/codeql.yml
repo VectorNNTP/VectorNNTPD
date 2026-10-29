@@ -68,7 +68,10 @@ jobs:
           New-Item -ItemType Directory -Force -Path codeql-sarif-filtered | Out-Null
           foreach ($sarif in $inputs) {
             $out = Join-Path codeql-sarif-filtered $sarif.Name
-            & ./tools/Filter-CodeQlSarif.ps1 -InputPath $sarif.FullName -OutputPath $out
+            # StripAcceptedSuppressions: in-source // codeql[...] findings stay justified in
+            # the repo; uploading them as results still produced "new alerts" on PR #256
+            # because CodeQL's {state:accepted} was not treated as GitHub dismissals.
+            & ./tools/Filter-CodeQlSarif.ps1 -InputPath $sarif.FullName -OutputPath $out -StripAcceptedSuppressions
           }
 
       # Keep the historical analysis category so GitHub's required CodeQL check continues
