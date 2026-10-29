@@ -180,9 +180,10 @@ public sealed class BackfillConsumerAvailabilityTests
         var selected = selector.Select(eligible);
 
         Assert.NotNull(selected);
+        var choice = selected.Value;
         // Definitions order places Eweka before Giganews; roll 0 selects the first positive weight.
-        Assert.Equal("Eweka", selected.Value.Backbone);
-        Assert.Equal(50, selected.Value.ConsumerCount);
+        Assert.Equal("Eweka", choice.Backbone);
+        Assert.Equal(50, choice.ConsumerCount);
         Assert.Equal(2, eligible.Count);
         Assert.Contains(eligible, static b => b.Backbone == "Giganews" && b.ConsumerCount == 100);
         Assert.Contains(eligible, static b => b.Backbone == "Eweka" && b.ConsumerCount == 50);

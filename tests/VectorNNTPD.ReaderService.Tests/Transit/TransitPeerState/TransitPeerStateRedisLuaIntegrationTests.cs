@@ -154,8 +154,9 @@ public sealed class TransitPeerStateRedisLuaIntegrationTests : IClassFixture<Tra
     private static void AssertOwnership(Ownership? ownership, long expiry, long generation, int count)
     {
         Assert.NotNull(ownership);
-        Assert.Equal(expiry, ownership.Value.ExpiryUnixMs);
-        Assert.Equal(generation, ownership.Value.Generation);
-        Assert.Equal(count, ownership.Value.Count);
+        var value = ownership.Value;
+        Assert.Equal(expiry, value.ExpiryUnixMs);
+        Assert.Equal(generation, value.Generation);
+        Assert.Equal(count, value.Count);
     }
 }

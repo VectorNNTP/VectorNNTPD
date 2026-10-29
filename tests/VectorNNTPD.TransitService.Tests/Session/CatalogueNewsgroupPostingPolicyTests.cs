@@ -157,7 +157,8 @@ public sealed class CatalogueNewsgroupPostingPolicyTests
         var evaluation = Policy(Status("misc.test", NewsgroupPostingStatus.Allowed))
             .Evaluate([]);
         Assert.Equal(NewsgroupCatalogStatus.Rejected, evaluation.Status);
-        Assert.Equal(PostingFailureCategory.InvalidNewsgroups, evaluation.Failure!.Value.Category);
+        Assert.NotNull(evaluation.Failure);
+        Assert.Equal(PostingFailureCategory.InvalidNewsgroups, evaluation.Failure.Value.Category);
     }
 
     [Fact]
@@ -220,8 +221,10 @@ public sealed class CatalogueNewsgroupPostingPolicyTests
     {
         var evaluation = Evaluate(groups, definitions);
         Assert.Equal(NewsgroupCatalogStatus.Rejected, evaluation.Status);
-        Assert.Equal(PostingFailureCategory.PolicyRejected, evaluation.Failure!.Value.Category);
-        Assert.Equal(detail, evaluation.Failure.Value.Detail);
+        Assert.NotNull(evaluation.Failure);
+        var failure = evaluation.Failure.Value;
+        Assert.Equal(PostingFailureCategory.PolicyRejected, failure.Category);
+        Assert.Equal(detail, failure.Detail);
     }
 
     private static NewsgroupPostingEvaluation Evaluate(string[] groups, params NewsgroupDefinition[] definitions) =>

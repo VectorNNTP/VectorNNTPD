@@ -72,8 +72,14 @@ namespace VectorNNTPD.TransitService.Session
                 _session.BeginCommandWork();
                 try
                 {
-                    await _session.TakeThisWindow!.DrainAsync(cancellationToken).ConfigureAwait(false);
-                    await _session.Pipeline!.DrainAsync(cancellationToken).ConfigureAwait(false);
+                    var takeThisWindow = _session.TakeThisWindow
+                        ?? throw new InvalidOperationException(
+                            "SASL exchange requires an initialized TakeThis admission window.");
+                    var pipeline = _session.Pipeline
+                        ?? throw new InvalidOperationException(
+                            "SASL exchange requires an initialized CHECK pipeline.");
+                    await takeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
+                    await pipeline.DrainAsync(cancellationToken).ConfigureAwait(false);
                     await Commands.AuthInfo
                         .ContinueSaslAsync(_session, response, _parser.CurrentCommandLine, cancellationToken)
                         .ConfigureAwait(false);

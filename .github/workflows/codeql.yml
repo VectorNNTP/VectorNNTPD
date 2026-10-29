@@ -71,8 +71,11 @@ jobs:
             & ./tools/Filter-CodeQlSarif.ps1 -InputPath $sarif.FullName -OutputPath $out
           }
 
+      # Keep the historical analysis category so GitHub's required CodeQL check continues
+      # to match refs/heads/master (category "csharp" yielded NEUTRAL
+      # "1 configuration not found" on PR #256 check run 123524079410).
       - name: Upload filtered CodeQL SARIF
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: codeql-sarif-filtered
-          category: csharp
+          category: ".github/workflows/codeql.yml:analyze"

@@ -421,8 +421,9 @@ public sealed class SessionStateRedisLuaIntegrationTests : IClassFixture<Session
     private static void AssertOwnership(Ownership? actual, long expiryUnixMs, long generation, int count)
     {
         Assert.NotNull(actual);
-        Assert.Equal(expiryUnixMs, actual.Value.ExpiryUnixMs);
-        Assert.Equal(generation, actual.Value.Generation);
-        Assert.Equal(count, actual.Value.Count);
+        var ownership = actual.Value;
+        Assert.Equal(expiryUnixMs, ownership.ExpiryUnixMs);
+        Assert.Equal(generation, ownership.Generation);
+        Assert.Equal(count, ownership.Count);
     }
 }
