@@ -235,13 +235,16 @@ jobs:
         # Same Native AOT invocation as tools/Publish-Release.ps1, plus the
         # x64 platform contract. Publish restores the ILCompiler pack and the
         # StuDev.AotAnywhere Zig toolchain for this runtime identifier.
-        # Both services share one flat artifact directory (identical RabbitMQ JSON).
+        # Each host publishes into its own package directory (independent deploy).
         run: |
           set -euo pipefail
-          for proj in \
-            src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj \
-            src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj
-          do
+          root=./.artifacts/linux-x64
+          mkdir -p "$root"
+          publish_one() {
+            local package="$1"
+            local proj="$2"
+            local out="$root/$package"
+            mkdir -p "$out"
             dotnet publish "$proj" \
               --configuration Release \
               -p:Platform=x64 \
@@ -249,41 +252,61 @@ jobs:
               --self-contained true \
               -p:PublishAot=true \
               -p:SelfContained=true \
-              --output ./.artifacts/linux-x64
-          done
+              --output "$out"
+          }
+          publish_one backfiller src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj
+          publish_one storage src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj
+          publish_one reader src/VectorNNTPD.ReaderService/VectorNNTPD.ReaderService.csproj
+          publish_one transit src/VectorNNTPD.TransitService/VectorNNTPD.TransitService.csproj
 
       - name: Add Linux deployment files
         shell: bash
         run: |
           set -euo pipefail
-          dir=./.artifacts/linux-x64
+          root=./.artifacts/linux-x64
           test -f deploy/systemd/vectornntp-backfiller.service
           test -f deploy/systemd/backfiller.env.example
           test -f deploy/systemd/vectornntp-storageservice.service
           test -f deploy/systemd/storageservice.env.example
+          test -f deploy/systemd/vectornntp-reader.service
+          test -f deploy/systemd/reader.env.example
+          test -f deploy/systemd/vectornntp-transit.service
+          test -f deploy/systemd/transit.env.example
           test -f README.md
-          cp deploy/systemd/vectornntp-backfiller.service "$dir/vectornntp-backfiller.service"
-          cp deploy/systemd/backfiller.env.example "$dir/backfiller.env.example"
-          cp deploy/systemd/vectornntp-storageservice.service "$dir/vectornntp-storageservice.service"
-          cp deploy/systemd/storageservice.env.example "$dir/storageservice.env.example"
-          cp README.md "$dir/README.md"
-          test -f "$dir/VectorNNTPD.BackFillerService.json"
-          test -f "$dir/VectorNNTPD.StorageService.json"
-          test -f "$dir/VectorNNTPD.RabbitMQ.json"
-          test ! -e "$dir/VectorNNTP.RabbitMQ.json"
-          test ! -e "$dir/VectorNNTP.StorageServer.json"
-          test ! -e "$dir/appsettings.json"
-          test ! -e "$dir/RabbitMq.json"
+          cp deploy/systemd/vectornntp-backfiller.service "$root/backfiller/vectornntp-backfiller.service"
+          cp deploy/systemd/backfiller.env.example "$root/backfiller/backfiller.env.example"
+          cp README.md "$root/backfiller/README.md"
+          cp deploy/systemd/vectornntp-storageservice.service "$root/storage/vectornntp-storageservice.service"
+          cp deploy/systemd/storageservice.env.example "$root/storage/storageservice.env.example"
+          cp README.md "$root/storage/README.md"
+          cp deploy/systemd/vectornntp-reader.service "$root/reader/vectornntp-reader.service"
+          cp deploy/systemd/reader.env.example "$root/reader/reader.env.example"
+          cp README.md "$root/reader/README.md"
+          cp deploy/systemd/vectornntp-transit.service "$root/transit/vectornntp-transit.service"
+          cp deploy/systemd/transit.env.example "$root/transit/transit.env.example"
+          cp README.md "$root/transit/README.md"
 
-      - name: Validate linux-x64 Native AOT executables
+      - name: Validate linux-x64 Native AOT packages
         shell: bash
         run: |
           set -euo pipefail
-          dir=./.artifacts/linux-x64
-          for exe_name in VectorNNTPD.BackFillerService VectorNNTPD.StorageService; do
-            exe="$dir/$exe_name"
+          root=./.artifacts/linux-x64
+          validate_pkg() {
+            local package="$1"
+            local exe_name="$2"
+            local config_name="$3"
+            local unit_name="$4"
+            local env_name="$5"
+            local dir="$root/$package"
+            local exe="$dir/$exe_name"
+            test -d "$dir"
             test -f "$exe"
             test -x "$exe"
+            test -f "$dir/$config_name"
+            test -f "$dir/VectorNNTPD.RabbitMQ.json"
+            test -f "$dir/$unit_name"
+            test -f "$dir/$env_name"
+            test -f "$dir/README.md"
             file "$exe"
             readelf -h "$exe"
             objdump -f "$exe"
@@ -299,26 +322,48 @@ jobs:
               ldd "$exe"
               exit 1
             fi
-          done
-          test -f "$dir/vectornntp-backfiller.service"
-          test -f "$dir/backfiller.env.example"
-          test -f "$dir/vectornntp-storageservice.service"
-          test -f "$dir/storageservice.env.example"
-          test -f "$dir/README.md"
-          test -f "$dir/VectorNNTPD.BackFillerService.json"
-          test -f "$dir/VectorNNTPD.StorageService.json"
-          test -f "$dir/VectorNNTPD.RabbitMQ.json"
-          test ! -e "$dir/VectorNNTP.RabbitMQ.json"
-          test ! -e "$dir/VectorNNTP.StorageServer.json"
-          test ! -e "$dir/appsettings.json"
-          test ! -e "$dir/RabbitMq.json"
-          for forbidden in \
-            VectorNNTPD.BackFillerService.dll \
-            VectorNNTPD.StorageService.dll \
-            libcoreclr.so libhostfxr.so coreclr.dll hostfxr.dll
-          do
-            if [ -e "$dir/$forbidden" ]; then
-              echo "Native AOT output contains $forbidden."
+            for forbidden in \
+              "$exe_name.dll" \
+              libcoreclr.so libhostfxr.so coreclr.dll hostfxr.dll \
+              appsettings.json RabbitMq.json VectorNNTP.RabbitMQ.json VectorNNTP.StorageServer.json \
+              VectorNNTPD.NntpServer.dll VectorNNTPD.NntpServer.exe libVectorNNTPD.NntpServer.so
+            do
+              if [ -e "$dir/$forbidden" ]; then
+                echo "Package $package contains forbidden file $forbidden."
+                exit 1
+              fi
+            done
+            if find "$dir" -maxdepth 1 -type f -iname '*NntpServer*' | grep -q .; then
+              echo "Package $package contains an unexpected NntpServer artifact."
+              find "$dir" -maxdepth 1 -type f -iname '*NntpServer*' -print
+              exit 1
+            fi
+            # Role isolation: foreign host JSON/exe must not appear in this package.
+            for foreign in \
+              VectorNNTPD.BackFillerService \
+              VectorNNTPD.StorageService \
+              VectorNNTPD.ReaderService \
+              VectorNNTPD.TransitService
+            do
+              if [ "$foreign" = "$exe_name" ]; then
+                continue
+              fi
+              if [ -e "$dir/$foreign" ] || [ -e "$dir/$foreign.json" ]; then
+                echo "Package $package unexpectedly contains foreign host artifact $foreign."
+                exit 1
+              fi
+            done
+          }
+          validate_pkg backfiller VectorNNTPD.BackFillerService VectorNNTPD.BackFillerService.json vectornntp-backfiller.service backfiller.env.example
+          validate_pkg storage VectorNNTPD.StorageService VectorNNTPD.StorageService.json vectornntp-storageservice.service storageservice.env.example
+          validate_pkg reader VectorNNTPD.ReaderService VectorNNTPD.ReaderService.json vectornntp-reader.service reader.env.example
+          validate_pkg transit VectorNNTPD.TransitService VectorNNTPD.TransitService.json vectornntp-transit.service transit.env.example
+          # Platform root must contain only the four package directories.
+          for unexpected in VectorNNTPD.BackFillerService VectorNNTPD.StorageService VectorNNTPD.ReaderService VectorNNTPD.TransitService \
+            VectorNNTPD.BackFillerService.json VectorNNTPD.StorageService.json VectorNNTPD.ReaderService.json VectorNNTPD.TransitService.json \
+            VectorNNTPD.RabbitMQ.json README.md; do
+            if [ -e "$root/$unexpected" ]; then
+              echo "Loose file at platform root is not allowed: $root/$unexpected"
               exit 1
             fi
           done
@@ -327,7 +372,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          exe=./.artifacts/linux-x64/VectorNNTPD.BackFillerService
+          exe=./.artifacts/linux-x64/backfiller/VectorNNTPD.BackFillerService
           config="$PWD/tests/VectorNNTPD.BackFillerService.Tests/Fixtures/startup-smoke.json"
           test -f "$exe"
           test -f "$config"
@@ -356,7 +401,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          exe=./.artifacts/linux-x64/VectorNNTPD.StorageService
+          exe=./.artifacts/linux-x64/storage/VectorNNTPD.StorageService
           config="$PWD/tests/VectorNNTPD.StorageService.Tests/Fixtures/startup-smoke.json"
           test -f "$exe"
           test -f "$config"
@@ -382,6 +427,66 @@ jobs:
           grep -q "StorageService startup smoke: configuration serverId=1 fqdn=cache01.usenet.ninja" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
           grep -q "Application logging initialized" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
           grep -q "VectorNNTPD.StorageService host starting" ./.artifacts/linux-x64-storageservice-smoke-stdout.txt
+
+      - name: Smoke-test linux-x64 Native AOT startup (ReaderService)
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=./.artifacts/linux-x64/reader/VectorNNTPD.ReaderService
+          config="$PWD/tests/VectorNNTPD.ReaderService.Tests/Fixtures/startup-smoke-reader.json"
+          test -f "$exe"
+          test -f "$config"
+          export VECTORNNTP_READER_STARTUP_SMOKE=1
+          export VECTORNNTP_READER_STARTUP_SMOKE_CONFIG="$config"
+          set +e
+          timeout 30 "$exe" >./.artifacts/linux-x64-reader-smoke-stdout.txt 2>./.artifacts/linux-x64-reader-smoke-stderr.txt
+          code=$?
+          set -e
+          echo "linux-x64 ReaderService startup smoke exit=$code"
+          echo "----- stdout -----"
+          cat ./.artifacts/linux-x64-reader-smoke-stdout.txt
+          echo "----- stderr -----"
+          cat ./.artifacts/linux-x64-reader-smoke-stderr.txt
+          if [ "$code" -eq 124 ]; then
+            echo "linux-x64 ReaderService startup smoke timed out."
+            exit 1
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo "linux-x64 ReaderService startup smoke failed."
+            exit 1
+          fi
+          grep -q "ReaderService startup smoke: configuration serverId=1 fqdn=reader01.usenet.ninja" ./.artifacts/linux-x64-reader-smoke-stdout.txt
+          grep -q "VectorNNTPD.ReaderService host starting" ./.artifacts/linux-x64-reader-smoke-stdout.txt
+
+      - name: Smoke-test linux-x64 Native AOT startup (TransitService)
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=./.artifacts/linux-x64/transit/VectorNNTPD.TransitService
+          config="$PWD/tests/VectorNNTPD.TransitService.Tests/Fixtures/startup-smoke-transit.json"
+          test -f "$exe"
+          test -f "$config"
+          export VECTORNNTP_TRANSIT_STARTUP_SMOKE=1
+          export VECTORNNTP_TRANSIT_STARTUP_SMOKE_CONFIG="$config"
+          set +e
+          timeout 30 "$exe" >./.artifacts/linux-x64-transit-smoke-stdout.txt 2>./.artifacts/linux-x64-transit-smoke-stderr.txt
+          code=$?
+          set -e
+          echo "linux-x64 TransitService startup smoke exit=$code"
+          echo "----- stdout -----"
+          cat ./.artifacts/linux-x64-transit-smoke-stdout.txt
+          echo "----- stderr -----"
+          cat ./.artifacts/linux-x64-transit-smoke-stderr.txt
+          if [ "$code" -eq 124 ]; then
+            echo "linux-x64 TransitService startup smoke timed out."
+            exit 1
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo "linux-x64 TransitService startup smoke failed."
+            exit 1
+          fi
+          grep -q "TransitService startup smoke: configuration serverId=1 fqdn=transit01.usenet.ninja" ./.artifacts/linux-x64-transit-smoke-stdout.txt
+          grep -q "VectorNNTPD.TransitService host starting" ./.artifacts/linux-x64-transit-smoke-stdout.txt
 
       - name: Upload Linux build artifact
         uses: actions/upload-artifact@v7
@@ -421,32 +526,38 @@ jobs:
         # The solution restore above does not pass a runtime identifier, so this
         # publish restores itself. --no-restore here would publish a self-contained
         # managed app and the RequireNativeAotCompiler target would fail.
-        # Both services share one flat artifact directory (identical RabbitMQ JSON).
+        # Each host publishes into its own package directory (independent deploy).
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($proj in @(
-            'src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj',
-            'src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj'
-          )) {
-            dotnet publish $proj `
+          $root = './.artifacts/win-x64'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $packages = @(
+            @{ Package = 'backfiller'; Project = 'src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj' },
+            @{ Package = 'storage'; Project = 'src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj' },
+            @{ Package = 'reader'; Project = 'src/VectorNNTPD.ReaderService/VectorNNTPD.ReaderService.csproj' },
+            @{ Package = 'transit'; Project = 'src/VectorNNTPD.TransitService/VectorNNTPD.TransitService.csproj' }
+          )
+          foreach ($item in $packages) {
+            $out = Join-Path $root $item.Package
+            New-Item -ItemType Directory -Path $out -Force | Out-Null
+            dotnet publish $item.Project `
               --configuration Release `
               -p:Platform=x64 `
               --runtime win-x64 `
               --self-contained true `
               -p:PublishAot=true `
               -p:SelfContained=true `
-              --output ./.artifacts/win-x64
-            if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $proj" }
+              --output $out
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $($item.Project)" }
           }
 
-      - name: Validate win-x64 Native AOT executables
+      - name: Validate win-x64 Native AOT packages
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $dir = './.artifacts/win-x64'
-          foreach ($exeName in @('VectorNNTPD.BackFillerService.exe', 'VectorNNTPD.StorageService.exe')) {
-            $exe = Join-Path $dir $exeName
+          $root = './.artifacts/win-x64'
+          function Test-WinNativeAotExe([string] $exe) {
             if (-not (Test-Path -LiteralPath $exe)) { throw "Missing $exe" }
             $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $exe))
             if ($bytes.Length -lt 512 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "Expected a Windows PE executable: $exe" }
@@ -460,28 +571,66 @@ jobs:
             $clrSize = [System.BitConverter]::ToUInt32($bytes, $optional + 112 + (14 * 8) + 4)
             if ($clrSize -ne 0) { throw "Executable still has a CLR runtime header, so it is not Native AOT: $exe" }
           }
-          foreach ($required in @('VectorNNTPD.BackFillerService.json', 'VectorNNTPD.StorageService.json', 'VectorNNTPD.RabbitMQ.json')) {
-            $path = Join-Path $dir $required
-            if (-not (Test-Path -LiteralPath $path)) { throw "Missing $path" }
+          function Test-WinPackage([string] $package, [string] $exeBase, [string] $configName) {
+            $dir = Join-Path $root $package
+            if (-not (Test-Path -LiteralPath $dir)) { throw "Missing package directory $dir" }
+            $exe = Join-Path $dir ($exeBase + '.exe')
+            Test-WinNativeAotExe $exe
+            foreach ($required in @($configName, 'VectorNNTPD.RabbitMQ.json')) {
+              $path = Join-Path $dir $required
+              if (-not (Test-Path -LiteralPath $path)) { throw "Missing $path" }
+            }
+            foreach ($forbidden in @(
+              ($exeBase + '.dll'),
+              'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so',
+              'vectornntp-backfiller.service', 'backfiller.env.example',
+              'vectornntp-storageservice.service', 'storageservice.env.example',
+              'vectornntp-reader.service', 'reader.env.example',
+              'vectornntp-transit.service', 'transit.env.example',
+              'appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json', 'VectorNNTP.StorageServer.json',
+              'VectorNNTPD.StorageService.Development.json', 'VectorNNTPD.BackFillerService.Development.json',
+              'VectorNNTPD.ReaderService.Development.json', 'VectorNNTPD.TransitService.Development.json',
+              'VectorNNTPD.NntpServer.dll', 'VectorNNTPD.NntpServer.exe'
+            )) {
+              $path = Join-Path $dir $forbidden
+              if (Test-Path -LiteralPath $path) { throw "Package $package contains forbidden file $forbidden." }
+            }
+            $nntpHits = @(Get-ChildItem -LiteralPath $dir -File -Force | Where-Object { $_.Name -like '*NntpServer*' })
+            if ($nntpHits.Count -gt 0) {
+              throw "Package $package contains unexpected NntpServer artifacts: $($nntpHits.Name -join ', ')."
+            }
+            foreach ($foreign in @(
+              'VectorNNTPD.BackFillerService',
+              'VectorNNTPD.StorageService',
+              'VectorNNTPD.ReaderService',
+              'VectorNNTPD.TransitService'
+            )) {
+              if ($foreign -eq $exeBase) { continue }
+              if ((Test-Path -LiteralPath (Join-Path $dir ($foreign + '.exe'))) -or (Test-Path -LiteralPath (Join-Path $dir ($foreign + '.json')))) {
+                throw "Package $package unexpectedly contains foreign host artifact $foreign."
+              }
+            }
           }
-          foreach ($forbidden in @(
-            'VectorNNTPD.BackFillerService.dll',
-            'VectorNNTPD.StorageService.dll',
-            'coreclr.dll', 'hostfxr.dll', 'libcoreclr.so', 'libhostfxr.so',
-            'vectornntp-backfiller.service', 'backfiller.env.example',
-            'vectornntp-storageservice.service', 'storageservice.env.example',
-            'appsettings.json', 'RabbitMq.json', 'VectorNNTP.RabbitMQ.json', 'VectorNNTP.StorageServer.json',
-            'VectorNNTPD.StorageService.Development.json', 'VectorNNTPD.BackFillerService.Development.json'
+          Test-WinPackage 'backfiller' 'VectorNNTPD.BackFillerService' 'VectorNNTPD.BackFillerService.json'
+          Test-WinPackage 'storage' 'VectorNNTPD.StorageService' 'VectorNNTPD.StorageService.json'
+          Test-WinPackage 'reader' 'VectorNNTPD.ReaderService' 'VectorNNTPD.ReaderService.json'
+          Test-WinPackage 'transit' 'VectorNNTPD.TransitService' 'VectorNNTPD.TransitService.json'
+          foreach ($loose in @(
+            'VectorNNTPD.BackFillerService.exe', 'VectorNNTPD.StorageService.exe',
+            'VectorNNTPD.ReaderService.exe', 'VectorNNTPD.TransitService.exe',
+            'VectorNNTPD.BackFillerService.json', 'VectorNNTPD.StorageService.json',
+            'VectorNNTPD.ReaderService.json', 'VectorNNTPD.TransitService.json',
+            'VectorNNTPD.RabbitMQ.json'
           )) {
-            $path = Join-Path $dir $forbidden
-            if (Test-Path -LiteralPath $path) { throw "Native AOT output contains $forbidden." }
+            $path = Join-Path $root $loose
+            if (Test-Path -LiteralPath $path) { throw "Loose file at platform root is not allowed: $path" }
           }
 
       - name: Smoke-test win-x64 Native AOT startup (BackFiller)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path (Resolve-Path './.artifacts/win-x64') 'VectorNNTPD.BackFillerService.exe'
+          $exe = Join-Path (Resolve-Path './.artifacts/win-x64/backfiller') 'VectorNNTPD.BackFillerService.exe'
           $config = (Resolve-Path './tests/VectorNNTPD.BackFillerService.Tests/Fixtures/startup-smoke.json').Path
           $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-backfiller-smoke-stdout.txt'
           $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-backfiller-smoke-stderr.txt'
@@ -519,7 +668,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path (Resolve-Path './.artifacts/win-x64') 'VectorNNTPD.StorageService.exe'
+          $exe = Join-Path (Resolve-Path './.artifacts/win-x64/storage') 'VectorNNTPD.StorageService.exe'
           $config = (Resolve-Path './tests/VectorNNTPD.StorageService.Tests/Fixtures/startup-smoke.json').Path
           $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-storageservice-smoke-stdout.txt'
           $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-storageservice-smoke-stderr.txt'
@@ -559,6 +708,88 @@ jobs:
             throw 'win-x64 StorageService startup smoke did not log host starting.'
           }
 
+      - name: Smoke-test win-x64 Native AOT startup (ReaderService)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path (Resolve-Path './.artifacts/win-x64/reader') 'VectorNNTPD.ReaderService.exe'
+          $config = (Resolve-Path './tests/VectorNNTPD.ReaderService.Tests/Fixtures/startup-smoke-reader.json').Path
+          $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-reader-smoke-stdout.txt'
+          $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-reader-smoke-stderr.txt'
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo.FileName = $exe
+          $process.StartInfo.WorkingDirectory = Split-Path -Parent $exe
+          $process.StartInfo.UseShellExecute = $false
+          $process.StartInfo.RedirectStandardOutput = $true
+          $process.StartInfo.RedirectStandardError = $true
+          $process.StartInfo.Environment['VECTORNNTP_READER_STARTUP_SMOKE'] = '1'
+          $process.StartInfo.Environment['VECTORNNTP_READER_STARTUP_SMOKE_CONFIG'] = $config
+          if (-not $process.Start()) { throw 'Failed to start the win-x64 ReaderService startup smoke process.' }
+          $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+          $stderrTask = $process.StandardError.ReadToEndAsync()
+          if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill($true) } catch { }
+            throw 'win-x64 ReaderService startup smoke timed out.'
+          }
+          $process.WaitForExit()
+          $stdout = $stdoutTask.GetAwaiter().GetResult()
+          $stderr = $stderrTask.GetAwaiter().GetResult()
+          Set-Content -LiteralPath $stdoutPath -Value $stdout
+          Set-Content -LiteralPath $stderrPath -Value $stderr
+          Write-Host "win-x64 ReaderService startup smoke exit=$($process.ExitCode)"
+          Write-Host '----- stdout -----'
+          Write-Host $stdout
+          Write-Host '----- stderr -----'
+          Write-Host $stderr
+          if ($process.ExitCode -ne 0) { throw 'win-x64 ReaderService startup smoke failed.' }
+          if ($stdout -notmatch 'ReaderService startup smoke: configuration serverId=1 fqdn=reader01\.usenet\.ninja') {
+            throw 'win-x64 ReaderService startup smoke did not reach the configuration checkpoint.'
+          }
+          if ($stdout -notmatch 'VectorNNTPD\.ReaderService host starting') {
+            throw 'win-x64 ReaderService startup smoke did not log host starting.'
+          }
+
+      - name: Smoke-test win-x64 Native AOT startup (TransitService)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path (Resolve-Path './.artifacts/win-x64/transit') 'VectorNNTPD.TransitService.exe'
+          $config = (Resolve-Path './tests/VectorNNTPD.TransitService.Tests/Fixtures/startup-smoke-transit.json').Path
+          $stdoutPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-transit-smoke-stdout.txt'
+          $stderrPath = Join-Path (Resolve-Path './.artifacts') 'win-x64-transit-smoke-stderr.txt'
+          $process = [System.Diagnostics.Process]::new()
+          $process.StartInfo.FileName = $exe
+          $process.StartInfo.WorkingDirectory = Split-Path -Parent $exe
+          $process.StartInfo.UseShellExecute = $false
+          $process.StartInfo.RedirectStandardOutput = $true
+          $process.StartInfo.RedirectStandardError = $true
+          $process.StartInfo.Environment['VECTORNNTP_TRANSIT_STARTUP_SMOKE'] = '1'
+          $process.StartInfo.Environment['VECTORNNTP_TRANSIT_STARTUP_SMOKE_CONFIG'] = $config
+          if (-not $process.Start()) { throw 'Failed to start the win-x64 TransitService startup smoke process.' }
+          $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+          $stderrTask = $process.StandardError.ReadToEndAsync()
+          if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill($true) } catch { }
+            throw 'win-x64 TransitService startup smoke timed out.'
+          }
+          $process.WaitForExit()
+          $stdout = $stdoutTask.GetAwaiter().GetResult()
+          $stderr = $stderrTask.GetAwaiter().GetResult()
+          Set-Content -LiteralPath $stdoutPath -Value $stdout
+          Set-Content -LiteralPath $stderrPath -Value $stderr
+          Write-Host "win-x64 TransitService startup smoke exit=$($process.ExitCode)"
+          Write-Host '----- stdout -----'
+          Write-Host $stdout
+          Write-Host '----- stderr -----'
+          Write-Host $stderr
+          if ($process.ExitCode -ne 0) { throw 'win-x64 TransitService startup smoke failed.' }
+          if ($stdout -notmatch 'TransitService startup smoke: configuration serverId=1 fqdn=transit01\.usenet\.ninja') {
+            throw 'win-x64 TransitService startup smoke did not reach the configuration checkpoint.'
+          }
+          if ($stdout -notmatch 'VectorNNTPD\.TransitService host starting') {
+            throw 'win-x64 TransitService startup smoke did not log host starting.'
+          }
+
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v7
         with:
@@ -566,3 +797,4 @@ jobs:
           path: .artifacts/win-x64/
           if-no-files-found: error
           retention-days: 7
+

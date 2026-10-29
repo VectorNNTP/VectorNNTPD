@@ -1,6 +1,7 @@
 using System.Globalization;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using Serilog.Debugging;
 using VectorNNTPD.Common.Core;
 
 namespace VectorNNTPD.Common.Messaging.RabbitMq
@@ -113,6 +114,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
             }
             catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
             {
+                SelfLog.WriteLine("RabbitMQ async-confirm publish channel close failed and disposal will continue. " + ex);
             }
 
             await _channel.DisposeAsync().ConfigureAwait(false);

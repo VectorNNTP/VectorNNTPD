@@ -420,11 +420,12 @@ namespace VectorNNTPD.Common.Acme
         {
             var records = await _client.ListAllRecordsForNameAsync(zoneId, name, cancellationToken)
                 .ConfigureAwait(false);
-            return (string[])[.. records
+            return records
                 .Where(r =>
                     string.Equals(r.Type, Cloudflare.CloudflareDnsRecordTypes.TXT, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(r.Content, content, StringComparison.Ordinal))
-                .Select(r => r.Id)];
+                .Select(r => r.Id)
+                .ToArray();
         }
 
         /// <summary>Deletes one record. HTTP 404, a message containing <c>not found</c>, or Cloudflare error 81044 is treated as already deleted.</summary>

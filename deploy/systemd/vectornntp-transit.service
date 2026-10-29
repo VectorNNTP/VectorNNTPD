@@ -1,0 +1,44 @@
+[Unit]
+Description=VectorNNTP TransitService
+# Install VectorNNTPD.TransitService, VectorNNTPD.TransitService.json,
+# VectorNNTPD.RabbitMQ.json, and this unit. Create user/group vectornntp,
+# create logs/ and certs/ owned by that account, and install
+# /etc/vectornntp/transit.env before enable.
+Documentation=file:///opt/vectornntp/transit/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+User=vectornntp
+Group=vectornntp
+
+WorkingDirectory=/opt/vectornntp/transit
+ExecStart=/opt/vectornntp/transit/VectorNNTPD.TransitService
+
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=-/etc/vectornntp/transit.env
+Environment=DOTNET_ENVIRONMENT=Production
+
+# WatchdogSec example (enable only after readiness is verified):
+# WatchdogSec=30
+# Restart=on-watchdog
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vectornntp/transit/logs /opt/vectornntp/transit/certs
+
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+[Install]
+WantedBy=multi-user.target

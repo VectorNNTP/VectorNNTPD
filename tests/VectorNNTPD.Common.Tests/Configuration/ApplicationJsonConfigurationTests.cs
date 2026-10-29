@@ -255,11 +255,13 @@ namespace VectorNNTPD.Common.Tests.Configuration
             {
                 Directory.Delete(path, recursive: true);
             }
-            catch (IOException)
+            catch (IOException ex)
             {
+                _ = ex; // observed; best-effort temp directory cleanup
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
+                _ = ex; // observed; best-effort temp directory cleanup
             }
         }
     }

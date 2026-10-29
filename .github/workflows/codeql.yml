@@ -45,8 +45,40 @@ jobs:
       - name: Restore solution
         run: dotnet restore VectorNNTPD.slnx -p:Platform=x64
 
+      # --no-incremental ensures CoreCompile/csc runs under the CodeQL tracer for every
+      # project. An up-to-date incremental skip can leave only .csproj entries in the DB.
       - name: Build solution
-        run: dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore
+        run: dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore --no-incremental
 
+      # upload: never — traced C# SARIF includes **/obj/** source-generator noise that
+      # paths-ignore cannot drop. Filter first, then upload-sarif.
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
+        with:
+          upload: never
+          output: codeql-sarif
+
+      - name: Filter generated bin/obj findings from SARIF
+        shell: pwsh
+        run: |
+          $inputs = Get-ChildItem -Path codeql-sarif -Filter *.sarif -File -ErrorAction Stop
+          if ($inputs.Count -lt 1) {
+            throw "No SARIF files found under codeql-sarif/"
+          }
+          New-Item -ItemType Directory -Force -Path codeql-sarif-filtered | Out-Null
+          foreach ($sarif in $inputs) {
+            $out = Join-Path codeql-sarif-filtered $sarif.Name
+            # StripAcceptedSuppressions: in-source // codeql[...] findings stay justified in
+            # the repo; uploading them as results still produced "new alerts" on PR #256
+            # because CodeQL's {state:accepted} was not treated as GitHub dismissals.
+            & ./tools/Filter-CodeQlSarif.ps1 -InputPath $sarif.FullName -OutputPath $out -StripAcceptedSuppressions
+          }
+
+      # Keep the historical analysis category so GitHub's required CodeQL check continues
+      # to match refs/heads/master (category "csharp" yielded NEUTRAL
+      # "1 configuration not found" on PR #256 check run 123524079410).
+      - name: Upload filtered CodeQL SARIF
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: codeql-sarif-filtered
+          category: ".github/workflows/codeql.yml:analyze"

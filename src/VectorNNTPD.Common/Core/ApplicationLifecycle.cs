@@ -49,6 +49,7 @@ namespace VectorNNTPD.Common.Core
         private readonly ILogger<ApplicationLifecycle> _logger;
 
         /// <summary>Serializes <see cref="StartAsync"/> and <see cref="StopCoreAsync"/>.</summary>
+        // codeql[cs/missed-using-statement] Owned by ApplicationLifecycle until DisposeAsync; a using at field declaration would dispose when the constructor returns.
         private readonly SemaphoreSlim _gate = new(1, 1);
 
         /// <summary>Guards <see cref="_state"/> reads and writes.</summary>

@@ -92,8 +92,13 @@ namespace VectorNNTPD.BackFillerService.Tests.Diagnostics
         [Fact]
         public void Enabled_profiler_tracks_active_and_stages()
         {
+            // Install only a throwaway instance for IsEnabled. Ambient pipeline hooks from
+            // parallel tests must not mutate the profiler whose Active/Record counts we assert.
+            WithInstalled(
+                new ArticleWorkStageProfiler(enabled: true),
+                static () => Assert.True(ArticleWorkStageProfiler.IsEnabled));
+
             var profiler = new ArticleWorkStageProfiler(enabled: true);
-            WithInstalled(profiler, static () => Assert.True(ArticleWorkStageProfiler.IsEnabled));
             profiler.BeginActive();
             Assert.Equal(1, profiler.Active);
             var started = System.Diagnostics.Stopwatch.GetTimestamp();

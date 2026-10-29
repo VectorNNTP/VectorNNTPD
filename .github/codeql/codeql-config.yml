@@ -3,6 +3,10 @@ name: BackFiller CodeQL configuration
 queries:
   - uses: ./.github/codeql/csharp-with-alert-suppression.qls
 
+# paths-ignore documents intent for non-traced languages / documentation.
+# For traced C# builds, compiled obj/bin (including source-generators) still appear in
+# SARIF; tools/Filter-CodeQlSarif.ps1 and .github/workflows/codeql.yml strip those
+# results before upload. See tools/Invoke-CodeQlAnalysis.ps1.
 paths-ignore:
   - '**/bin/**'
   - '**/obj/**'

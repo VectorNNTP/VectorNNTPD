@@ -496,22 +496,20 @@ namespace VectorNNTPD.Common.Articles.Parsing
                     continue;
                 }
 
-                if (currentHeaderNameOffset >= 0)
+                if (currentHeaderNameOffset >= 0
+                    && !TryAddHeader(
+                        ref headers,
+                        ref headerCount,
+                        ref rentedHeaders,
+                        options.MaxHeaderCount,
+                        new NntpArticleHeaderEntry(
+                            currentKnownName,
+                            currentHeaderNameOffset,
+                            currentHeaderNameLength,
+                            currentHeaderValueOffset,
+                            currentHeaderHasValue ? currentHeaderValueEndExclusive - currentHeaderValueOffset : 0)))
                 {
-                    if (!TryAddHeader(
-                            ref headers,
-                            ref headerCount,
-                            ref rentedHeaders,
-                            options.MaxHeaderCount,
-                            new NntpArticleHeaderEntry(
-                                currentKnownName,
-                                currentHeaderNameOffset,
-                                currentHeaderNameLength,
-                                currentHeaderValueOffset,
-                                currentHeaderHasValue ? currentHeaderValueEndExclusive - currentHeaderValueOffset : 0)))
-                    {
-                        return HeaderParseOutcome.Fail(NntpArticleParseFailureCode.TooManyHeaders, articleBytes, headerStart, lineContentEnd, headers[..headerCount]);
-                    }
+                    return HeaderParseOutcome.Fail(NntpArticleParseFailureCode.TooManyHeaders, articleBytes, headerStart, lineContentEnd, headers[..headerCount]);
                 }
 
                 if (headerCount >= options.MaxHeaderCount)
@@ -579,6 +577,7 @@ namespace VectorNNTPD.Common.Articles.Parsing
         /// <param name="maxHeaderCount">Hard cap. The rented array is this long.</param>
         /// <param name="entry">Header to store.</param>
         /// <returns><see langword="false"/> when <paramref name="headerCount"/> is already at <paramref name="maxHeaderCount"/>.</returns>
+        // codeql[cs/too-many-ref-parameters] Hot-path ArrayPool growth; refs avoid allocating a mutable header-buffer holder per article.
         private static bool TryAddHeader(
             ref Span<NntpArticleHeaderEntry> headers,
             ref int headerCount,

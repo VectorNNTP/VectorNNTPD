@@ -11,22 +11,18 @@ namespace VectorNNTPD.StorageService.Tests.Storage
         {
             var gate = new SpoolArticleIdentityGate();
             var id = ArticleId.FromMessageId("<one@example.test>"u8);
-            using (var lease = gate.Acquire(id, CancellationToken.None))
+            using (gate.Acquire(id, CancellationToken.None))
             {
                 Assert.Equal(1, gate.Reservations(id));
             }
 
             Assert.Equal(0, gate.Reservations(id));
 
+            // codeql[cs/missed-using-statement] Intentional double-dispose contract exercise for SpoolArticleIdentityGate lease.
             var again = gate.Acquire(id, CancellationToken.None);
-            try
-            {
-                again.Dispose();
-            }
-            finally
-            {
-                again.Dispose();
-            }
+            again.Dispose();
+            // codeql[cs/dispose-not-called-on-throw] Intentional second dispose verifies lease Dispose is a no-op.
+            again.Dispose();
 
             Assert.Equal(0, gate.Reservations(id));
         }

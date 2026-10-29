@@ -5,13 +5,15 @@
 
 .DESCRIPTION
     Creates a CodeQL database by tracing the repository's Release x64 restore and
-    build, then analyzes that database with the queries selected by
+    non-incremental build, then analyzes that database with the queries selected by
     .github/codeql/codeql-config.yml. That config selects
     .github/codeql/csharp-with-alert-suppression.qls, which imports the
     security-extended and security-and-quality suites and adds AlertSuppression.ql.
     Analyze is invoked with no extra query arguments, so it uses the queries
     stored from that config at database creation. That is the same selection the
-    GitHub Action analyzes with database run-queries.
+    GitHub Action analyzes with database run-queries. The traced build uses
+    --no-incremental so MSBuild always runs CoreCompile/csc; an up-to-date
+    incremental skip would leave project sources out of the database.
 
     The script checks that the local suite resolves to those two suites plus
     AlertSuppression.ql exactly once. It does not download query packs. Evidence
@@ -20,7 +22,8 @@
     database analyze to exit 0.
 
     For a traced C# build, the CLI records that paths and paths-ignore do not
-    filter compiled files.
+    filter compiled files. After analyze, this script runs Filter-CodeQlSarif.ps1
+    so local results.sarif matches the filtered upload used by CI.
 
 .PARAMETER CodeQl
     Path to codeql.exe. Defaults to C:\Tools\codeql\codeql.exe.
@@ -77,11 +80,13 @@ if (-not (Test-Path -LiteralPath $config)) {
     throw "CodeQL configuration was not found at $config"
 }
 
+# --no-incremental forces CoreCompile/csc so the CodeQL tracer sees every project.
+# An up-to-date incremental skip leaves only the .csproj in the database (no .cs TRAPs).
 @(
     "@echo off"
     "dotnet restore VectorNNTPD.slnx -p:Platform=x64"
     "if errorlevel 1 exit /b %errorlevel%"
-    "dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore"
+    "dotnet build VectorNNTPD.slnx --configuration Release -p:Platform=x64 --no-restore --no-incremental"
     "if errorlevel 1 exit /b %errorlevel%"
 ) | Set-Content -LiteralPath $buildCommand -Encoding ascii
 
@@ -150,14 +155,20 @@ try {
         "--command", $buildCommand
     )
 
+    $rawSarif = Join-Path $evidenceRoot "results.raw.sarif"
+    $filteredSarif = Join-Path $evidenceRoot "results.sarif"
     Invoke-CodeQl -LogPath (Join-Path $evidenceRoot "database-analyze.log") -Arguments @(
         "database", "analyze", $database,
         "--format=sarifv2.1.0",
-        "--output", (Join-Path $evidenceRoot "results.sarif"),
+        "--output", $rawSarif,
         "--threads=0",
         "--no-sarif-minify",
         "--sarif-category=csharp"
     )
+
+    # Local results.sarif keeps suppressed first-party findings (normalized) so ACTIVE/SUPP
+    # counts remain auditable; CI upload uses -StripAcceptedSuppressions.
+    & (Join-Path $PSScriptRoot "Filter-CodeQlSarif.ps1") -InputPath $rawSarif -OutputPath $filteredSarif
 }
 finally {
     Pop-Location

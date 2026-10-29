@@ -273,8 +273,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 {
                     await execution.ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
+                    // Expected when StopAsync cancels the run loop; keep the exception observed.
+                    _ = ex;
                 }
             }
 
@@ -302,8 +304,10 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                     await RecoverAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
+                // Expected cooperative cancel of the recovery watch; keep the exception observed.
+                _ = ex;
             }
         }
 

@@ -356,6 +356,7 @@ namespace VectorNNTPD.Common.Tests.Cloudflare
             {
                 RequestCount++;
                 var payload = _payloads.Dequeue();
+                // codeql[cs/local-not-disposed] HttpResponseMessage ownership transfers to HttpClient; the caller disposes the response.
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(payload, Encoding.UTF8, "application/json"),

@@ -150,6 +150,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             {
                 return new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
             }
+            // codeql[cs/catch-of-all-exceptions] Test process-boundary helper must tolerate any failure while releasing resources.
             catch (Exception ex)
             {
                 return new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, DescribeTransportFailure(ex));
@@ -211,6 +212,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
 
                 if (_dialing.TryGetValue(key, out pending))
                 {
+                    // Pending dial already owned by another waiter; join it below.
                 }
                 else if (_nextDial.TryGetValue(key, out var next) && _time.GetUtcNow() < next)
                 {
@@ -279,6 +281,7 @@ namespace VectorNNTPD.StorageService.Tests.Support.Placement
             {
                 await pending.ConfigureAwait(false);
             }
+            // codeql[cs/catch-of-all-exceptions] Test duplex teardown must complete pipes after any protocol or cancel fault.
             catch (Exception ex)
             {
                 ExpectedException.Ignore(ex);

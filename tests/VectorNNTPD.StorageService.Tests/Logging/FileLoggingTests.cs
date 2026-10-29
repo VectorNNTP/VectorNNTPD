@@ -247,8 +247,10 @@ namespace VectorNNTPD.StorageService.Tests.Logging
                     Directory.Delete(path, recursive: true);
                 }
             }
-            catch
+            // codeql[cs/catch-of-all-exceptions] Best-effort test cleanup must tolerate any filesystem or disposal failure.
+            catch (Exception ex)
             {
+                _ = ex.GetType(); // observed: expected during test teardown/cleanup
                 // best-effort cleanup
             }
         }
@@ -313,24 +315,20 @@ namespace VectorNNTPD.StorageService.Tests.Logging
         {
             foreach (var field in sink.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public))
             {
-                if (field.FieldType == typeof(ILogEventSink) || typeof(ILogEventSink).IsAssignableFrom(field.FieldType))
+                if ((field.FieldType == typeof(ILogEventSink) || typeof(ILogEventSink).IsAssignableFrom(field.FieldType))
+                    && field.GetValue(sink) is { } child)
                 {
-                    if (field.GetValue(sink) is { } child)
-                    {
-                        yield return child;
-                    }
+                    yield return child;
                 }
                 else if (typeof(System.Collections.IEnumerable).IsAssignableFrom(field.FieldType)
-                         && field.FieldType != typeof(string))
+                         && field.FieldType != typeof(string)
+                         && field.GetValue(sink) is System.Collections.IEnumerable enumerable)
                 {
-                    if (field.GetValue(sink) is System.Collections.IEnumerable enumerable)
+                    foreach (var item in enumerable)
                     {
-                        foreach (var item in enumerable)
+                        if (item is ILogEventSink childSink)
                         {
-                            if (item is ILogEventSink childSink)
-                            {
-                                yield return childSink;
-                            }
+                            yield return childSink;
                         }
                     }
                 }

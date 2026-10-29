@@ -376,12 +376,9 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 }
 
                 ArticleIndexTestSupport.Delete(root);
-                foreach (var spool in spools)
+                foreach (var spool in spools.Where(static spool => spool is not null))
                 {
-                    if (spool is not null)
-                    {
-                        ArticleIndexTestSupport.Delete(spool);
-                    }
+                    ArticleIndexTestSupport.Delete(spool);
                 }
             }
         }

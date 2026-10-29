@@ -89,8 +89,9 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 {
                     root.Delete(recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    _ = ex; // observed; best-effort temp directory cleanup
                 }
             }
         }
@@ -141,8 +142,9 @@ namespace VectorNNTPD.Common.Tests.Configuration
                 {
                     root.Delete(recursive: true);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
+                    _ = ex; // observed; best-effort temp directory cleanup
                 }
             }
         }

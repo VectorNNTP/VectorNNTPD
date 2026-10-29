@@ -280,7 +280,7 @@ namespace VectorNNTPD.Common.Messaging.RabbitMq
                 throw new InvalidOperationException("RabbitMQ Hosts must contain at least one entry.");
             }
 
-            string[] hosts = [.. (Hosts ?? [])
+            string[] hosts = [.. Hosts
                 .Where(static x => !string.IsNullOrWhiteSpace(x))
                 .Select(static x => x.Trim())
                 .Distinct(StringComparer.OrdinalIgnoreCase)];

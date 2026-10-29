@@ -99,8 +99,12 @@ namespace VectorNNTPD.Common.Articles.Validation
         private static bool TryConsumeAtom(ReadOnlySpan<byte> messageId, int end, ref int index)
         {
             var start = index;
-            while (TryConsumeAtext(messageId, end, ref index))
+            while (true)
             {
+                if (!TryConsumeAtext(messageId, end, ref index))
+                {
+                    break;
+                }
             }
 
             return index > start;
@@ -119,8 +123,12 @@ namespace VectorNNTPD.Common.Articles.Validation
         private static bool TryConsumeNoFoldLiteral(ReadOnlySpan<byte> messageId, int end, ref int index)
         {
             index++;
-            while (TryConsumeMdtext(messageId, end, ref index))
+            while (true)
             {
+                if (!TryConsumeMdtext(messageId, end, ref index))
+                {
+                    break;
+                }
             }
 
             if ((uint)index >= (uint)end || messageId[index] != (byte)']')

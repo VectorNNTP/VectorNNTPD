@@ -1,15 +1,18 @@
 # VectorNNTPD
 
-Standalone VectorNNTPD hosts extracted from VectorNNTP.NNTPD. This repository currently ships BackFiller and StorageService, plus shared `VectorNNTPD.Common`.
+Standalone VectorNNTPD hosts extracted from VectorNNTP.NNTPD. This repository ships BackFiller, StorageService, NNTP ReaderService, NNTP TransitService, and shared `VectorNNTPD.Common`. Reader and Transit each embed their own NNTP server implementation (no shared NntpServer library).
 
 ## Structure
 
-- `src/VectorNNTPD.BackFillerService/VectorNNTPD.BackFillerService.csproj` - BackFiller worker app (net10.0)
-- `src/VectorNNTPD.StorageService/VectorNNTPD.StorageService.csproj` - StorageService / NNTP TAKETHIS feed host (net10.0)
-- `src/VectorNNTPD.Common/VectorNNTPD.Common.csproj` - shared library
-- `tests/VectorNNTPD.BackFillerService.Tests/` / `tests/VectorNNTPD.StorageService.Tests/` / `tests/VectorNNTPD.Common.Tests/` - xUnit suites
+- `src/VectorNNTPD.BackFillerService/` - BackFiller worker app (net10.0)
+- `src/VectorNNTPD.StorageService/` - StorageService / NNTP TAKETHIS feed host (net10.0)
+- `src/VectorNNTPD.ReaderService/` - NNTP reader-server host (`AddNntpReaderHosting`)
+- `src/VectorNNTPD.TransitService/` - NNTP transit-server host (`AddNntpTransitHosting`)
+- `src/VectorNNTPD.Common/` - shared library
+- `tests/VectorNNTPD.BackFillerService.Tests/` / `tests/VectorNNTPD.StorageService.Tests/` / `tests/VectorNNTPD.ReaderService.Tests/` / `tests/VectorNNTPD.TransitService.Tests/` / `tests/VectorNNTPD.Common.Tests/` - xUnit suites
+- `docs/nntpd-reader-transit.md` - Reader/Transit architecture and deployment notes
 - `VectorNNTPD.slnx` - solution including apps + tests
-- `tools/Publish-Release.ps1` - Native AOT release publish for both production hosts
+- `tools/Publish-Release.ps1` - Native AOT release publish for BackFiller, StorageService, ReaderService, and TransitService
 - `tools/Invoke-CodeQlAnalysis.ps1` - local traced C# CodeQL analysis
 
 ## Build
@@ -26,12 +29,23 @@ dotnet test .\tests\VectorNNTPD.BackFillerService.Tests\VectorNNTPD.BackFillerSe
 
 ## Publish
 
-Preferred release path (both hosts into one flat directory):
+Preferred release path (one independent package directory per service):
 
 ```powershell
 .\tools\Publish-Release.ps1 -Platform win-64
 .\tools\Publish-Release.ps1 -Platform linux-64
 ```
+
+Output layout:
+
+```text
+release/<platform>/backfiller/
+release/<platform>/storage/
+release/<platform>/reader/
+release/<platform>/transit/
+```
+
+Each package contains that host’s Native AOT executable, its primary JSON, and `VectorNNTPD.RabbitMQ.json`. Linux packages also include that role’s systemd unit, environment example, and `README.md`. Reader and Transit never share a package directory. CI writes the same package names under `.artifacts/win-x64/` and `.artifacts/linux-x64/`.
 
 Per-project Native AOT publish still works. Example for StorageService:
 
@@ -45,6 +59,8 @@ Native AOT publish keeps trim and AOT analysis enabled. CI runs each published e
 
 - BackFiller: `VECTORNNTP_BACKFILLER_STARTUP_SMOKE=1` / `VECTORNNTP_BACKFILLER_STARTUP_SMOKE_CONFIG` → checkpoint `BackFiller startup smoke: configuration serverId=1 fqdn=backfiller01.usenet.ninja`
 - StorageService: `VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE=1` / `VECTORNNTP_STORAGESERVICE_STARTUP_SMOKE_CONFIG` → checkpoint `StorageService startup smoke: configuration serverId=1 fqdn=cache01.usenet.ninja`
+- ReaderService: `VECTORNNTP_READER_STARTUP_SMOKE=1` / `VECTORNNTP_READER_STARTUP_SMOKE_CONFIG` → checkpoint `ReaderService startup smoke: configuration serverId=1 fqdn=reader01.usenet.ninja`
+- TransitService: `VECTORNNTP_TRANSIT_STARTUP_SMOKE=1` / `VECTORNNTP_TRANSIT_STARTUP_SMOKE_CONFIG` → checkpoint `TransitService startup smoke: configuration serverId=1 fqdn=transit01.usenet.ninja`
 
 Those checkpoints prove configuration binding and host construction (and StorageService logging initialization). They do not open a listener or contact a database, broker, DNS provider, or certificate authority. StorageService AOT publish still scopes Serilog.Settings.Configuration IL suppressions (`IL2104`/`IL3050`/`IL3000`/`IL3002`) because MinimumLevel is applied via `ReadFrom.Configuration` while sinks are registered explicitly.
 
@@ -56,13 +72,15 @@ BackFiller references `VectorNNTPD.Common` for `IApplicationService`, NntpDB, AC
 
 ## Linux service
 
-`tools/Publish-Release.ps1 -Platform linux-64` writes `release/linux-64/`. The Linux CI job writes `.artifacts/linux-x64/` and uploads that directory. Both contain the flat Native AOT outputs for `VectorNNTPD.BackFillerService` and `VectorNNTPD.StorageService`, their primary JSON files, shared `VectorNNTPD.RabbitMQ.json`, `README.md`, and the BackFiller and StorageService systemd units plus environment-file examples.
+`tools/Publish-Release.ps1 -Platform linux-64` writes per-service packages under `release/linux-64/{backfiller,storage,reader,transit}/`. The Linux CI job writes the same package names under `.artifacts/linux-x64/` and uploads that tree. Each package is independently installable (executable, host JSON, RabbitMQ JSON, that role’s systemd unit and environment example, and `README.md`).
 
-Install BackFiller at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
+Install BackFiller from `backfiller/` at `/opt/vectornntp/backfiller`. `deploy/systemd/vectornntp-backfiller.service` uses that path for `ExecStart`, `WorkingDirectory`, and `Documentation=`. `ReadWritePaths` lists only `logs/` and `certs/`. Under `ProtectSystem=strict` that re-opens those two directories for writing. It does not change Unix ownership or mode. The shipped JSON writes file logs under `logs/` and ACME state under `certs/`, and startup creates files inside directories that must already exist.
 
-Install StorageService at `/opt/vectornntp/storageservice` using `VectorNNTPD.StorageService`, `VectorNNTPD.StorageService.json`, `VectorNNTPD.RabbitMQ.json`, `vectornntp-storageservice.service`, and `storageservice.env.example` from the same release directory. That unit’s `ReadWritePaths` also include `db/` and `spool/` for the article index and segment-pool roots.
+Install StorageService from `storage/` at `/opt/vectornntp/storageservice` using `VectorNNTPD.StorageService`, `VectorNNTPD.StorageService.json`, `VectorNNTPD.RabbitMQ.json`, `vectornntp-storageservice.service`, and `storageservice.env.example`. That unit’s `ReadWritePaths` also include `db/` and `spool/` for the article index and segment-pool roots.
 
-Create the account and install the release as root-owned files. This step copies the placeholder environment file and reloads systemd. It does not start the service.
+Install ReaderService from `reader/` at `/opt/vectornntp/reader` and TransitService from `transit/` at `/opt/vectornntp/transit`. See `docs/nntpd-reader-transit.md` for the Reader/Transit deployment handoff (environment files, schema, peers, rollback).
+
+Create the account and install the release as root-owned files. Run the following from the `backfiller/` package directory. This step copies the placeholder environment file and reloads systemd. It does not start the service.
 
 ```bash
 sudo groupadd --system vectornntp || true

@@ -100,9 +100,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 articles[i] = BuildArticle(i, bodyBytes);
             }
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            PrepareForAllocationSample();
             var gen0 = GC.CollectionCount(0);
             var gen1 = GC.CollectionCount(1);
             var gen2 = GC.CollectionCount(2);
@@ -146,9 +144,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             }
 
             var path = new AcceptedArticlePathProcessor("cache01.usenet.ninja", NullLogger.Instance);
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            PrepareForAllocationSample();
             var beforeRewrite = GC.GetTotalAllocatedBytes(precise: true);
             long rewrittenBytes = 0;
             for (var i = 0; i < count; i++)
@@ -161,9 +157,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             var bundle = CreatePipeline(files: null, roots: null);
             var processor = bundle.Processor;
             var sink = bundle.Counting!;
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            PrepareForAllocationSample();
             var beforePipeline = GC.GetTotalAllocatedBytes(precise: true);
             for (var i = 0; i < count; i++)
             {
@@ -260,11 +254,19 @@ namespace VectorNNTPD.StorageService.Tests.Storage
             System.Buffers.ArrayPool<SpoolCandidate>.Shared.Return(buffer);
         }
 
-        private static long Measure(int count, Action<int> action)
+        /// <summary>Forces a full GC cycle before allocation or gen-count sampling in benches.</summary>
+        private static void PrepareForAllocationSample()
         {
+            // codeql[cs/call-to-gc] Bench resets GC before allocation/throughput sampling.
             GC.Collect();
             GC.WaitForPendingFinalizers();
+            // codeql[cs/call-to-gc] Second collect after finalizers for stable gen counts.
             GC.Collect();
+        }
+
+        private static long Measure(int count, Action<int> action)
+        {
+            PrepareForAllocationSample();
             var before = GC.GetTotalAllocatedBytes(precise: true);
             for (var i = 0; i < count; i++)
             {
@@ -379,9 +381,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 new SpoolPressure(),
                 new SpoolPersistenceCounters(),
                 TimeProvider.System);
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            PrepareForAllocationSample();
             var gen0 = GC.CollectionCount(0);
             var gen1 = GC.CollectionCount(1);
             var gen2 = GC.CollectionCount(2);
@@ -558,9 +558,7 @@ namespace VectorNNTPD.StorageService.Tests.Storage
                 Directory.CreateDirectory(Path.GetDirectoryName(final)!);
             }
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            PrepareForAllocationSample();
             var gen0 = GC.CollectionCount(0);
             var gen1 = GC.CollectionCount(1);
             var gen2 = GC.CollectionCount(2);

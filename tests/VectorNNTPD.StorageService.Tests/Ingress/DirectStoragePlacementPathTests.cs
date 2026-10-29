@@ -93,16 +93,7 @@ namespace VectorNNTPD.StorageService.Tests.Ingress
         private static int CountHop(string path, string hop)
         {
             var value = path.StartsWith("Path: ", StringComparison.Ordinal) ? path["Path: ".Length..] : path;
-            var count = 0;
-            foreach (var token in value.Split('!'))
-            {
-                if (string.Equals(token, hop, StringComparison.Ordinal))
-                {
-                    count++;
-                }
-            }
-
-            return count;
+            return value.Split('!').Count(token => string.Equals(token, hop, StringComparison.Ordinal));
         }
     }
 }

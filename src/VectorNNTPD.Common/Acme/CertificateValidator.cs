@@ -42,46 +42,45 @@ namespace VectorNNTPD.Common.Acme
                     Reason: $"parse_failed:{ex.GetType().Name}");
             }
 
-            try
+            using (leaf)
             {
-                if (!leaf.HasPrivateKey)
+                try
                 {
-                    return new CertificateStatus(false, true, null, "missing_private_key");
+                    if (!leaf.HasPrivateKey)
+                    {
+                        return new CertificateStatus(false, true, null, "missing_private_key");
+                    }
+
+                    using var privateKey = leaf.GetRSAPrivateKey()
+                        ?? throw new AcmeCertificateException("key_mismatch", "unsupported_key_type");
+
+                    var domains = GetDnsNames(leaf);
+                    AssertRequiredDomains(domains, requiredDomains);
+                    AssertValidityWindow(leaf, current);
+                    AssertKeyMatch(leaf, privateKey);
+                    AssertServerAuth(leaf);
+
+                    var material = new CertificateMaterial(
+                        PfxBytes: pfxBytes.ToArray(),
+                        Domains: domains.OrderBy(static d => d, StringComparer.Ordinal).ToArray(),
+                        NotBefore: leaf.NotBefore.ToUniversalTime(),
+                        NotAfter: leaf.NotAfter.ToUniversalTime());
+
+                    var due = current >= material.NotAfter - renewalThreshold;
+                    return new CertificateStatus(
+                        Usable: true,
+                        DueForRenewal: due,
+                        Material: material,
+                        Reason: due ? "renewal_threshold" : "ok");
                 }
-
-                using var privateKey = leaf.GetRSAPrivateKey()
-                    ?? throw new AcmeCertificateException("key_mismatch", "unsupported_key_type");
-
-                var domains = GetDnsNames(leaf);
-                AssertRequiredDomains(domains, requiredDomains);
-                AssertValidityWindow(leaf, current);
-                AssertKeyMatch(leaf, privateKey);
-                AssertServerAuth(leaf);
-
-                var material = new CertificateMaterial(
-                    PfxBytes: pfxBytes.ToArray(),
-                    Domains: (string[])[.. domains.OrderBy(static d => d, StringComparer.Ordinal)],
-                    NotBefore: leaf.NotBefore.ToUniversalTime(),
-                    NotAfter: leaf.NotAfter.ToUniversalTime());
-
-                var due = current >= material.NotAfter - renewalThreshold;
-                return new CertificateStatus(
-                    Usable: true,
-                    DueForRenewal: due,
-                    Material: material,
-                    Reason: due ? "renewal_threshold" : "ok");
-            }
-            catch (AcmeCertificateException ex)
-            {
-                return new CertificateStatus(
-                    Usable: false,
-                    DueForRenewal: true,
-                    Material: null,
-                    Reason: ex.Category);
-            }
-            finally
-            {
-                leaf.Dispose();
+                catch (AcmeCertificateException ex)
+                {
+                    return new CertificateStatus(
+                        Usable: false,
+                        DueForRenewal: true,
+                        Material: null,
+                        Reason: ex.Category);
+                }
             }
         }
 

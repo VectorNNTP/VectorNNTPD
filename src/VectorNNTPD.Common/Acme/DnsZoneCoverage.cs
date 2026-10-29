@@ -62,9 +62,8 @@ namespace VectorNNTPD.Common.Acme
                 throw new AcmeConfigurationException("missing_identities", "no certificate identities");
             }
 
-            foreach (var raw in identities)
+            foreach (var host in identities.Select(static raw => NormalizeDnsHostname(raw, "certificate_identity")))
             {
-                var host = NormalizeDnsHostname(raw, "certificate_identity");
                 if (!ZoneCoversHostname(apex, host))
                 {
                     throw new AcmeConfigurationException(

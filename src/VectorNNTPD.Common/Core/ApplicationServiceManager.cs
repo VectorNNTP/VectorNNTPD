@@ -65,7 +65,7 @@ namespace VectorNNTPD.Common.Core
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(logger);
 
-            _services = services as IReadOnlyList<IApplicationService> ?? (List<IApplicationService>)[.. services];
+            _services = services as IReadOnlyList<IApplicationService> ?? [.. services];
             _options = options;
             _logger = logger;
         }
@@ -85,7 +85,7 @@ namespace VectorNNTPD.Common.Core
             {
                 lock (_startedSync)
                 {
-                    return (IApplicationService[])[.. _started];
+                    return [.. _started];
                 }
             }
         }
@@ -246,7 +246,9 @@ namespace VectorNNTPD.Common.Core
 
                     ServiceManagerLogMessages.StoppingService(_logger, service.Name, i + 1);
 
+                    // codeql[cs/missed-using-statement] Conditionally constructed timeout/linked sources disposed in finally after StopAsync; a using would dispose before the stop await completes.
                     CancellationTokenSource? timeoutCts = null;
+                    // codeql[cs/missed-using-statement] Conditionally constructed timeout/linked sources disposed in finally after StopAsync; a using would dispose before the stop await completes.
                     CancellationTokenSource? linkedCts = null;
                     try
                     {
@@ -569,38 +571,44 @@ namespace VectorNNTPD.Common.Core
         /// </remarks>
         private async Task StopExecutionMonitoringAsync()
         {
+            // codeql[cs/missed-using-statement] CTS ownership is the manager field lifetime; Exchange takes it for cancel/await then finally Dispose below. A using at exchange would dispose before the monitor finishes.
             var cts = Interlocked.Exchange(ref _executionCts, null);
             var monitor = Interlocked.Exchange(ref _executionMonitor, null);
 
-            if (cts is not null)
+            try
             {
-                try
+                if (cts is not null)
                 {
-                    await cts.CancelAsync().ConfigureAwait(false);
+                    try
+                    {
+                        await cts.CancelAsync().ConfigureAwait(false);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Already disposed.
+                    }
                 }
-                catch (ObjectDisposedException)
+
+                if (monitor is not null)
                 {
-                    // Already disposed.
+                    try
+                    {
+                        await monitor.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected.
+                    }
+                    catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+                    {
+                        ServiceManagerLogMessages.ExecutionMonitorExceptionDuringShutdown(_logger, ex);
+                    }
                 }
             }
-
-            if (monitor is not null)
+            finally
             {
-                try
-                {
-                    await monitor.ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected.
-                }
-                catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
-                {
-                    ServiceManagerLogMessages.ExecutionMonitorExceptionDuringShutdown(_logger, ex);
-                }
+                cts?.Dispose();
             }
-
-            cts?.Dispose();
         }
     }
 

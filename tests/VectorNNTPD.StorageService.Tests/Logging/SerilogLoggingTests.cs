@@ -216,8 +216,10 @@ namespace VectorNNTPD.StorageService.Tests.Logging
                     Directory.Delete(path, recursive: true);
                 }
             }
-            catch
+            // codeql[cs/catch-of-all-exceptions] Best-effort test cleanup must tolerate any filesystem or disposal failure.
+            catch (Exception ex)
             {
+                _ = ex.GetType(); // observed: expected during test teardown/cleanup
                 // best-effort cleanup
             }
         }

@@ -627,12 +627,9 @@ namespace VectorNNTPD.Common.Acme.Protocol
                 return;
             }
 
-            foreach (string value in values)
+            foreach (string value in values.Where(static v => !string.IsNullOrEmpty(v)))
             {
-                if (!string.IsNullOrEmpty(value))
-                {
-                    _nonces.Push(value);
-                }
+                _nonces.Push(value);
             }
         }
 

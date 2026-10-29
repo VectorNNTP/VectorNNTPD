@@ -87,11 +87,7 @@ namespace VectorNNTPD.Common.Transport.ArticleTransfer
         internal static EncodedFrame EncodeData(uint streamId, ReadOnlyMemory<byte> payload, bool fin = false)
         {
             ThrowIfConnectionStream(streamId);
-            if (payload.Length > int.MaxValue)
-            {
-                throw new ArgumentOutOfRangeException(nameof(payload));
-            }
-
+            // ReadOnlyMemory<byte>.Length is int; Encode checks payload length via checked uint cast.
             var flags = fin ? VatpProtocol.FlagFin : 0u;
             return Encode(VatpFrameType.Data, streamId, payload, flags);
         }

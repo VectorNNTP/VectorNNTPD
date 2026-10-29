@@ -345,16 +345,9 @@ namespace VectorNNTPD.Common.Dns
                     return [];
                 }
 
-                List<IPAddress> ips = new(all.Length);
-                foreach (IPAddress ip in all)
-                {
-                    if (ip.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
-                    {
-                        ips.Add(ip);
-                    }
-                }
-
-                return ips;
+                return all
+                    .Where(static ip => ip.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
+                    .ToList();
             }
             catch (OperationCanceledException)
             {

@@ -1,0 +1,3 @@
+# All C# namespaces must be block-scoped; file-scoped namespaces are not permitted.
+[*.cs]
+csharp_style_namespace_declarations = block_scoped:warning

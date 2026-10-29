@@ -318,6 +318,7 @@ namespace VectorNNTPD.Common.Cloudflare
             {
                 var records = await ListExactFqdnRecordsAsync(zoneId, fqdn, cancellationToken).ConfigureAwait(false);
                 var ids = new List<string>(records.Count);
+                // codeql[cs/linq/missed-where] Gate-held list projection; Where would allocate under SemaphoreSlim.
                 foreach (var record in records)
                 {
                     if (!string.IsNullOrWhiteSpace(record.Id))
@@ -564,6 +565,7 @@ namespace VectorNNTPD.Common.Cloudflare
             string type,
             List<(string Type, CloudflareDnsRecord Record)> restore)
         {
+            // codeql[cs/linq/missed-where] Gate-held restore snapshot; Where would allocate under SemaphoreSlim.
             foreach (var record in records)
             {
                 if (!CloudflareManagedDnsPolicy.MatchesManagedAttributes(record))
@@ -1143,6 +1145,7 @@ namespace VectorNNTPD.Common.Cloudflare
         private static HashSet<string> ToObservedContentSet(IReadOnlyList<CloudflareDnsRecord> records, string type)
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // codeql[cs/linq/missed-select] Gate-held verification path; Select/Where would allocate under SemaphoreSlim.
             foreach (var record in records)
             {
                 var content = NormalizeContent(record.Content, type);

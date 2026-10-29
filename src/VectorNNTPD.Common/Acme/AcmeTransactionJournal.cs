@@ -602,19 +602,14 @@ namespace VectorNNTPD.Common.Acme
         /// <returns>The in-memory transaction.</returns>
         private static AcmeJournalTransaction ParseTransaction(JsonElement root)
         {
-            var identifiers = new List<string>();
-            if (root.TryGetProperty("identifiers", out var identifiersElement)
-                && identifiersElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in identifiersElement.EnumerateArray())
-                {
-                    var value = item.GetString();
-                    if (!string.IsNullOrWhiteSpace(value))
-                    {
-                        identifiers.Add(value);
-                    }
-                }
-            }
+            var identifiers = root.TryGetProperty("identifiers", out var identifiersElement)
+                && identifiersElement.ValueKind == JsonValueKind.Array
+                ? identifiersElement.EnumerateArray()
+                    .Select(static item => item.GetString())
+                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                    .Select(static value => value!)
+                    .ToList()
+                : [];
 
             var events = new List<AcmeJournalEvent>();
             if (root.TryGetProperty("events", out var eventsElement)
@@ -731,10 +726,9 @@ namespace VectorNNTPD.Common.Acme
         /// <returns>The inspected fields. Serial and thumbprint come from <see cref="X509Certificate2"/>.</returns>
         private static CertificateInspection InspectCertificate(byte[] pfxBytes, string password)
         {
-            X509Certificate2? cert = null;
             try
             {
-                cert = PfxCrypto.LoadCertificate(pfxBytes, password);
+                using var cert = PfxCrypto.LoadCertificate(pfxBytes, password);
                 return new CertificateInspection(
                     cert.SerialNumber,
                     cert.Thumbprint,
@@ -744,10 +738,6 @@ namespace VectorNNTPD.Common.Acme
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 throw new AcmeCertificateException("journal_certificate_inspect_failed", ex.GetType().Name);
-            }
-            finally
-            {
-                cert?.Dispose();
             }
         }
 

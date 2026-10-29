@@ -1,0 +1,48 @@
+[Unit]
+Description=VectorNNTP ReaderService
+# Install VectorNNTPD.ReaderService, VectorNNTPD.ReaderService.json,
+# VectorNNTPD.RabbitMQ.json, and this unit. Create user/group vectornntp,
+# create logs/ and certs/ owned by that account, and install
+# /etc/vectornntp/reader.env before enable.
+Documentation=file:///opt/vectornntp/reader/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+
+User=vectornntp
+Group=vectornntp
+
+# Configuration root is the executable directory (not the process CWD alone).
+WorkingDirectory=/opt/vectornntp/reader
+ExecStart=/opt/vectornntp/reader/VectorNNTPD.ReaderService
+
+# Align TimeoutStopSec above Nntpd graceful shutdown (shipped default 30s).
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+Restart=on-failure
+RestartSec=5
+
+# Requires ConnectionStrings__NntpDB. RabbitMQ/ACME/Cloudflare secrets come from
+# nntpsharedconfig when configured that way; this unit does not set them.
+EnvironmentFile=-/etc/vectornntp/reader.env
+Environment=DOTNET_ENVIRONMENT=Production
+
+# WatchdogSec example (enable only after readiness is verified):
+# WatchdogSec=30
+# Restart=on-watchdog
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/vectornntp/reader/logs /opt/vectornntp/reader/certs
+
+KillSignal=SIGTERM
+SendSIGKILL=yes
+
+[Install]
+WantedBy=multi-user.target
