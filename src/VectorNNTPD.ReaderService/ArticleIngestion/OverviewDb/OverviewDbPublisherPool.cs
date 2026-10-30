@@ -1,3 +1,4 @@
+using VectorNNTPD.Common.Core;
 using VectorNNTPD.ReaderService.ArticleIngestion;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Diagnostics;
@@ -344,6 +345,7 @@ namespace VectorNNTPD.ReaderService.ArticleIngestion.OverviewDb
                 OverviewDbWorkItem? item;
                 try
                 {
+                    // Channel is completed; None only ends the read when the writer is done and empty.
                     item = await _queue.DequeueAsync(CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -356,7 +358,7 @@ namespace VectorNNTPD.ReaderService.ArticleIngestion.OverviewDb
                     break;
                 }
 
-                await PublishOneAsync(item, CancellationToken.None).ConfigureAwait(false);
+                await PublishAcceptedDuringDrainAsync(item).ConfigureAwait(false);
             }
 
             DrainPublishFailures();
@@ -369,17 +371,46 @@ namespace VectorNNTPD.ReaderService.ArticleIngestion.OverviewDb
                 // Does not await broker confirmation — only outstanding-window capacity + write.
                 await _publisher.PublishAsync(item, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested && _queue.IsAccepting)
             {
                 _ = ex; // observed; intentionally ignored at this boundary
-                // Shutdown: abandon in-flight work. Do not claim the OverviewDB work queue
-                // is unavailable — cancellation is not a queue-admission failure.
+                // Queue still accepting: cooperative cancel abandons this in-flight publish.
+                // Do not claim the OverviewDB work queue is unavailable — cancellation is not
+                // a queue-admission failure.
+            }
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested && !_queue.IsAccepting)
+            {
+                _ = ex; // observed; intentionally ignored at this boundary
+                // Queue completed: this item was already dequeued. DrainRemainingAsync only
+                // covers items still in the channel; finish this one under the drain budget.
+                await PublishAcceptedDuringDrainAsync(item).ConfigureAwait(false);
             }
             // codeql[cs/catch-of-all-exceptions] Service/process boundary must observe every non-fatal failure without aborting the host.
             catch (Exception ex)
             {
                 // Local serialization / publish-write failures (e.g. WireFormattingException)
                 // never reached the broker; treat as publish failure + in-memory requeue.
+                OverviewDbHandoffLogMessages.PublishFailed(_logger, ex, item.MessageId, item.ByteLength);
+                await TryRequeueFailureAsync(item).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Publishes one accepted item after <see cref="IOverviewDbWorkQueue.Complete"/> using the
+        /// configured OverviewDB publisher shutdown budget instead of an uncancellable token.
+        /// </summary>
+        private async Task PublishAcceptedDuringDrainAsync(OverviewDbWorkItem item)
+        {
+            var drainSeconds = Math.Max(1, _options.OverviewDbPublisherShutdownSeconds);
+            using var drainCts = new CancellationTokenSource(TimeSpan.FromSeconds(drainSeconds));
+            try
+            {
+                await _publisher.PublishAsync(item, drainCts.Token).ConfigureAwait(false);
+            }
+            // codeql[cs/catch-of-all-exceptions] Service/process boundary must observe every non-fatal failure without aborting the host.
+            catch (Exception ex) when (!ExceptionHelpers.IsFatal(ex))
+            {
+                // Timed-out or failed drain publish: requeue only while still accepting; otherwise log.
                 OverviewDbHandoffLogMessages.PublishFailed(_logger, ex, item.MessageId, item.ByteLength);
                 await TryRequeueFailureAsync(item).ConfigureAwait(false);
             }
