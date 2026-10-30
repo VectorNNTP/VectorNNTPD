@@ -28,11 +28,71 @@ public sealed class QueueDrain20Tests
     [Fact]
     public async Task TwentyWorkers_CallDequeueAsyncConcurrently_AndAllParticipate()
     {
+        // Multi-reader Channel does not promise fair item distribution: one consumer may
+        // drain every article when WaitToReadAsync completes synchronously while data
+        // remains (observed on Linux CI for the Reader twin). Concurrent DequeueAsync
+        // entry is the portable contract; fair sharing is not.
         const int articleCount = 400;
         var queue = CreateQueue(articleCount);
         var seen = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var hits = new int[WorkerCount];
-        var workers = StartWorkers(queue, WorkerCount, seen, hits);
+        using var enteredDequeue = new CountdownEvent(WorkerCount);
+        var concurrentDequeues = 0;
+        var maxConcurrentDequeues = 0;
+
+        var workers = new Task[WorkerCount];
+        for (var i = 0; i < WorkerCount; i++)
+        {
+            var workerIndex = i;
+            workers[workerIndex] = Task.Run(async () =>
+            {
+                var signaledEntry = false;
+                while (true)
+                {
+                    InboundArticle? article;
+                    try
+                    {
+                        var inflight = Interlocked.Increment(ref concurrentDequeues);
+                        UpdateMax(ref maxConcurrentDequeues, inflight);
+                        try
+                        {
+                            var dequeue = queue.DequeueAsync(CancellationToken.None);
+                            if (!signaledEntry)
+                            {
+                                signaledEntry = true;
+                                enteredDequeue.Signal();
+                            }
+
+                            article = await dequeue.ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref concurrentDequeues);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+
+                    if (article is null)
+                    {
+                        return;
+                    }
+
+                    seen.AddOrUpdate(article.MessageId, 1, static (_, count) => count + 1);
+                    Interlocked.Increment(ref hits[workerIndex]);
+                }
+            });
+        }
+
+        Assert.True(
+            enteredDequeue.Wait(TimeSpan.FromSeconds(5)),
+            "all workers must enter DequeueAsync before articles are published");
+        Assert.True(
+            Volatile.Read(ref maxConcurrentDequeues) >= WorkerCount,
+            "DequeueAsync must support WorkerCount concurrent waiters on an empty queue");
+
         EnqueueUnique(queue, articleCount);
         queue.Complete();
         await WaitWorkersAsync(workers);
@@ -40,7 +100,6 @@ public sealed class QueueDrain20Tests
         Assert.Equal(articleCount, seen.Count);
         Assert.All(seen.Values, static count => Assert.Equal(1, count));
         Assert.Equal(articleCount, hits.Sum());
-        Assert.True(hits.Count(static h => h > 0) > 1);
         Assert.Equal(0, queue.QueuedBytes);
         Assert.Equal(0, queue.Count);
     }
@@ -431,6 +490,21 @@ public sealed class QueueDrain20Tests
     {
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await Task.WhenAll(workers).WaitAsync(safety.Token);
+    }
+
+    private static void UpdateMax(ref int location, int candidate)
+    {
+        var current = Volatile.Read(ref location);
+        while (candidate > current)
+        {
+            var observed = Interlocked.CompareExchange(ref location, candidate, current);
+            if (observed == current)
+            {
+                return;
+            }
+
+            current = observed;
+        }
     }
 
     private static InboundArticle Article(string messageId) =>
