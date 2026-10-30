@@ -110,6 +110,23 @@ namespace VectorNNTPD.Common.Tests.Networking.Transport
                 async () => await stream.WriteAsync(new byte[] { 1, 2, 3 }));
         }
 
+        /// <summary>
+        /// Completing the output <see cref="PipeWriter"/> (peer reset / connection teardown) must
+        /// surface as <see cref="IOException"/>, not <see cref="InvalidOperationException"/>, so
+        /// Storage/BackFiller listeners classify peer disconnect correctly.
+        /// </summary>
+        [Fact]
+        public async Task WriteAsync_completed_output_writer_throws_IOException()
+        {
+            await using var duplex = new PipeDuplex();
+            await duplex.Output.CompleteAsync();
+            await using var stream = new NntpConnectionStream(duplex, ownsConnection: false);
+
+            var ex = await Assert.ThrowsAsync<IOException>(
+                async () => await stream.WriteAsync(new byte[] { 1, 2, 3 }));
+            Assert.IsType<InvalidOperationException>(ex.InnerException);
+        }
+
         /// <summary>Large write chunks and is fully readable from the outbound pipe.</summary>
         [Fact]
         public async Task WriteAsync_large_payload_is_fully_flushed()

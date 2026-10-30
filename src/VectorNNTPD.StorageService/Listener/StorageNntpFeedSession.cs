@@ -94,8 +94,14 @@ namespace VectorNNTPD.StorageService.Listener
                 ArticlePrefix.Length + NntpMessageIdValidation.MaxMessageIdLength + ArticleFollowsSuffix.Length];
         }
 
-        /// <summary>Sends the greeting, then reads commands until <c>QUIT</c>, peer close, or cancellation.</summary>
-        public async Task RunAsync(CancellationToken cancellationToken)
+        /// <summary>
+        /// Sends the greeting, then reads commands until <c>QUIT</c>, peer close, or cancellation.
+        /// </summary>
+        /// <returns>
+        /// <see cref="StorageNntpFeedSessionEndReason.PeerDisconnected"/> when a command read observes
+        /// EOF; otherwise <see cref="StorageNntpFeedSessionEndReason.Closed"/>.
+        /// </returns>
+        public async Task<StorageNntpFeedSessionEndReason> RunAsync(CancellationToken cancellationToken)
         {
             await WriteFullyAsync(Greeting, cancellationToken).ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
@@ -103,7 +109,7 @@ namespace VectorNNTPD.StorageService.Listener
                 var command = await ReadCommandAsync(cancellationToken).ConfigureAwait(false);
                 if (command.Kind == CommandReadKind.Disconnected)
                 {
-                    return;
+                    return StorageNntpFeedSessionEndReason.PeerDisconnected;
                 }
 
                 if (command.Kind == CommandReadKind.Overlong)
@@ -122,7 +128,7 @@ namespace VectorNNTPD.StorageService.Listener
                     }
 
                     await WriteFullyAsync(Closing, cancellationToken).ConfigureAwait(false);
-                    return;
+                    return StorageNntpFeedSessionEndReason.Closed;
                 }
 
                 if (TryMatchKeyword(line, TakeThisKeyword, out var takeRest))
@@ -132,7 +138,7 @@ namespace VectorNNTPD.StorageService.Listener
                     var keepOpen = await HandleTakeThisAsync(takeArg, cancellationToken).ConfigureAwait(false);
                     if (!keepOpen)
                     {
-                        return;
+                        return StorageNntpFeedSessionEndReason.Closed;
                     }
 
                     continue;
@@ -148,6 +154,8 @@ namespace VectorNNTPD.StorageService.Listener
 
                 await WriteFullyAsync(UnknownCommand, cancellationToken).ConfigureAwait(false);
             }
+
+            return StorageNntpFeedSessionEndReason.Closed;
         }
 
         /// <inheritdoc />

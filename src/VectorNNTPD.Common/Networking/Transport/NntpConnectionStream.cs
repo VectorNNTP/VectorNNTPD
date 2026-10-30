@@ -158,13 +158,24 @@ namespace VectorNNTPD.Common.Networking.Transport
             FlushResult flush;
             do
             {
-                var memory = _connection.Output.GetMemory(Math.Min(remaining.Length, WriteChunkBytes));
-                var toCopy = Math.Min(memory.Length, remaining.Length);
-                remaining.Span[..toCopy].CopyTo(memory.Span);
-                _connection.Output.Advance(toCopy);
-                remaining = remaining[toCopy..];
+                try
+                {
+                    var memory = _connection.Output.GetMemory(Math.Min(remaining.Length, WriteChunkBytes));
+                    var toCopy = Math.Min(memory.Length, remaining.Length);
+                    remaining.Span[..toCopy].CopyTo(memory.Span);
+                    _connection.Output.Advance(toCopy);
+                    remaining = remaining[toCopy..];
 
-                flush = await _connection.Output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    flush = await _connection.Output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    // Peer reset / CompleteAsync can finish the output writer while a session write is
+                    // in flight. Surface that as IOException so listeners classify peer disconnect
+                    // rather than an operational failure.
+                    throw new IOException("NNTP connection output completed while writing.", ex);
+                }
+
                 if (flush.IsCanceled)
                 {
                     cancellationToken.ThrowIfCancellationRequested();

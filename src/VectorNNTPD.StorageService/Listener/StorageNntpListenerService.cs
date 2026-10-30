@@ -449,7 +449,13 @@ namespace VectorNNTPD.StorageService.Listener
                         resolveRetrievableArticle: _resolveRetrievableArticle,
                         afterArticleDelivered: _afterArticleDelivered,
                         acquireArticleReadLease: _acquireArticleReadLease);
-                    await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                    var endReason = await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                    if (endReason == StorageNntpFeedSessionEndReason.PeerDisconnected)
+                    {
+                        // Shared transport surfaces peer close as EOF on the next command read;
+                        // that path completes RunAsync without throwing IOException.
+                        StorageNntpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
+                    }
                 }
             }
             catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
