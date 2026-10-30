@@ -4,7 +4,7 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Networking.Proxy;
 using VectorNNTPD.ReaderService.Session.Commands.Posting;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 public sealed class PostArticleValidationTests

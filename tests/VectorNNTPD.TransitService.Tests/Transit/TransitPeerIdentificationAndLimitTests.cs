@@ -1,10 +1,10 @@
 using System.Net;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Transit;
 
 public sealed class TransitPeerIdentificationAndLimitTests

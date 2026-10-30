@@ -1,6 +1,6 @@
 using System.Net;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.TransitService.SessionState.RateLimiting;
-
 namespace VectorNNTPD.TransitService.SessionState
 {
     /// <summary>

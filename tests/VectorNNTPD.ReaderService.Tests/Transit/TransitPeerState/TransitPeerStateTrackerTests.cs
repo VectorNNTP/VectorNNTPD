@@ -1,11 +1,11 @@
 using System.Net;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Transit;
 using Microsoft.Extensions.Logging.Abstractions;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Transit;
 
 public sealed class TransitPeerStateTrackerTests

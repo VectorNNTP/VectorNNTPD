@@ -8,13 +8,13 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Authentication;
 using VectorNNTPD.TransitService.Session.Commands;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 using VectorNNTPD.TransitService.Tests.Networking.Transport;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 /// <summary>Session-level COMPRESS DEFLATE (RFC 8054) regressions over the real transport stack.</summary>
@@ -684,7 +684,7 @@ public sealed class NntpCompressTests
                 Output = output;
                 _pauseReadsFails = pauseReadsFails;
                 _upgradeFails = upgradeFails;
-                ClientIdentity = VectorNNTPD.TransitService.Networking.Proxy.ConnectionClientIdentity.Direct(
+                ClientIdentity = VectorNNTPD.Common.Networking.Proxy.ConnectionClientIdentity.Direct(
                     new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119));
             }
 
@@ -692,7 +692,7 @@ public sealed class NntpCompressTests
             public System.IO.Pipelines.PipeWriter Output { get; }
             public System.Net.EndPoint? RemoteEndPoint => ClientIdentity.TcpPeer;
             public System.Net.EndPoint? LocalEndPoint => null;
-            public VectorNNTPD.TransitService.Networking.Proxy.ConnectionClientIdentity ClientIdentity { get; }
+            public VectorNNTPD.Common.Networking.Proxy.ConnectionClientIdentity ClientIdentity { get; }
             public bool IsTls => false;
 
             public bool TryGetNegotiatedTlsParameters(out string tlsVersion, out string cipher)

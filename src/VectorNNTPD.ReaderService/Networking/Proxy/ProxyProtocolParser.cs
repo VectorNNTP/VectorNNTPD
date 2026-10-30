@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Networking.Proxy
 {
     /// <summary>Incremental parse status for a PROXY v1/v2 preamble buffer.</summary>

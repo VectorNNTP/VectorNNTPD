@@ -20,7 +20,7 @@ using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Authentication;
 using VectorNNTPD.TransitService.SessionState.BytesAccounting;
-using VectorNNTPD.TransitService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.TransitService.Authentication;
 using VectorNNTPD.TransitService.SessionState;
 using VectorNNTPD.TransitService.Storage;
@@ -41,7 +41,8 @@ using VectorNNTPD.TransitService.Telemetry;
 using VectorNNTPD.TransitService.Transit;
 using VectorNNTPD.TransitService.Transport.Vatp;
 using VectorNNTPD.Common.Configuration;
-
+using VectorNNTPD.TransitService.SessionState.RateLimiting;
+using VectorNNTPD.Common.Networking.Listeners;
 namespace VectorNNTPD.TransitService.Hosting
 {
     /// <summary>

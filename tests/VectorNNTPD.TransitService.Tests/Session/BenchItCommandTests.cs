@@ -4,11 +4,11 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Commands;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 /// <summary>Internal BENCHIT benchmark facility contracts (not a production protocol feature).</summary>

@@ -1,5 +1,5 @@
 using VectorNNTPD.TransitService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Moderation
 {
     /// <summary>

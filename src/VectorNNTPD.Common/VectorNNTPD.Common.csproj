@@ -5,7 +5,7 @@
     <Platforms>x64</Platforms>
     <RootNamespace>VectorNNTPD.Common</RootNamespace>
     <AssemblyName>VectorNNTPD.Common</AssemblyName>
-    <Description>Shared ACME, Cloudflare DNS, bind-address, NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, StorageServer cache-fleet advertisement JSON contract and topology name constants, byte-oriented article parsing, yEnc validation, canonical article materialization, Vector Article Transfer Protocol (VATP) framing, and RabbitMQ connectivity (connection lifecycle, channels) for VectorNNTP applications. RabbitMQ topology declaration, ArticleWork, and Management HTTP remain application-owned.</Description>
+    <Description>Shared ACME, Cloudflare DNS, bind-address, high-performance listen/accept and System.IO.Pipelines duplex transport (SocketAcceptListener, NntpConnection), NntpDB, article-content primitives, Diablo article classification, ArticleRecord, ArticleId, OverviewDB protobuf wire contract, StorageServer cache-fleet advertisement JSON contract and topology name constants, byte-oriented article parsing, yEnc validation, canonical article materialization, Vector Article Transfer Protocol (VATP) framing, and RabbitMQ connectivity (connection lifecycle, channels) for VectorNNTP applications. RabbitMQ topology declaration, ArticleWork, NNTP session/command servers, and Management HTTP remain application-owned.</Description>
     <IsPackable>false</IsPackable>
     <OutputType>Library</OutputType>
   </PropertyGroup>

@@ -22,15 +22,16 @@ Permanent docs live under [`docs/`](docs/). Start with [`docs/README.md`](docs/R
 | Document | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | BackFiller host lifecycle, Article Work, byte-oriented data plane |
+| [docs/nntpd-reader-transit.md](docs/nntpd-reader-transit.md) | Reader/Transit roles, packaging, CAPABILITIES vs HELP, deployment |
 | [docs/configuration.md](docs/configuration.md) | BackFiller options, RabbitMQ, NntpDB, secrets (BackFiller-focused) |
 | [docs/storage.md](docs/storage.md) | StorageService architecture and configuration |
 | [docs/storage-nntp-feed.md](docs/storage-nntp-feed.md) | Storage NNTP feed (ARTICLE / TAKETHIS / QUIT) |
 | [docs/logging.md](docs/logging.md) | Serilog for BackFiller and StorageService |
-| [docs/systemd.md](docs/systemd.md) | systemd notify/watchdog for both hosts |
+| [docs/systemd.md](docs/systemd.md) | systemd notify/watchdog for BackFiller/Storage |
 | [docs/common/](docs/common/) | Shared library contracts (ArticleRecord, VATP, Common config) |
 | [docs/standards/](docs/standards/) | Local RFC and protocol standards library |
-| [docs/schema/](docs/schema/) | Upstream Transit/PostFilter SQL references only — not applied by these hosts |
-| [docs/reference/upstream-nntpd/](docs/reference/upstream-nntpd/) | Labeled upstream NNTPD notes (not VectorNNTPD behaviour) |
+| [docs/schema/](docs/schema/) | Transit / PostFilter / account-art-type SQL (operator-applied; no migrator) |
+| [docs/reference/upstream-nntpd/](docs/reference/upstream-nntpd/) | Historical monolith NNTPD notes |
 
 ## Build
 

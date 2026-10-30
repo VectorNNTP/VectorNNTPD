@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 
+using VectorNNTPD.Common.Networking.RateLimiting;
+
 namespace VectorNNTPD.ReaderService.SessionState.RateLimiting
 {
     /// <summary>

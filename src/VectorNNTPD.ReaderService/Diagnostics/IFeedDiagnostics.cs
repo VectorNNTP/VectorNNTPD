@@ -1,17 +1,15 @@
 using VectorNNTPD.ReaderService.ArticleIngestion;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Transit;
+using VectorNNTPD.Common.Networking.Diagnostics;
 
 namespace VectorNNTPD.ReaderService.Diagnostics
 {
     /// <summary>
     /// Opt-in real-feed observability. Disabled implementations are no-ops.
     /// </summary>
-    public interface IFeedDiagnostics
+    public interface IFeedDiagnostics : ITcpByteDiagnostics
     {
-        /// <summary>Gets whether probes should be attached and snapshots emitted.</summary>
-        bool IsEnabled { get; }
-
         /// <summary>Records a Transit admission rejection (no session runs).</summary>
         void OnRejected(string peerName, string remote);
 
@@ -20,12 +18,6 @@ namespace VectorNNTPD.ReaderService.Diagnostics
 
         /// <summary>Unregisters a probe when the session ends.</summary>
         void OnReleased(FeedSessionProbe? probe);
-
-        /// <summary>
-        /// Adds application-layer bytes read from an upstream connection (plain TCP payload,
-        /// or TLS-decrypted octets). No-op when disabled.
-        /// </summary>
-        void RecordTcpBytes(int bytes);
 
         /// <summary>Marks the single spool drain loop as busy around one persist.</summary>
         void BeginSpoolWork();

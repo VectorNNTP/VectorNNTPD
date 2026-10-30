@@ -13,14 +13,14 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Authentication;
 using VectorNNTPD.ReaderService.Session.Commands;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.Networking.Transport;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 /// <summary>Command RX/TX logging contract (ownership, redaction, timing shape).</summary>

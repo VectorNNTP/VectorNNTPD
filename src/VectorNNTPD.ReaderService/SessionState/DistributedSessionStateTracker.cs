@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
 using VectorNNTPD.ReaderService.SessionState.BytesAccounting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.SessionState.RateLimiting;
-
 namespace VectorNNTPD.ReaderService.SessionState
 {
     /// <summary>

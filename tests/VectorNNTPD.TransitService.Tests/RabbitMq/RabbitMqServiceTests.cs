@@ -194,14 +194,23 @@ public sealed class RabbitMqServiceTests
         await service.StartAsync(CancellationToken.None);
         var first = factory.LastConnection!;
         factory.RemainingConnectFailures = 2;
-        var recovered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        factory.Connected = recovered;
+        // Connected fires when the factory returns a connection; generation is published after that.
+        // Wait on ConnectionReplaced so the assert observes the installed generation.
+        var recovered = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.ConnectionReplaced += (_, args) =>
+        {
+            if (args.IsReplacement)
+            {
+                recovered.TrySetResult(args.ConnectionGeneration);
+            }
+        };
 
         first.SimulateLost();
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        await recovered.Task.WaitAsync(safety.Token);
+        var generation = await recovered.Task.WaitAsync(safety.Token);
 
+        Assert.Equal(2, generation);
         Assert.Equal(2, service.ConnectionGeneration);
         Assert.True(service.IsReady);
         Assert.Equal(1 + 2 + 1, factory.AttemptCount);
@@ -219,8 +228,16 @@ public sealed class RabbitMqServiceTests
         await service.StartAsync(CancellationToken.None);
         var failures = formerAbandonThreshold + 3;
         factory.RemainingConnectFailures = failures;
-        var recovered = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        factory.Connected = recovered;
+        // Connected fires when the factory returns a connection; generation is published after that.
+        // Wait on ConnectionReplaced so the assert observes the installed generation.
+        var recovered = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        service.ConnectionReplaced += (_, args) =>
+        {
+            if (args.IsReplacement)
+            {
+                recovered.TrySetResult(args.ConnectionGeneration);
+            }
+        };
         factory.LastConnection!.SimulateLost();
 
         using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -229,8 +246,9 @@ public sealed class RabbitMqServiceTests
         Assert.Equal(1, service.ConnectionGeneration);
         Assert.False(service.Execution!.IsCompleted);
 
-        await recovered.Task.WaitAsync(safety.Token);
+        var generation = await recovered.Task.WaitAsync(safety.Token);
 
+        Assert.Equal(2, generation);
         Assert.Equal(2, service.ConnectionGeneration);
         Assert.True(service.IsReady);
         Assert.Equal(1 + failures + 1, factory.AttemptCount);

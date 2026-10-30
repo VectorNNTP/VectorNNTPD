@@ -14,7 +14,7 @@ using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.Networking.Listeners;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Authentication;
 using VectorNNTPD.TransitService.Tests.Acme;

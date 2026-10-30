@@ -3,7 +3,7 @@ using System.Text;
 using VectorNNTPD.Common.Articles.Parsing;
 using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Fixtures;
 
 /// <summary>

@@ -1,22 +1,25 @@
 # VectorNNTPD documentation
 
-This directory is the permanent documentation for the **VectorNNTPD** solution currently in `VectorNNTPD.slnx`: BackFillerService, StorageService, and Common (plus their tests).
+Permanent documentation for the **VectorNNTPD** solution in `VectorNNTPD.slnx`:
 
-ReaderService and TransitService may appear on a development machine as untracked working-tree directories; they are **not** part of the solution on `master` and are not documented here as shipping hosts.
+- `BackFillerService`
+- `StorageService`
+- `ReaderService`
+- `TransitService`
+- `Common` (+ corresponding test projects)
 
 ## Start here
 
 | Document | Audience | Contents |
 |---|---|---|
 | [../README.md](../README.md) | Operators / developers | Build, test, publish, Linux install overview |
-| [architecture.md](architecture.md) | Developers | BackFiller host lifecycle, Article Work, NNTP client/listener roles, silent-consumer monitoring, byte-oriented data plane |
-| [configuration.md](configuration.md) | Operators / developers | **BackFiller only** — options, JSON locations, RabbitMQ, NntpDB, secrets |
-| [storage.md](storage.md) | Operators / developers | **StorageService** architecture, configuration, persistence, messaging, ops |
-| [storage-nntp-feed.md](storage-nntp-feed.md) | Developers / integrators | Storage NNTP feed: ARTICLE / TAKETHIS / QUIT only |
-| [logging.md](logging.md) | Operators / developers | Serilog-only logging for BackFiller and StorageService |
-| [systemd.md](systemd.md) | Operators | systemd notify/watchdog install and operations for both hosts |
-
-Redis / PostFilter / Transit DDL under [schema/](schema/) are **not** Storage or BackFiller startup requirements.
+| [nntpd-reader-transit.md](nntpd-reader-transit.md) | Operators / developers | Reader/Transit roles, packaging, CAPABILITIES vs HELP, deployment |
+| [architecture.md](architecture.md) | Developers | BackFiller host lifecycle, Article Work, byte-oriented data plane |
+| [configuration.md](configuration.md) | Operators / developers | **BackFiller** options, RabbitMQ, NntpDB, secrets |
+| [storage.md](storage.md) | Operators / developers | **StorageService** architecture, configuration, persistence, messaging |
+| [storage-nntp-feed.md](storage-nntp-feed.md) | Developers / integrators | Storage NNTP feed: ARTICLE / TAKETHIS / QUIT |
+| [logging.md](logging.md) | Operators / developers | Serilog for BackFiller and StorageService (Reader/Transit use host Serilog sections) |
+| [systemd.md](systemd.md) | Operators | systemd notify/watchdog (BackFiller/Storage; Reader/Transit units in deploy + nntpd-reader-transit) |
 
 ## Shared library
 
@@ -27,36 +30,32 @@ Redis / PostFilter / Transit DDL under [schema/](schema/) are **not** Storage or
 | [common/configuration.md](common/configuration.md) | Shared configuration helpers |
 | [common/ArticleRecord.md](common/ArticleRecord.md) | Canonical article envelope |
 | [common/vatp.md](common/vatp.md) | Vector Article Transfer Protocol |
-| [common/systemd-host-abstraction.md](common/systemd-host-abstraction.md) | **Proposal only** — comparing Storage vs BackFiller systemd stacks |
+| [common/systemd-host-abstraction.md](common/systemd-host-abstraction.md) | **Proposal only** — Storage vs BackFiller systemd stacks |
+
+## Common ownership vs Reader/Transit duplication
+
+`VectorNNTPD.Common` holds genuinely shared infrastructure (ACME, Cloudflare, NntpDB sessions, article parse/`ArticleRecord`, RabbitMQ connection lifecycle, gzip logging sinks, cache-fleet wire contracts). It is **not** an NNTP server library.
+
+ReaderService and TransitService each embed a full NNTP server implementation (session, commands, listeners, PostFilter, Redis, ingestion, …). ~527 corresponding source files differ only by namespace (`VectorNNTPD.ReaderService` vs `VectorNNTPD.TransitService`); a small set differs by role (hosting registration, CAPABILITIES, MODE gating). That duplication is intentional so neither host depends on the other and Common does not become a relocated monolith. There is **no** `VectorNNTPD.NntpServer` project.
 
 ## Standards and schema
 
 | Path | Contents |
 |---|---|
-| [standards/rfcs/](standards/rfcs/) | Local NNTP / Usenet RFC text library (authoritative for protocol work in this repo) |
-| [standards/spamd/](standards/spamd/) | SPAMC/SPAMD protocol text — **upstream PostFilter interoperability**; not a VectorNNTPD host feature |
-| [standards/haproxy/](standards/haproxy/) | PROXY protocol text — standards library only; not an implementation claim for BackFiller/Storage |
-| [standards/pgpverify/](standards/pgpverify/) | INN pgpverify format notes — interoperability reference; BackFiller does not implement PGPVERIFY |
-| [schema/](schema/) | **Upstream-only** Transit / PostFilter / `account_art_type` SQL — see [schema/README.md](schema/README.md) |
+| [standards/rfcs/](standards/rfcs/) | Local NNTP / Usenet RFC text library |
+| [standards/spamd/](standards/spamd/) | SPAMC/SPAMD protocol text (Reader PostFilter) |
+| [standards/haproxy/](standards/haproxy/) | PROXY protocol reference |
+| [standards/pgpverify/](standards/pgpverify/) | INN pgpverify format notes |
+| [schema/](schema/) | NntpDB SQL for Transit / PostFilter / `account_art_type` — see [schema/README.md](schema/README.md) |
 
-## Upstream NNTPD reference (not hosts in this solution)
-
-Material from `VectorNNTP.NNTPD` for engineers who need command or PostFilter context when
-working beside an NNTPD deployment. Paths such as `src/VectorNNTP.NNTPD/...` refer to the
-**upstream** repository. They are **not** an implementation guarantee for
-`VectorNNTPD.BackFillerService` or `VectorNNTPD.StorageService`.
-
-For what this solution actually speaks on the wire, use [architecture.md](architecture.md)
-(BackFiller upstream client + cache listener) and [storage-nntp-feed.md](storage-nntp-feed.md)
-(Storage ARTICLE / TAKETHIS / QUIT). Do not treat the upstream command checklist as Storage or
-BackFiller CAPABILITIES.
-
-Upstream Redis and PostFilter configuration are **not** required to operate VectorNNTPD hosts.
+## Historical / upstream NNTPD reference
 
 | Document | Topic |
 |---|---|
-| [reference/upstream-nntpd/commands.md](reference/upstream-nntpd/commands.md) | Upstream NNTPD command inventory |
-| [reference/upstream-nntpd/postfilter.md](reference/upstream-nntpd/postfilter.md) | Upstream PostFilter operator guide |
+| [reference/upstream-nntpd/commands.md](reference/upstream-nntpd/commands.md) | Monolith NNTPD command inventory (provenance) |
+| [reference/upstream-nntpd/postfilter.md](reference/upstream-nntpd/postfilter.md) | PostFilter operator guide (applies to Reader PostFilter behaviour) |
+
+For live VectorNNTPD wire behaviour prefer [nntpd-reader-transit.md](nntpd-reader-transit.md), [storage-nntp-feed.md](storage-nntp-feed.md), and [architecture.md](architecture.md).
 
 ## Agent and contribution docs (repository root)
 

@@ -3,10 +3,10 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Networking;
 using VectorNNTPD.ReaderService.Networking.Listeners;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Listeners;
 namespace VectorNNTPD.ReaderService.Tests.Networking.Transport;
 
 /// <summary>

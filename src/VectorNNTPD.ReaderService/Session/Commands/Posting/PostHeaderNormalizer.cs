@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Net;
 using System.Text;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Session.Commands.Posting
 {
     /// <summary>Replaces server-owned POST headers and emits one destuffed article buffer.</summary>

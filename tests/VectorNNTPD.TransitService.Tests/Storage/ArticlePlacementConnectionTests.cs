@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.Common.Transport.ArticleTransfer;
@@ -226,7 +227,9 @@ public sealed class ArticlePlacementConnectionTests
     [Fact]
     public async Task Cancel_during_dial_does_not_open_a_second_connection()
     {
-        await using var server = StoreServer.Start(handshakeDelay: TimeSpan.FromMilliseconds(400));
+        // Hold TLS handshake with an explicit gate so dial stays shared without racing the
+        // client's 2s TLS timeout (RSA cert creation + wall-clock delay was flaky under Linux CI load).
+        await using var server = StoreServer.Start(holdHandshake: true);
         await using var client = Client(maxOutstanding: 2);
         var target = Entry(server.Port);
         using var cts = new CancellationTokenSource();
@@ -234,11 +237,11 @@ public sealed class ArticlePlacementConnectionTests
         var secondArticle = CanonicalArticleText.CreateQueued("<dial-b@example.test>", InboundArticleProducer.TakeThis);
         var first = client.PlaceAsync(firstArticle.Record, target, cts.Token).AsTask();
         var started = DateTime.UtcNow;
-        while (client.DialAttempts < 1)
+        while (server.AcceptedConnections < 1)
         {
             if (DateTime.UtcNow - started > TimeSpan.FromSeconds(2))
             {
-                throw new TimeoutException("Dial did not start.");
+                throw new TimeoutException("Dial did not reach the held handshake.");
             }
 
             await Task.Delay(5);
@@ -246,8 +249,10 @@ public sealed class ArticlePlacementConnectionTests
 
         var second = client.PlaceAsync(secondArticle.Record, target, CancellationToken.None).AsTask();
         await cts.CancelAsync();
-        var firstResult = await first;
-        var secondResult = await second;
+        server.ReleaseHandshake();
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var firstResult = await first.WaitAsync(safety.Token);
+        var secondResult = await second.WaitAsync(safety.Token);
         Assert.Equal(ArticlePlacementKind.Cancelled, firstResult.Kind);
         Assert.Equal(ArticlePlacementKind.Accepted, secondResult.Kind);
         Assert.Equal(1, client.ConnectCount);
@@ -407,11 +412,15 @@ public sealed class ArticlePlacementConnectionTests
 
     private sealed class StoreServer : IAsyncDisposable
     {
+        private static readonly X509Certificate2 SharedServerCertificate =
+            VatpTestCertificates.CreateServerCertificate();
+
         private readonly TcpListener _listener;
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _accept;
         private readonly ConcurrentDictionary<SslStream, byte> _streams = new();
         private readonly ConcurrentQueue<uint> _streamIds = new();
+        private readonly TaskCompletionSource? _handshakeHold;
         private int _outstanding;
         private int _peak;
         private int _stores;
@@ -430,7 +439,8 @@ public sealed class ArticlePlacementConnectionTests
             int closeAfterAccepted,
             bool grantWindows,
             int initialCredit,
-            TimeSpan handshakeDelay)
+            TimeSpan handshakeDelay,
+            bool holdHandshake)
         {
             _listener = listener;
             HoldResult = holdResult;
@@ -441,6 +451,11 @@ public sealed class ArticlePlacementConnectionTests
             GrantWindows = grantWindows;
             InitialCredit = initialCredit;
             HandshakeDelay = handshakeDelay;
+            if (holdHandshake)
+            {
+                _handshakeHold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
             Port = ((IPEndPoint)listener.LocalEndpoint).Port;
             _accept = Task.Run(AcceptLoop);
         }
@@ -489,7 +504,8 @@ public sealed class ArticlePlacementConnectionTests
             int closeAfterAccepted = 0,
             bool grantWindows = true,
             int initialCredit = 1024 * 1024,
-            TimeSpan handshakeDelay = default)
+            TimeSpan handshakeDelay = default,
+            bool holdHandshake = false)
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();
@@ -502,7 +518,8 @@ public sealed class ArticlePlacementConnectionTests
                 closeAfterAccepted,
                 grantWindows,
                 initialCredit,
-                handshakeDelay);
+                handshakeDelay,
+                holdHandshake);
         }
 
         public void DropConnections()
@@ -535,8 +552,11 @@ public sealed class ArticlePlacementConnectionTests
 
         public void ReleaseResults() => ResultsReleased.TrySetResult();
 
+        public void ReleaseHandshake() => _handshakeHold?.TrySetResult();
+
         public async ValueTask DisposeAsync()
         {
+            _handshakeHold?.TrySetCanceled();
             await _stop.CancelAsync();
             _listener.Stop();
             try
@@ -570,21 +590,24 @@ public sealed class ArticlePlacementConnectionTests
 
         private async Task HandleAsync(TcpClient tcp)
         {
-            var certificate = VatpTestCertificates.CreateServerCertificate();
             using var tcpDisposable = tcp;
             // codeql[cs/local-not-disposed] SslStream ownership transfers to the VATP/TLS session fixture for connection lifetime.
             var ssl = new SslStream(tcp.GetStream(), leaveInnerStreamOpen: false);
             _streams.TryAdd(ssl, 0);
             try
             {
-                if (HandshakeDelay > TimeSpan.Zero)
+                if (_handshakeHold is not null)
+                {
+                    await _handshakeHold.Task.WaitAsync(_stop.Token);
+                }
+                else if (HandshakeDelay > TimeSpan.Zero)
                 {
                     await Task.Delay(HandshakeDelay, _stop.Token);
                 }
 
                 await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
                 {
-                    ServerCertificate = certificate,
+                    ServerCertificate = SharedServerCertificate,
                     EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                 });
                 var buffer = new byte[64 * 1024];

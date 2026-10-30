@@ -10,7 +10,7 @@ using VectorNNTPD.ReaderService.Networking.Proxy;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.ArticleIngestion;
 
 /// <summary>Post-queue news disposition and INN <c>news</c> writer contracts.</summary>

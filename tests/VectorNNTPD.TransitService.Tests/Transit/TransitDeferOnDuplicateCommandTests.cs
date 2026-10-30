@@ -7,14 +7,14 @@ using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.History;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Redis;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 using VectorNNTPD.TransitService.Transit;
 using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Transit;
 
 /// <summary>

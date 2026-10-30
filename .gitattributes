@@ -2,3 +2,6 @@
 # core.autocrlf cannot rewrite LF fixtures to CRLF on Windows checkout.
 tests/fixtures/articles/** -text
 tests/fixtures/SabctoolsYEnc/** -text
+tests/VectorNNTPD.ReaderService.Tests/Data/InnArticles/** -text
+tests/VectorNNTPD.TransitService.Tests/Data/InnArticles/** -text
+tests/VectorNNTPD.Common.Tests/Fixtures/SabctoolsYEnc/** -text

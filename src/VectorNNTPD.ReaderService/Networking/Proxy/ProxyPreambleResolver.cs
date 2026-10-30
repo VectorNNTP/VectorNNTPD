@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Networking.Proxy
 {
     /// <summary>Result of resolving connection identity and optional PROXY leftover octets.</summary>

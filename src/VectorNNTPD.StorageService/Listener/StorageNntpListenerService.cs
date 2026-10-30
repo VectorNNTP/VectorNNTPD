@@ -1,12 +1,12 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
 using VectorNNTPD.Common.Acme;
 using VectorNNTPD.Common.Core;
 using VectorNNTPD.Common.Networking.Certificates;
+using VectorNNTPD.Common.Networking.Proxy;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.StorageService.Configuration;
 using VectorNNTPD.Common.Articles;
 using VectorNNTPD.StorageService.Ingress;
@@ -39,7 +39,7 @@ namespace VectorNNTPD.StorageService.Listener
         /// </summary>
         private readonly Func<CancellationToken, Task>? _publishAfterBind;
         private readonly object _gate = new();
-        private readonly List<Socket> _listenSockets = [];
+        private readonly List<SocketAcceptListener> _listeners = [];
         private readonly ConcurrentDictionary<Task, byte> _connections = new();
         private readonly CancellationTokenSource _runCts = new();
 
@@ -189,7 +189,7 @@ namespace VectorNNTPD.StorageService.Listener
             {
                 lock (_gate)
                 {
-                    return [.. _listenSockets.Select(static socket => socket.LocalEndPoint)];
+                    return [.. _listeners.Select(static listener => (EndPoint?)listener.LocalEndPoint)];
                 }
             }
         }
@@ -232,7 +232,7 @@ namespace VectorNNTPD.StorageService.Listener
 
                 StorageNntpListenerLogMessages.Starting(_logger, Runtime.BindPortTls, bindings.Count);
                 BindEndpoints(bindings);
-                if (_listenSockets.Count == 0)
+                if (_listeners.Count == 0)
                 {
                     throw new InvalidOperationException("Storage NNTP Listener failed to bind any endpoint.");
                 }
@@ -247,8 +247,9 @@ namespace VectorNNTPD.StorageService.Listener
                     _state = StorageNntpListenerState.Running;
                 }
 
-                StorageNntpListenerLogMessages.Running(_logger, _listenSockets.Count, Runtime.BindPortTls);
-                _acceptTask = AcceptAllAsync(_runCts.Token);
+                StorageNntpListenerLogMessages.Running(_logger, _listeners.Count, Runtime.BindPortTls);
+                _acceptTask = Task.WhenAll(
+                    _listeners.Select(static listener => listener.AcceptLoopTask ?? Task.CompletedTask));
             }
             catch (Exception ex)
             {
@@ -285,7 +286,7 @@ namespace VectorNNTPD.StorageService.Listener
 
             StorageNntpListenerLogMessages.Retiring(_logger);
             await _runCts.CancelAsync().ConfigureAwait(false);
-            CloseListenSockets();
+            await CloseListenSocketsAsync().ConfigureAwait(false);
 
             var accept = _acceptTask;
             if (accept is not null)
@@ -319,14 +320,21 @@ namespace VectorNNTPD.StorageService.Listener
         {
             foreach (var binding in bindings)
             {
+                SocketAcceptListener? listener = null;
                 try
                 {
-                    var socket = CreateBoundListenSocket(binding);
+                    listener = new SocketAcceptListener(
+                        binding,
+                        OnAcceptedAsync,
+                        _logger,
+                        reuseAddress: false);
+                    listener.Start();
                     lock (_gate)
                     {
-                        _listenSockets.Add(socket);
+                        _listeners.Add(listener);
                     }
 
+                    listener = null;
                     StorageNntpListenerLogMessages.EndpointBound(
                         _logger,
                         binding.EndPoint.ToString() ?? string.Empty,
@@ -340,28 +348,21 @@ namespace VectorNNTPD.StorageService.Listener
                         _logger,
                         binding.Address.AddressFamily.ToString(),
                         ex.SocketErrorCode.ToString());
+                    if (listener is not null)
+                    {
+                        _ = listener.DisposeAsync().AsTask();
+                    }
+                }
+                catch
+                {
+                    if (listener is not null)
+                    {
+                        _ = listener.DisposeAsync().AsTask();
+                    }
+
+                    throw;
                 }
             }
-        }
-
-        private static Socket CreateBoundListenSocket(ListenBinding binding)
-        {
-            var endpoint = binding.EndPoint;
-            using var ownership = new DisposableOwnership<Socket>(
-                new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp)
-                {
-                    NoDelay = true,
-                });
-            var socket = ownership.Resource;
-
-            if (endpoint.AddressFamily == AddressFamily.InterNetworkV6)
-            {
-                socket.DualMode = binding.DualMode;
-            }
-
-            socket.Bind(endpoint);
-            socket.Listen(512);
-            return ownership.Transfer();
         }
 
         private bool IsImplicitWildcard(IPEndPoint endpoint)
@@ -375,89 +376,53 @@ namespace VectorNNTPD.StorageService.Listener
                    && (endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any));
         }
 
-        private async Task AcceptAllAsync(CancellationToken cancellationToken)
+        private ValueTask OnAcceptedAsync(Socket accepted, CancellationToken cancellationToken)
         {
-            Socket[] sockets;
-            lock (_gate)
+            var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
+            if (!TryAdmit())
             {
-                sockets = [.. _listenSockets];
+                StorageNntpListenerLogMessages.CapacityRejected(_logger, remote, Runtime.Listener.MaxActiveConnections);
+                accepted.Dispose();
+                return ValueTask.CompletedTask;
             }
 
-            await Task.WhenAll(sockets.Select(socket => AcceptLoopAsync(socket, cancellationToken))).ConfigureAwait(false);
-        }
-
-        private async Task AcceptLoopAsync(Socket listenSocket, CancellationToken cancellationToken)
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                Socket accepted;
-                try
-                {
-                    accepted = await listenSocket.AcceptAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (SocketException)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
-                if (!TryAdmit())
-                {
-                    StorageNntpListenerLogMessages.CapacityRejected(_logger, remote, Runtime.Listener.MaxActiveConnections);
-                    accepted.Dispose();
-                    continue;
-                }
-
-                StorageNntpListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
-                var connection = ProcessAsync(accepted, remote, cancellationToken);
-                _connections[connection] = 0;
-                _ = connection.ContinueWith(
-                    static (task, state) => ((StorageNntpListenerService)state!)._connections.TryRemove(task, out _),
-                    this,
-                    TaskScheduler.Default);
-            }
+            StorageNntpListenerLogMessages.Accepted(_logger, remote, ActiveConnections);
+            var connection = ProcessAsync(accepted, remote, cancellationToken);
+            _connections[connection] = 0;
+            _ = connection.ContinueWith(
+                static (task, state) => ((StorageNntpListenerService)state!)._connections.TryRemove(task, out _),
+                this,
+                TaskScheduler.Default);
+            return ValueTask.CompletedTask;
         }
 
         private async Task ProcessAsync(Socket accepted, string remote, CancellationToken cancellationToken)
         {
             var handshakeCompleted = false;
+            var socketOwnedByConnection = false;
             try
             {
-                await using var network = new NetworkStream(accepted, ownsSocket: true);
                 LastAcceptedSendBuffer = accepted.SendBufferSize;
                 LastAcceptedReceiveBuffer = accepted.ReceiveBufferSize;
-                using var lease = _certificates.Acquire();
-                await using var ssl = new SslStream(network, leaveInnerStreamOpen: true);
-                var options = new SslServerAuthenticationOptions
+                if (accepted.RemoteEndPoint is not IPEndPoint tcpPeer)
                 {
-                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                    ClientCertificateRequired = false,
-                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-                    ServerCertificateContext = lease.Context,
-                };
+                    return;
+                }
 
+                var identity = ConnectionClientIdentity.Direct(tcpPeer);
                 using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 handshakeCts.CancelAfter(Runtime.Listener.TlsHandshakeTimeout);
+                NntpConnection connection;
                 try
                 {
-                    await ssl.AuthenticateAsServerAsync(options, handshakeCts.Token).ConfigureAwait(false);
+                    connection = await NntpConnection.StartTlsAsync(
+                            accepted,
+                            _certificates,
+                            identity,
+                            _logger,
+                            handshakeCts.Token)
+                        .ConfigureAwait(false);
+                    socketOwnedByConnection = true;
                 }
                 catch (OperationCanceledException) when (handshakeCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
@@ -465,23 +430,33 @@ namespace VectorNNTPD.StorageService.Listener
                 }
 
                 handshakeCompleted = true;
-                await using var transport = new StreamStorageListenerTransport(
-                    ssl,
-                    Runtime.Listener.IoProgressTimeout,
-                    leaveInnerStreamOpen: true);
-                await using var session = new StorageNntpFeedSession(
-                    transport,
-                    Runtime.Listener,
-                    _logger,
-                    Runtime.Fqdn,
-                    acceptedArticles: _acceptedArticles,
-                    assemblyAdmission: _assemblyAdmission,
-                    allowsArticleAdmission: _allowsArticleAdmission,
-                    articlePresent: _articlePresent,
-                    resolveRetrievableArticle: _resolveRetrievableArticle,
-                    afterArticleDelivered: _afterArticleDelivered,
-                    acquireArticleReadLease: _acquireArticleReadLease);
-                await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                await using (connection)
+                {
+                    await using var stream = new NntpConnectionStream(connection, ownsConnection: false);
+                    await using var transport = new StreamStorageListenerTransport(
+                        stream,
+                        Runtime.Listener.IoProgressTimeout,
+                        leaveInnerStreamOpen: true);
+                    await using var session = new StorageNntpFeedSession(
+                        transport,
+                        Runtime.Listener,
+                        _logger,
+                        Runtime.Fqdn,
+                        acceptedArticles: _acceptedArticles,
+                        assemblyAdmission: _assemblyAdmission,
+                        allowsArticleAdmission: _allowsArticleAdmission,
+                        articlePresent: _articlePresent,
+                        resolveRetrievableArticle: _resolveRetrievableArticle,
+                        afterArticleDelivered: _afterArticleDelivered,
+                        acquireArticleReadLease: _acquireArticleReadLease);
+                    var endReason = await session.RunAsync(cancellationToken).ConfigureAwait(false);
+                    if (endReason == StorageNntpFeedSessionEndReason.PeerDisconnected)
+                    {
+                        // Shared transport surfaces peer close as EOF on the next command read;
+                        // that path completes RunAsync without throwing IOException.
+                        StorageNntpListenerLogMessages.ConnectionPeerDisconnected(_logger, remote);
+                    }
+                }
             }
             catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
             {
@@ -509,6 +484,19 @@ namespace VectorNNTPD.StorageService.Listener
             }
             finally
             {
+                if (!socketOwnedByConnection)
+                {
+                    try
+                    {
+                        accepted.Dispose();
+                    }
+                    catch (ObjectDisposedException ex)
+                    {
+                        // Handshake failure or concurrent teardown may already have disposed the socket.
+                        ExpectedException.Ignore(ex);
+                    }
+                }
+
                 ReleaseAdmit();
             }
         }
@@ -532,24 +520,25 @@ namespace VectorNNTPD.StorageService.Listener
 
         private void ReleaseAdmit() => Interlocked.Decrement(ref _activeConnections);
 
-        private void CloseListenSockets()
+        private async Task CloseListenSocketsAsync()
         {
+            SocketAcceptListener[] listeners;
             lock (_gate)
             {
-                foreach (var socket in _listenSockets)
-                {
-                    try
-                    {
-                        socket.Dispose();
-                    }
-                    catch (Exception ex) when (ex is ObjectDisposedException or System.Net.Sockets.SocketException)
-                    {
-                        // Concurrent retire may dispose the same listen socket twice.
-                        ExpectedException.Ignore(ex);
-                    }
-                }
+                listeners = [.. _listeners];
+                _listeners.Clear();
+            }
 
-                _listenSockets.Clear();
+            foreach (var listener in listeners)
+            {
+                try
+                {
+                    await listener.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is ObjectDisposedException or SocketException)
+                {
+                    ExpectedException.Ignore(ex);
+                }
             }
         }
 
@@ -607,11 +596,7 @@ namespace VectorNNTPD.StorageService.Listener
             }
         }
 
-        private Task DisposeBoundResourcesAsync()
-        {
-            CloseListenSockets();
-            return Task.CompletedTask;
-        }
+        private Task DisposeBoundResourcesAsync() => CloseListenSocketsAsync();
     }
 
     /// <summary>Local lifecycle states for the StorageServer NNTP listener.</summary>

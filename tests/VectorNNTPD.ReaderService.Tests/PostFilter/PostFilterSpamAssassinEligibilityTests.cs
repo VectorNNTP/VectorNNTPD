@@ -5,7 +5,7 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Networking.Proxy;
 using VectorNNTPD.ReaderService.PostFilter;
 using VectorNNTPD.ReaderService.PostFilter.Quota;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.PostFilter;
 
 public sealed class PostFilterSpamAssassinEligibilityTests

@@ -5,7 +5,7 @@ using VectorNNTPD.TransitService.Email;
 using VectorNNTPD.TransitService.Moderation;
 using VectorNNTPD.TransitService.Networking.Proxy;
 using VectorNNTPD.TransitService.Tests.Email;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Moderation;
 
 public sealed class EmailModerationSubmissionServiceTests

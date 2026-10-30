@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Tests.Networking.Transport;
 

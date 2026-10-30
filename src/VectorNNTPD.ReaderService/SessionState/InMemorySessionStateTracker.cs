@@ -1,6 +1,6 @@
 using System.Net;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.ReaderService.SessionState.RateLimiting;
-
 namespace VectorNNTPD.ReaderService.SessionState
 {
     /// <summary>

@@ -274,12 +274,61 @@ public sealed class OverviewDbPublisherStageTests
             await Task.Delay(10, wait.Token);
         }
 
+        // Complete first, then cancel while the in-flight publish is still gated.
+        // Production must finish that item (and drain the queued peer) after Complete(),
+        // not abandon the in-flight publish when the worker token cancels.
         work.Complete();
-        gate.TrySetResult();
         await cts.CancelAsync();
+        gate.TrySetResult();
         await run.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(2, publisher.ConfirmCount);
+        // At least one attempt for each accepted item. A cancel-vs-gate race may skip the
+        // drain retry for the first item when WaitAsync observes the completed gate first.
+        Assert.InRange(publisher.Started, 2, 3);
+        Assert.Equal(0, work.Count);
+    }
+
+    [Fact]
+    public async Task PublisherPool_DrainPublishFailure_AfterComplete_ContinuesDrainWithoutHang()
+    {
+        var work = new OverviewDbWorkQueue(memoryLimitBytes: 1024 * 1024);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publisher = new GatedFailOnceOverviewDbHandoffPublisher(gate);
+        var options = new ArticleIngestionOptions
+        {
+            OverviewDbMinPublisherWorkers = 1,
+            OverviewDbMaxPublisherWorkers = 1,
+            ScaleIntervalSeconds = 3600,
+            OverviewDbPublisherShutdownSeconds = 2,
+        };
+
+        using var cts = new CancellationTokenSource();
+        var pool = new OverviewDbPublisherPool(work, publisher, options, NullLogger.Instance);
+        var run = pool.RunAsync(cts.Token);
+
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await work.EnqueueAsync(new OverviewDbWorkItem("fail-a"u8.ToArray(), "<fail-a@test>"), CancellationToken.None));
+        Assert.Equal(
+            ArticleEnqueueResult.Accepted,
+            await work.EnqueueAsync(new OverviewDbWorkItem("fail-b"u8.ToArray(), "<fail-b@test>"), CancellationToken.None));
+
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (publisher.Started < 1)
+        {
+            wait.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, wait.Token);
+        }
+
+        work.Complete();
+        await cts.CancelAsync();
+        gate.TrySetResult();
+        await run.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // First item's drain retry fails (cannot requeue after Complete); second item still publishes.
+        Assert.Equal(1, publisher.ConfirmCount);
+        Assert.Equal(1, publisher.DrainFailureCount);
         Assert.Equal(0, work.Count);
     }
 
@@ -299,6 +348,46 @@ public sealed class OverviewDbPublisherStageTests
             ArgumentNullException.ThrowIfNull(item);
             Interlocked.Increment(ref _started);
             await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _confirms);
+        }
+
+        public bool TryDequeuePublishFailure(out OverviewDbWorkItem item)
+        {
+            item = null!;
+            return false;
+        }
+
+        public void AbandonOutstanding()
+        {
+        }
+    }
+
+    private sealed class GatedFailOnceOverviewDbHandoffPublisher(TaskCompletionSource gate) : IOverviewDbHandoffPublisher
+    {
+        private int _started;
+        private int _confirms;
+        private int _drainFailures;
+        private int _postGateFailures;
+
+        public int Started => Volatile.Read(ref _started);
+
+        public int ConfirmCount => Volatile.Read(ref _confirms);
+
+        public int DrainFailureCount => Volatile.Read(ref _drainFailures);
+
+        public int OutstandingCount => 0;
+
+        public async Task PublishAsync(OverviewDbWorkItem item, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(item);
+            Interlocked.Increment(ref _started);
+            await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (Interlocked.CompareExchange(ref _postGateFailures, 1, 0) == 0)
+            {
+                Interlocked.Increment(ref _drainFailures);
+                throw new InvalidOperationException("simulated OverviewDB drain publish failure");
+            }
+
             Interlocked.Increment(ref _confirms);
         }
 

@@ -2,7 +2,9 @@
 
 Shared library imported from `VectorNNTPD.Common` into `src/VectorNNTPD.Common`. The assembly and root namespace remain `VectorNNTPD.Common`. Tests live in `tests/VectorNNTPD.Common.Tests` and reference this project.
 
-The library owns reusable implementations. It does not own application topology, host startup order, or a second copy of BackFiller.
+The library owns reusable implementations. It does not own application topology, host startup order, NNTP session/command servers, or a second copy of any host.
+
+ReaderService and TransitService consume Common for ACME/Cloudflare/NntpDB/articles/RabbitMQ connectivity/logging sinks, but keep duplicated NNTP server code inside each host project (see [../nntpd-reader-transit.md](../nntpd-reader-transit.md) and [../README.md](../README.md)).
 
 ## What this library contains
 
@@ -10,6 +12,7 @@ The library owns reusable implementations. It does not own application topology,
 - Cloudflare DNS API client and A/AAAA reconciliation (`VectorNNTPD.Common.Cloudflare`)
 - Authoritative DNS queries for DNS-01: NS discovery and UDP/TCP TXT lookup (`VectorNNTPD.Common.Dns`)
 - Bind-address expansion and eligibility (`VectorNNTPD.Common.Networking`)
+- High-performance listening socket and duplex pipeline transport (`VectorNNTPD.Common.Networking.Listeners` / `Transport`): `SocketAcceptListener`, `NntpConnection`, pipe options, outbound rate limiter, and `NntpConnectionStream` for stream-shaped session adapters. Reader, Transit, Storage, and BackFiller NNTP listeners consume this shared implementation. NNTP session/command servers stay in the host projects.
 - Options types those hosts adapt into (`VectorNNTPD.Common.Configuration`), including `ApplicationFqdn`, `ServerIdRules`, `VectorEnvironment`, `ApplicationLocalPath`, and `ApplicationJsonConfiguration`. Relative paths must stay inside the application base after `Path.GetFullPath` normalization. Rooted paths stay rooted. The check does not follow symlinks or junctions. StorageService keeps a separate `StorageRelativePath` helper for joining validated leaf segments under spool/sysfs bases; that is not a substitute for `ApplicationLocalPath`. See [configuration.md](configuration.md#application-local-and-storage-relative-paths). The JSON helper removes Generic Host `appsettings` sources and registers `{entry assembly}.json`. The RabbitMQ filename is an explicit argument. BackFiller passes `VectorNNTPD.RabbitMQ.json`.
 - NntpDB connection options and MySQL session (`VectorNNTPD.Common.NntpDb`)
 - Article content primitives: parser, `ArticleRecord`, `ArticleId`, classification, yEnc validation, and OverviewDB protobuf codec (`VectorNNTPD.Common.Articles`)

@@ -1,5 +1,5 @@
 using System.IO.Pipelines;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 
 namespace VectorNNTPD.TransitService.Tests.Networking.Transport;
 

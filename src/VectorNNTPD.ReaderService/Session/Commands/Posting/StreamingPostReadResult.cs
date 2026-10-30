@@ -1,6 +1,6 @@
 using VectorNNTPD.ReaderService.Moderation;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Session.Commands.Posting
 {
     /// <summary>What the POST command should do with a completed receive.</summary>

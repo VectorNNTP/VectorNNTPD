@@ -1,4 +1,4 @@
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 

@@ -73,8 +73,8 @@ public sealed class NntpDeflateStreamTests
     public async Task Flush_MakesCompressedBytesVisibleWithoutDispose()
     {
         await using var peer = await ConnectedStreamPair.CreateAsync();
-        await using var server = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(peer.Server);
-        await using var client = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(peer.Client);
+        await using var server = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(peer.Server);
+        await using var client = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(peer.Client);
 
         var payload = "flush-boundary-test-payload"u8.ToArray();
         await server.WriteAsync(payload);
@@ -97,7 +97,7 @@ public sealed class NntpDeflateStreamTests
     public async Task MalformedCompressedInput_ThrowsWithoutSilentCorruption()
     {
         await using var peer = await ConnectedStreamPair.CreateAsync();
-        await using var server = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(peer.Server);
+        await using var server = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(peer.Server);
         // Write non-DEFLATE junk on the wire (peer.Client is the raw NetworkStream).
         await peer.Client.WriteAsync(new byte[] { 0x00, 0x01, 0x02, 0xFF, 0xFE });
         await peer.Client.FlushAsync();
@@ -114,10 +114,10 @@ public sealed class NntpDeflateStreamTests
     {
         await using var a = await ConnectedStreamPair.CreateAsync();
         await using var b = await ConnectedStreamPair.CreateAsync();
-        await using var aServer = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(a.Server);
-        await using var aClient = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(a.Client);
-        await using var bServer = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(b.Server);
-        await using var bClient = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(b.Client);
+        await using var aServer = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(a.Server);
+        await using var aClient = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(a.Client);
+        await using var bServer = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(b.Server);
+        await using var bClient = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(b.Client);
 
         await aServer.WriteAsync("connection-A-payload"u8.ToArray());
         await aServer.FlushAsync();
@@ -135,8 +135,8 @@ public sealed class NntpDeflateStreamTests
     private static async Task AssertRoundTripAsync(byte[] plain, int writeChunk = 0, int readChunk = 0)
     {
         await using var peer = await ConnectedStreamPair.CreateAsync();
-        await using var server = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(peer.Server);
-        await using var client = new VectorNNTPD.ReaderService.Networking.Transport.NntpDeflateStream(peer.Client);
+        await using var server = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(peer.Server);
+        await using var client = new VectorNNTPD.Common.Networking.Transport.NntpDeflateStream(peer.Client);
 
         if (writeChunk <= 0)
         {

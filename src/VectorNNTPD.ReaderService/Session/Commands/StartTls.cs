@@ -1,8 +1,8 @@
 using System.IO.Pipelines;
 using VectorNNTPD.Common.Networking.Certificates;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Session.Commands
 {
     /// <summary>

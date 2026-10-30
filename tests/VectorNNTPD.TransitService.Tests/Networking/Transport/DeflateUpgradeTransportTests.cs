@@ -4,7 +4,7 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 
 namespace VectorNNTPD.TransitService.Tests.Networking.Transport;
 

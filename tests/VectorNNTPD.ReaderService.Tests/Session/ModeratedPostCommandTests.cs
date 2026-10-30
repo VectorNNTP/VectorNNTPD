@@ -9,7 +9,7 @@ using VectorNNTPD.ReaderService.Email;
 using VectorNNTPD.ReaderService.Moderation;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.PostFilter;
 using VectorNNTPD.ReaderService.Session;
@@ -20,7 +20,7 @@ using VectorNNTPD.ReaderService.Tests.Email;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.Moderation;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 public sealed class ModeratedPostCommandTests

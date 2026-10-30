@@ -50,6 +50,24 @@ logger.LogInformation("Published certificate state: StateQueue={StateQueue}, Bro
 | Enum values          | `PascalCase`     | `Found`, `WaitingToRestart`                       |
 | Config section names | `const string`   | `public const string SectionName = "..."`         |
 
+### RADIUS Protocol Enum Naming Exception (SCREAMING_CASE)
+
+All enums in the `NNRPD.Radius` namespace that represent **RADIUS Attribute Names**, **Attribute Values**, or **Packet Codes** are an intentional exception to the PascalCase enum convention above. These identifiers use **SCREAMING_CASE** (`UPPER_SNAKE_CASE`) to maintain a 1:1 correspondence with the canonical IANA RADIUS dictionary names and RFC definitions.
+
+**This applies to:**
+
+- `RadiusCode` — packet type codes (e.g., `ACCESS_REQUEST`, `ACCOUNTING_RESPONSE`).
+- `RadiusAttributeType` — attribute type identifiers (e.g., `USER_NAME`, `NAS_IP_ADDRESS`, `SERVICE_TYPE`).
+- Attribute value enums — `SERVICE_TYPE`, `FRAMED_PROTOCOL`, `FRAMED_ROUTING`, `FRAMED_COMPRESSION`, `LOGIN_SERVICE`, `TERMINATION_ACTION`, `ACCT_STATUS_TYPE`, `ACCT_AUTHENTIC`, `ACCT_TERMINATE_CAUSE`, `NAS_PORT_TYPE`, `TUNNEL_TYPE`, `TUNNEL_MEDIUM_TYPE`, `ARAP_ZONE_ACCESS`, `PROMPT`, `INGRESS_FILTERS_VALUE`, `ERROR_CAUSE`, `NAMESPACE_IDENTIFIER`, `LOCATION_PROFILES`, `LOCATION_INFORMATION_SOURCE`, `BASIC_LOCATION_POLICY_RULES`, `LOCATION_CAPABLE`, `REQUESTED_LOCATION_INFO`, `FRAMED_MANAGEMENT_PROTOCOL`, `MANAGEMENT_TRANSPORT_PROTECTION`, `EAP_LOWER_LAYER`, `FRAG_STATUS`.
+
+**Do not:**
+
+- Rename these identifiers to PascalCase or any other convention.
+- Apply IDE naming suggestions, code-style fixers, or bulk renames to these identifiers.
+- Suppress or override the SCREAMING_CASE convention for any new RADIUS enum added to `RadiusEnums.cs`.
+
+**Rationale:** Renaming would break the direct mapping to the RADIUS protocol specification, make wire-level debugging harder, and invalidate `.ToString()` output used in structured logging and diagnostics.
+
 ### Suffix Conventions for Constants
 
 - Time-related constants use a unit suffix: `ms` for milliseconds, `Seconds` for seconds.
@@ -115,9 +133,22 @@ Every **public** type, method, property, constant, and field must have a `<summa
     /// </remarks>
     private async Task QuitAndDisposeAsync()
 
-### File headers
+### File Header Comments
 
-BackFiller does not require a filename banner or a per-file copyright comment. Contract text belongs in XML documentation. Assembly copyright is emitted from `Directory.Build.targets`. Do not add banners to existing files as part of an unrelated change.
+### File Header Comments
+
+Each `.cs` file begins with a block comment summarizing the file's purpose, lifecycle, I/O architecture, and key call sequences. This is a plain `//` comment block (not XML doc), separated from the `using` directives by a blank line.
+
+The first line **must** begin with the filename (with or without the `.cs` extension) followed by an em-dash (`—`) or double-hyphen (`--`) and a brief one-line summary of the file's responsibility:
+
+// ConnectionHolder.cs — thread-safe singleton that holds the shared RabbitMQ IConnection.
+
+
+For partial class files, include the partial-file suffix in the filename:
+
+// NodeIdentity.Logging.cs — Source-generated [LoggerMessage] partial methods for NodeIdentity.
+
+Subsequent lines provide additional detail: lifecycle, threading model, caller/callee relationships, cross-platform notes, and SIMD applicability.
 
 
 ## Logging Standards
@@ -214,4 +245,84 @@ are not emitted to log output.
 - Distinguish between global shutdown cancellation and individual worker cancellation using linked `CancellationTokenSource`.
 - Always check `stoppingToken.IsCancellationRequested` in `catch (OperationCanceledException)` to differentiate timeout from shutdown.
 
-Configuration keys and environment variables for this repository are in `docs/configuration.md`. Verification commands are in `AGENTS.md` and `.github/copilot-instructions.md`. Do not use `VectorNNTP.NNTPD.sln`. Builds are x64 only: pass `-p:Platform=x64`.
+## Vector.NNTP.Utilities library standards
+
+[`Vector.NNTP.Utilities/README.md`](Vector.NNTP.Utilities/README.md) is the quick namespace map; this section is the contribution contract for that assembly.
+
+### Scope and dependencies
+
+- References **BCL** and **`Microsoft.Extensions.Logging.Abstractions`** only. Do not add RabbitMQ, Certes, or other domain packages.
+- Add a new **public** namespace when a folder would exceed ~5 unrelated types or mixes hot-path binary operations with cold diagnostics.
+- Add **`Vector.NNTP.Utilities.Internal`** helpers only when a pattern appears in **2+ call sites** or when isolating throws from a hot loop (see Internal folder policy below).
+
+### Hot path vs cold path
+
+Every Utilities `.cs` synopsis header must declare one of:
+
+```
+// HOT PATH: no LINQ; no allocations on success; no closures; no boxing; prefer Span/stackalloc; throws extracted + NoInlining where documented.
+// COLD PATH: diagnostics/formatting/startup validation; readability over micro-optimization; allocations acceptable.
+```
+
+| HOT | COLD |
+|-----|------|
+| `EncodingUtilities`, `DnsWireFormatUtilities`, `DnsWireQueryBuilder`, `DnsWireNameReader`, `AsciiSpanUtilities`, `LengthLimitedReadStream`, `RetryUtilities`, `EwmaUtilities`, `HostParsingUtilities`, `IPUtilities` | `FormattingUtilities`, `EnvironmentUtilities`, `AssemblyInfoUtilities`, `DnsValidationUtilities`, `CredentialPlaceholderDetector`, `FileIOUtilities`, `DisposalUtilities`, `TaskUtilities` |
+
+Public types must include `<remarks><para><b>Performance:</b> HOT PATH …</para></remarks>` or the cold-path equivalent.
+
+### Allocation rules
+
+- **stackalloc** for bounded buffers (DNS label splits, small wire packets). Follow `DnsWireQueryBuilder` — stack when `packetLength <= MaxStackAllocQuerySize`, heap fallback otherwise.
+- **ArrayPool** for temporary copy buffers: rent in `try`, return in `finally` via `Internal.PoolingHelpers` (buffers are not cleared on return; callers overwrite via reads).
+- Error strings and diagnostic formatting may allocate; keep them off success paths in HOT types.
+
+### Span and Memory
+
+- Overload order: **Span/Memory → string → async**; optional parameters last.
+- Add Span overloads when callers already hold spans; keep string APIs for configuration and logging.
+- Do not introduce extension methods by default.
+
+### Throw helpers
+
+- **Cold entry validation:** BCL helpers (`ArgumentNullException.ThrowIfNull`, `ArgumentException.ThrowIfNullOrEmpty`, `ArgumentOutOfRangeException.ThrowIfNegative`).
+- **Hot or duplicated throws:** `Vector.NNTP.Utilities.Internal.ThrowHelpers` and `SpanValidationHelpers`.
+- Extract throws from hot loops; mark throw methods with `[DoesNotReturn]` and `[MethodImpl(MethodImplOptions.NoInlining)]` when the throw would block inlining of the caller.
+- Domain-specific messages (DNS label errors, response limit exceeded) stay in the owning type — do not genericize.
+
+### Async and cancellation
+
+- Use `*Async` suffix on asynchronous public APIs.
+- Document whether cancellation **propagates** (`OperationCanceledException`) or maps to **return false** (`TaskUtilities.DelayOrCancelledAsync`, swallow-and-return helpers).
+- Use `ConfigureAwait(false)` in library code unless a synchronization context is required (see repo-wide async guidance).
+
+### Thread safety
+
+- Document thread safety on every public type in XML `<remarks>`.
+- Stateless static helpers: safe for concurrent use.
+- Instance types: document single-reader / caller-synchronised contracts explicitly.
+- `Random.Shared` and immutable static caches (`FrozenSet`, cached delegates) are thread-safe; document them in type remarks.
+
+### Logging
+
+- Use `[LoggerMessage]` partial methods in companion `*.Logging.cs` files (see Logging Standards above).
+- ASCII-only message strings in `[LoggerMessage]` attributes.
+
+### Nullable reference types
+
+- Follow the repo nullable section above. Do not use `!` without a documented invariant in `<remarks>`.
+
+### Benchmarking expectations
+
+- Changes to **HOT PATH** types require regression checks: `dotnet test VectorNNTP.NNTPD.slnx -p:Platform=x64` plus a PR note when throughput or allocation behavior could change.
+- Add BenchmarkDotNet coverage when introducing new SIMD or pooling paths (project TBD).
+
+### Internal folder policy
+
+| Add to `Internal/` when | Do not add when |
+|-------------------------|-----------------|
+| Same throw message in 2+ types | Only one consumer exists |
+| Same span-length check in 2+ encode paths | Message or semantics differ by domain |
+| ArrayPool rent/return duplicated | A one-line BCL call suffices |
+| Disposed guard shared by instance types | A generic `Validate<T>` or catch-all `Guard` would result |
+
+Current internal types: `ThrowHelpers`, `SpanValidationHelpers`, `GuardUtilities`, `PoolingHelpers`. Defer `AsyncHelpers` / `ExceptionUtilities` until a second consumer appears.

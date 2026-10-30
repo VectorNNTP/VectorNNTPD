@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
 using VectorNNTPD.TransitService.SessionState.BytesAccounting;
+using VectorNNTPD.Common.Networking.RateLimiting;
 using VectorNNTPD.TransitService.SessionState.RateLimiting;
-
 namespace VectorNNTPD.TransitService.SessionState
 {
     /// <summary>

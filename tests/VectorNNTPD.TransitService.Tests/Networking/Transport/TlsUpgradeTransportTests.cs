@@ -4,8 +4,8 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Text;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
-
+using VectorNNTPD.Common.Networking.Transport;
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Networking.Transport;
 
 public sealed class TlsUpgradeTransportTests

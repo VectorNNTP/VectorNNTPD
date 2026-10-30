@@ -6,7 +6,7 @@ using VectorNNTPD.ReaderService.Authentication;
 using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Authentication;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
@@ -14,7 +14,7 @@ using VectorNNTPD.ReaderService.SessionState;
 using VectorNNTPD.ReaderService.Tests.Session;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
 using VectorNNTPD.ReaderService.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Transit;
 
 /// <summary>

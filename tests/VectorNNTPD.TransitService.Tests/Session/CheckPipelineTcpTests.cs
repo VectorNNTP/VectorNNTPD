@@ -2,13 +2,13 @@ using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTPD.TransitService.History;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.Commands;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 using VectorNNTPD.TransitService.Tests.Networking.Transport;
 using VectorNNTPD.TransitService.Tests.TestDoubles;
-
+using VectorNNTPD.Common.Networking.Listeners;
 namespace VectorNNTPD.TransitService.Tests.Session;
 
 /// <summary>

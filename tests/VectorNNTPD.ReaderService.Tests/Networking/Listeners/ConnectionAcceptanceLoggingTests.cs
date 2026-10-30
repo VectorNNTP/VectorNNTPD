@@ -10,12 +10,13 @@ using VectorNNTPD.ReaderService.ArticleIngestion;
 using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.ReaderService.Networking.Listeners;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.Authentication;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.Networking.Transport;
-
+using VectorNNTPD.Common.Networking.Proxy;
+using VectorNNTPD.Common.Networking.Listeners;
 namespace VectorNNTPD.ReaderService.Tests.Networking.Listeners;
 
 /// <summary>Connection-acceptance log format contract (TCP peer vs PROXY effective client; TLS params).</summary>

@@ -6,13 +6,13 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.Newsgroups;
 using VectorNNTPD.ReaderService.NntpDb;
 using VectorNNTPD.ReaderService.Networking.Proxy;
-using VectorNNTPD.ReaderService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.ReaderService.Session;
 using VectorNNTPD.ReaderService.Session.CommandProcessor;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
 using VectorNNTPD.ReaderService.Tests.TestDoubles;
 using VectorNNTPD.Common.Configuration;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.Session;
 
 public sealed class GroupCommandTests

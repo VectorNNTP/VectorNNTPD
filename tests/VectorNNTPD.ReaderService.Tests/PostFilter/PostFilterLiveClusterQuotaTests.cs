@@ -3,7 +3,7 @@ using VectorNNTPD.ReaderService.Configuration;
 using VectorNNTPD.ReaderService.PostFilter;
 using VectorNNTPD.ReaderService.PostFilter.Quota;
 using VectorNNTPD.ReaderService.Tests.Fixtures;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.ReaderService.Tests.PostFilter;
 
 /// <summary>
@@ -115,7 +115,7 @@ internal static class PostFilterEvaluatorTestsRequest
         return new PostFilterRequest(
             article,
             account,
-            VectorNNTPD.ReaderService.Networking.Proxy.ConnectionClientIdentity.Direct(
+            VectorNNTPD.Common.Networking.Proxy.ConnectionClientIdentity.Direct(
                 new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 119)),
             accountPolicy: null,
             Now,

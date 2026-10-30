@@ -9,13 +9,13 @@ using VectorNNTPD.Common.Networking.Certificates;
 using VectorNNTPD.TransitService.ArticleIngestion;
 using VectorNNTPD.TransitService.Configuration;
 using VectorNNTPD.TransitService.Networking.Proxy;
-using VectorNNTPD.TransitService.Networking.Transport;
+using VectorNNTPD.Common.Networking.Transport;
 using VectorNNTPD.TransitService.NntpDb;
 using VectorNNTPD.TransitService.Session;
 using VectorNNTPD.TransitService.Session.CommandProcessor;
 using VectorNNTPD.TransitService.Tests.Fixtures;
 using VectorNNTPD.TransitService.Transit;
-
+using VectorNNTPD.Common.Networking.Proxy;
 namespace VectorNNTPD.TransitService.Tests.Transit;
 
 /// <summary>

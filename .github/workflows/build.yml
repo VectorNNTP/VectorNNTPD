@@ -108,42 +108,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Only the BackFiller test project references coverlet.collector. Passing
-          # --collect to a project without that package makes VSTest fail before
-          # the tests run. Coverage is collected for projects that already
-          # reference the collector. Adding it to the other test projects is a
-          # separate change.
+          # Collect coverage only when the project references coverlet.collector.
+          # Passing --collect without that package makes VSTest fail before tests run.
+          # --blame-hang-timeout is a per-test inactivity bound (renewed each case for
+          # xUnit). Healthy Linux CI durations: Reader ~40s / Transit ~30s; local
+          # Transit ~55-70s. Longest intentional WaitAsync seen in these suites is 60s.
+          # A 3m hang bound fails a stuck host with a sequence/mini-dump, lets the
+          # sequential loop continue to later projects, and avoids burning the whole
+          # 25m step with a missing TRX (PR #258 run 40930050020: Transit hung once,
+          # Reader hung on the failed-job rerun; no specific test identified).
           failed=0
           while IFS= read -r proj; do
             if ! grep -q '<IsTestProject>true</IsTestProject>' "$proj"; then
               continue
             fi
             name="$(basename "$proj" .csproj)"
-            echo "Testing $name"
+            echo "Testing $name at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            common_args=(
+              --configuration Release
+              -p:Platform=x64
+              --no-build
+              --no-restore
+              --results-directory ./TestResults
+              --logger "trx;LogFileName=${name}.trx"
+              --blame-hang-timeout 3m
+              --blame-hang-dump-type mini
+            )
             if grep -q 'coverlet.collector' "$proj"; then
               if ! dotnet test "$proj" \
-                --configuration Release \
-                -p:Platform=x64 \
-                --no-build \
-                --no-restore \
-                --collect:"XPlat Code Coverage" \
-                --results-directory ./TestResults \
-                --logger "trx;LogFileName=${name}.trx"; then
-                echo "Tests failed: $name"
+                "${common_args[@]}" \
+                --collect:"XPlat Code Coverage"; then
+                echo "Tests failed: $name (dotnet test exit non-zero; hang dumps under TestResults if blame fired)"
                 failed=1
               fi
             else
               if ! dotnet test "$proj" \
-                --configuration Release \
-                -p:Platform=x64 \
-                --no-build \
-                --no-restore \
-                --results-directory ./TestResults \
-                --logger "trx;LogFileName=${name}.trx"; then
-                echo "Tests failed: $name"
+                "${common_args[@]}"; then
+                echo "Tests failed: $name (dotnet test exit non-zero; hang dumps under TestResults if blame fired)"
                 failed=1
               fi
             fi
+            echo "Finished $name at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           done < <(find src tests -name '*.csproj' | sort)
           exit "$failed"
 
@@ -227,7 +232,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: linux-test-results
-          path: TestResults/**/*.trx
+          # TRX plus blame hang sequence/dump attachments when a test host stalls.
+          path: TestResults/**
           if-no-files-found: error
           retention-days: 14
 

@@ -9,7 +9,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
     public async Task AfterPauseReads_TryCommitReadToApplication_StashesClientHello()
     {
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
@@ -28,7 +28,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
         // Reproduces the pre-fix window: WaitUntilActive observed Active, then Quiesce ran and
         // declared idle before outstanding++. With atomic admission, stream I/O must not start.
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
@@ -56,7 +56,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
     public async Task Quiesce_WaitsForAdmittedRead_UntilStreamReadReturns()
     {
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
@@ -102,7 +102,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
     public async Task Quiesce_WaitsForAdmittedWrite_UntilStreamWriteReturns()
     {
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
@@ -134,7 +134,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
     public async Task QuiescedIdle_SimulatedHandshake_CannotOverlapPlaintextStreamIo()
     {
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
@@ -173,7 +173,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
         for (var iteration = 0; iteration < 64; iteration++)
         {
             await using var stream = new ControllableStream();
-            await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+            await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
                 stream,
                 isTls: false);
 
@@ -200,7 +200,7 @@ public sealed class ConnectionByteTransportQuiescenceTests
     public async Task QuiescedIdle_WriteAdmitRace_NeverStartsWriteAfterIdle()
     {
         await using var stream = new ControllableStream();
-        await using var transport = new VectorNNTPD.ReaderService.Networking.Transport.ConnectionByteTransport(
+        await using var transport = new VectorNNTPD.Common.Networking.Transport.ConnectionByteTransport(
             stream,
             isTls: false);
 
