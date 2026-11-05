@@ -57,7 +57,7 @@
     <PackageReference Include="Serilog.Sinks.Async" Version="2.1.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="8.0.0-nblumhardt-02322" />
-    <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
+    <PackageReference Include="StackExchange.Redis" Version="3.4.31" />
     <PackageReference Include="System.IO.Hashing" Version="11.0.0-rc.3.26522.148" />
   </ItemGroup>
 
